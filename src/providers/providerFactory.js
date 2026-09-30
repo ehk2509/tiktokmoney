@@ -3,8 +3,12 @@ import { OpenAICompatibleLlmProvider } from './openaiCompatibleLlmProvider.js';
 import { PexelsStockProvider, NullStockProvider } from './pexelsStockProvider.js';
 import { ElevenLabsVoiceProvider, NullVoiceProvider } from './elevenLabsVoiceProvider.js';
 import { LumaRealisticVideoProvider } from './lumaRealisticVideoProvider.js';
+import { LumaAgentsVideoProvider } from './lumaAgentsVideoProvider.js';
+import { RunwayVideoProvider } from './runwayVideoProvider.js';
+import { VideoModelRouter } from './videoModelRouter.js';
 import { AiFirstVisualProvider } from './visualRouter.js';
 import { OpenRouterRealismQcProvider } from './openRouterRealismQcProvider.js';
+import { ProviderStatsStore } from '../storage/providerStatsStore.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -30,25 +34,89 @@ export function createStockProvider(env = process.env) {
 }
 
 export function createAiVideoProvider(env = process.env) {
-  if (!env.LUMA_API_KEY) return null;
-  return new LumaRealisticVideoProvider({
-    apiKey: env.LUMA_API_KEY,
-    baseUrl: env.LUMA_BASE_URL,
-    videoModel: env.LUMA_VIDEO_MODEL,
-    imageModel: env.LUMA_IMAGE_MODEL,
-    resolution: env.LUMA_VIDEO_RESOLUTION,
-    generationDuration: env.LUMA_VIDEO_DURATION,
-    assetDir: env.ASSET_DIR,
-    pollIntervalMs: env.LUMA_POLL_INTERVAL_MS ? Number(env.LUMA_POLL_INTERVAL_MS) : undefined,
-    maxPolls: env.LUMA_MAX_POLLS ? Number(env.LUMA_MAX_POLLS) : undefined,
-    continuityWeight: env.LUMA_CONTINUITY_WEIGHT ? Number(env.LUMA_CONTINUITY_WEIGHT) : undefined,
-    locationReferenceWeight: env.LUMA_LOCATION_REFERENCE_WEIGHT
-      ? Number(env.LUMA_LOCATION_REFERENCE_WEIGHT)
-      : undefined,
-    characterReferenceCount: env.LUMA_CHARACTER_REFERENCE_COUNT
-      ? Number(env.LUMA_CHARACTER_REFERENCE_COUNT)
-      : undefined,
-  });
+  const providers = [];
+
+  if (env.LUMA_AGENTS_API_KEY) {
+    providers.push(new LumaAgentsVideoProvider({
+      apiKey: env.LUMA_AGENTS_API_KEY,
+      baseUrl: env.LUMA_AGENTS_BASE_URL,
+      videoModel: env.LUMA_AGENTS_VIDEO_MODEL,
+      imageModel: env.LUMA_AGENTS_IMAGE_MODEL,
+      resolution: env.LUMA_AGENTS_VIDEO_RESOLUTION,
+      duration: env.LUMA_AGENTS_VIDEO_DURATION,
+      assetDir: env.ASSET_DIR,
+      pollIntervalMs: env.LUMA_AGENTS_POLL_INTERVAL_MS
+        ? Number(env.LUMA_AGENTS_POLL_INTERVAL_MS)
+        : undefined,
+      maxPolls: env.LUMA_AGENTS_MAX_POLLS ? Number(env.LUMA_AGENTS_MAX_POLLS) : undefined,
+    }));
+  }
+
+  if (env.RUNWAYML_API_SECRET) {
+    providers.push(new RunwayVideoProvider({
+      apiKey: env.RUNWAYML_API_SECRET,
+      baseUrl: env.RUNWAY_BASE_URL,
+      model: env.RUNWAY_PRIMARY_MODEL || 'gen4.5',
+      imageModel: env.RUNWAY_IMAGE_MODEL,
+      ratio: env.RUNWAY_VIDEO_RATIO,
+      duration: env.RUNWAY_VIDEO_DURATION ? Number(env.RUNWAY_VIDEO_DURATION) : undefined,
+      assetDir: env.ASSET_DIR,
+      pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
+      maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,
+    }));
+
+    if (isEnabledDefaultTrue(env.RUNWAY_ENABLE_TURBO)) {
+      providers.push(new RunwayVideoProvider({
+        apiKey: env.RUNWAYML_API_SECRET,
+        baseUrl: env.RUNWAY_BASE_URL,
+        model: 'gen4_turbo',
+        imageModel: env.RUNWAY_IMAGE_MODEL,
+        ratio: env.RUNWAY_VIDEO_RATIO,
+        duration: env.RUNWAY_VIDEO_DURATION ? Number(env.RUNWAY_VIDEO_DURATION) : undefined,
+        assetDir: env.ASSET_DIR,
+        pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
+        maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,
+      }));
+    }
+  }
+
+  if (providers.length) {
+    return new VideoModelRouter({
+      providers,
+      referenceProvider: providers.find((provider) => provider instanceof LumaAgentsVideoProvider)
+        || providers[0],
+      statsStore: new ProviderStatsStore(env.PROVIDER_STATS_PATH),
+      costWeight: env.VIDEO_ROUTER_COST_WEIGHT ? Number(env.VIDEO_ROUTER_COST_WEIGHT) : undefined,
+      historyWeight: env.VIDEO_ROUTER_HISTORY_WEIGHT ? Number(env.VIDEO_ROUTER_HISTORY_WEIGHT) : undefined,
+      switchOnQcFailure: env.VIDEO_ROUTER_SWITCH_ON_QC_FAILURE == null
+        ? undefined
+        : isEnabled(env.VIDEO_ROUTER_SWITCH_ON_QC_FAILURE),
+    });
+  }
+
+  // Backwards-compatible legacy Dream Machine path.
+  if (env.LUMA_API_KEY) {
+    return new LumaRealisticVideoProvider({
+      apiKey: env.LUMA_API_KEY,
+      baseUrl: env.LUMA_BASE_URL,
+      videoModel: env.LUMA_VIDEO_MODEL,
+      imageModel: env.LUMA_IMAGE_MODEL,
+      resolution: env.LUMA_VIDEO_RESOLUTION,
+      generationDuration: env.LUMA_VIDEO_DURATION,
+      assetDir: env.ASSET_DIR,
+      pollIntervalMs: env.LUMA_POLL_INTERVAL_MS ? Number(env.LUMA_POLL_INTERVAL_MS) : undefined,
+      maxPolls: env.LUMA_MAX_POLLS ? Number(env.LUMA_MAX_POLLS) : undefined,
+      continuityWeight: env.LUMA_CONTINUITY_WEIGHT ? Number(env.LUMA_CONTINUITY_WEIGHT) : undefined,
+      locationReferenceWeight: env.LUMA_LOCATION_REFERENCE_WEIGHT
+        ? Number(env.LUMA_LOCATION_REFERENCE_WEIGHT)
+        : undefined,
+      characterReferenceCount: env.LUMA_CHARACTER_REFERENCE_COUNT
+        ? Number(env.LUMA_CHARACTER_REFERENCE_COUNT)
+        : undefined,
+    });
+  }
+
+  return null;
 }
 
 export function createVisualProvider(env = process.env) {
@@ -103,4 +171,9 @@ export function createVoiceProvider(env = process.env) {
 
 function isEnabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+}
+
+function isEnabledDefaultTrue(value) {
+  if (value == null || value === '') return true;
+  return isEnabled(value);
 }
