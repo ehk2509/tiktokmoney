@@ -2,6 +2,7 @@ export class AiFirstVisualProvider {
   constructor({ ai = null, stock = null } = {}) {
     this.ai = ai;
     this.stock = stock;
+    this.strategy = ai ? 'ai-first' : stock ? 'stock-only' : 'fallback-card';
   }
 
   async resolveScene(scene, context = {}) {
