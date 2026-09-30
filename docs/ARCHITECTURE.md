@@ -84,3 +84,32 @@ generated AI clip
 The evaluator scores photorealism, anatomy, geometry, physics, motion consistency, continuity, scene relevance and artifact freedom. Each attempt is retained in `visualQcHistory` together with generation IDs and feedback.
 
 QC is opt-in to avoid surprise inference cost, but once enabled it is fail-closed by default. A QC service failure therefore falls back to real footage or stops the project instead of silently accepting an unreviewed AI scene.
+
+
+## Character and location continuity bibles
+
+Every video now builds a canonical continuity artifact before expensive visual generation:
+
+```text
+script
+  -> StoryBibleGenerator
+      -> recurring characters
+      -> recurring locations
+      -> camera / lighting language
+      -> scene bindings
+  -> Luma canonical references
+      -> 1-4 identity images per recurring character
+      -> one canonical establishing image per location
+  -> scene generation
+      -> character_ref
+      -> location image_ref
+      -> previous accepted scene image_ref
+      -> Photon reference frame
+      -> Ray image-to-video
+```
+
+The Luma image API supports up to four image references and a dedicated `character_ref` structure. TikTokMoney uses those native controls rather than relying only on repeated text prompts.
+
+Canonical references live in `project.storyBible.references` and are reused across regeneration attempts. This prevents targeted QC regeneration from accidentally changing the actor, wardrobe, cockpit/room layout, lighting language or camera identity while correcting an artifact.
+
+The QC evaluator also receives the textual bible and treats visible drift from canonical character, location and style constraints as a continuity defect.

@@ -27,7 +27,7 @@ export class OpenRouterRealismQcProvider {
     this.fetch = fetchImpl;
   }
 
-  async evaluateScene(scene, asset, { previousAsset = null } = {}) {
+  async evaluateScene(scene, asset, { previousAsset = null, storyBible = null } = {}) {
     if (!asset?.localPath) {
       throw new Error('realism QC requires a local video asset');
     }
@@ -39,7 +39,7 @@ export class OpenRouterRealismQcProvider {
         || 5,
     });
 
-    const prompt = buildPrompt({ scene, asset, previousAsset });
+    const prompt = buildPrompt({ scene, asset, previousAsset, storyBible });
     const content = [
       { type: 'text', text: prompt },
       ...frames.map((frame) => ({
@@ -106,7 +106,14 @@ export class OpenRouterRealismQcProvider {
   }
 }
 
-function buildPrompt({ scene, asset, previousAsset }) {
+function buildPrompt({ scene, asset, previousAsset, storyBible }) {
+  const binding = scene.continuity || {};
+  const characters = (storyBible?.characters || [])
+    .filter((character) => (binding.characterIds || []).includes(character.id));
+  const location = (storyBible?.locations || [])
+    .find((item) => item.id === binding.locationId);
+  const style = storyBible?.visualStyle || {};
+
   return [
     'Evaluate these frames from ONE AI-generated vertical video scene.',
     '',
@@ -115,6 +122,24 @@ function buildPrompt({ scene, asset, previousAsset }) {
     previousAsset
       ? 'Continuity requirement: the scene should plausibly belong to the same visual world as the preceding scene.'
       : 'Continuity requirement: this is the first scene.',
+    style.description ? `Canonical style: ${style.description}` : '',
+    style.cameraRules ? `Canonical camera rules: ${style.cameraRules}` : '',
+    style.lightingRules ? `Canonical lighting rules: ${style.lightingRules}` : '',
+    ...characters.map((character) => [
+      `Canonical character ${character.name}: ${character.description}`,
+      character.physicalTraits ? `Physical traits: ${character.physicalTraits}` : '',
+      character.wardrobe ? `Wardrobe: ${character.wardrobe}` : '',
+    ].filter(Boolean).join('. ')),
+    location
+      ? [
+        `Canonical location ${location.name}: ${location.description}`,
+        location.lighting ? `Location lighting: ${location.lighting}` : '',
+        location.fixedElements?.length
+          ? `Fixed elements: ${location.fixedElements.join(', ')}`
+          : '',
+      ].filter(Boolean).join('. ')
+      : '',
+    'Treat visible drift from canonical character/location/style details as a continuity defect.',
     '',
     'Score each dimension from 0 to 100:',
     '- photorealism: would an ordinary viewer plausibly believe this was camera footage?',

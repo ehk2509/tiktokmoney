@@ -4,7 +4,7 @@ function seconds(value) {
   return Math.max(0.8, Math.round(value * 100) / 100);
 }
 
-export function planScenes(script) {
+export function planScenes(script, storyBible = null) {
   const parts = [script.hook, ...script.body, script.payoff, script.cta].filter(Boolean);
   const totalWeight = parts.reduce((sum, text) => sum + text.length, 0) || 1;
   let cursor = 0;
@@ -13,6 +13,7 @@ export function planScenes(script) {
     const rawDuration = (text.length / totalWeight) * script.durationSeconds;
     const duration = seconds(rawDuration);
     const purpose = index === 0 ? 'hook' : index === parts.length - 1 ? 'cta' : 'explain';
+    const binding = storyBible?.sceneBindings?.find((item) => item.sceneIndex === index) || null;
     const scene = {
       index,
       start: Math.round(cursor * 100) / 100,
@@ -21,6 +22,13 @@ export function planScenes(script) {
       narration: text,
       overlay: makeOverlay(text),
       visualPrompt: makeVisualPrompt(script.topic, text, index),
+      continuity: binding ? {
+        characterIds: binding.characterIds || [],
+        locationId: binding.locationId || null,
+      } : {
+        characterIds: [],
+        locationId: null,
+      },
       realism: buildRealismSceneSpec({
         topic: script.topic,
         narration: text,

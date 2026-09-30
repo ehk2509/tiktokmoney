@@ -15,6 +15,31 @@ export class TemplateLlmProvider {
       source: 'template-provider',
     };
   }
+
+  async generateStoryBible({ script }) {
+    const parts = [script.hook, ...(script.body || []), script.payoff, script.cta].filter(Boolean);
+    return {
+      characters: [],
+      locations: [{
+        id: 'location-main',
+        name: 'Primary environment',
+        description: `A believable real-world environment appropriate for ${script.topic}.`,
+        lighting: 'Natural motivated lighting with stable color temperature.',
+        fixedElements: ['Stable architecture and object placement'],
+      }],
+      visualStyle: {
+        description: 'Photorealistic documentary footage with real-camera texture.',
+        cameraRules: 'Eye-level 35mm-50mm documentary lens feel with restrained camera movement.',
+        lightingRules: 'Natural motivated lighting, no CGI glow.',
+      },
+      sceneBindings: parts.map((_, sceneIndex) => ({
+        sceneIndex,
+        characterIds: [],
+        locationId: 'location-main',
+      })),
+      source: 'template-provider',
+    };
+  }
 }
 
 export class SampleTrendProvider {

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { ScriptGenerator } from './scriptGenerator.js';
+import { StoryBibleGenerator } from './storyBibleGenerator.js';
 import { planScenes } from './scenePlanner.js';
 import { evaluateProject } from './qualityGate.js';
 
@@ -14,6 +15,7 @@ export class VideoPipeline {
     realismQc = null,
   }) {
     this.scriptGenerator = new ScriptGenerator({ llm });
+    this.storyBibleGenerator = new StoryBibleGenerator({ llm });
     this.renderer = renderer;
     this.store = store;
     this.visual = visual || stock;
@@ -30,7 +32,8 @@ export class VideoPipeline {
       audience,
       durationSeconds,
     });
-    let scenes = planScenes(script);
+    let storyBible = await this.storyBibleGenerator.generate({ script });
+    let scenes = planScenes(script, storyBible);
     const quality = evaluateProject({ script, scenes });
 
     const project = {
@@ -40,6 +43,7 @@ export class VideoPipeline {
       audience,
       createdAt: new Date().toISOString(),
       script,
+      storyBible,
       scenes,
       quality,
       voice: null,
@@ -60,11 +64,30 @@ export class VideoPipeline {
       return project;
     }
 
+    if (typeof this.visual?.prepareStoryBible === 'function') {
+      project.status = 'STORY_BIBLE_PREPARING';
+      try {
+        storyBible = await this.visual.prepareStoryBible(storyBible, { projectId: id });
+        project.storyBible = storyBible;
+      } catch (error) {
+        project.warnings.push({
+          stage: 'story-bible',
+          message: error.message,
+        });
+        project.storyBible = {
+          ...storyBible,
+          referenceStatus: 'degraded',
+          referenceError: error.message,
+        };
+      }
+    }
+
     project.status = this.realismQc ? 'VISUALS_GENERATING_AND_QC' : 'VISUALS_GENERATING';
     const visualResult = await resolveVisuals({
       provider: this.visual,
       qc: this.realismQc,
       scenes,
+      storyBible: project.storyBible,
       projectId: id,
       warnings: project.warnings,
     });
@@ -119,6 +142,7 @@ async function resolveVisuals({
   provider,
   qc,
   scenes,
+  storyBible,
   projectId,
   warnings,
 }) {
@@ -135,6 +159,7 @@ async function resolveVisuals({
       provider,
       qc,
       scene,
+      storyBible,
       projectId,
       previousAsset: previousContinuityAsset,
       warnings,
@@ -162,6 +187,7 @@ async function resolveOneScene({
   provider,
   qc,
   scene,
+  storyBible,
   projectId,
   previousAsset,
   warnings,
@@ -178,6 +204,7 @@ async function resolveOneScene({
         projectId,
         previousAsset,
         regeneration,
+        storyBible,
       });
     } catch (error) {
       warnings.push({
@@ -203,7 +230,10 @@ async function resolveOneScene({
     }
 
     try {
-      lastQc = await qc.evaluateScene(scene, lastAsset, { previousAsset });
+      lastQc = await qc.evaluateScene(scene, lastAsset, {
+        previousAsset,
+        storyBible,
+      });
       qcHistory.push({
         attempt,
         generationId: lastAsset.generationId || null,

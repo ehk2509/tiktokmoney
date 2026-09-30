@@ -7,6 +7,7 @@ import path from 'node:path';
 import { rankOpportunities, scoreOpportunity } from '../src/core/opportunityScorer.js';
 import { planScenes } from '../src/core/scenePlanner.js';
 import { VideoPipeline } from '../src/core/pipeline.js';
+import { StoryBibleGenerator } from '../src/core/storyBibleGenerator.js';
 import { TemplateLlmProvider } from '../src/providers.js';
 import { OpenAICompatibleLlmProvider } from '../src/providers/openaiCompatibleLlmProvider.js';
 import { PexelsStockProvider } from '../src/providers/pexelsStockProvider.js';
@@ -399,7 +400,7 @@ test('Luma provider carries the previous reference image into the next still for
     assert.equal(asset.continuityFrom, 'image-gen-previous');
     assert.equal(imageBodies.length, 1);
     assert.equal(imageBodies[0].image_ref[0].url, 'https://cdn.example/previous-reference.jpg');
-    assert.equal(imageBodies[0].image_ref[0].weight, 0.72);
+    assert.equal(imageBodies[0].image_ref[0].weight, 0.62);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -701,4 +702,262 @@ test('pipeline stops instead of rendering when realism QC fails and no fallback 
   assert.equal(project.status, 'VISUAL_QC_FAILED');
   assert.equal(rendered, false);
   assert.ok(project.visualQcFailures.length > 0);
+});
+
+
+test('story bible normalizes recurring entities and binds them to scenes', async () => {
+  const generator = new StoryBibleGenerator({
+    llm: {
+      generateStoryBible: async () => ({
+        characters: [{
+          id: 'Pilot One',
+          name: 'Pilot',
+          description: 'A professional pilot in their late thirties.',
+          wardrobe: 'White pilot shirt with navy epaulettes.',
+          physicalTraits: 'Short dark hair, warm medium skin tone.',
+        }],
+        locations: [{
+          id: 'Cockpit A',
+          name: 'Airliner cockpit',
+          description: 'Modern commercial aircraft cockpit with dark instrument panels.',
+          lighting: 'Soft daylight through front windows.',
+          fixedElements: ['two pilot seats', 'central throttle quadrant'],
+        }],
+        visualStyle: {
+          description: 'Photorealistic documentary footage.',
+          cameraRules: '50mm documentary lens feel.',
+          lightingRules: 'Natural daylight only.',
+        },
+        sceneBindings: [
+          { sceneIndex: 0, characterIds: ['Pilot One'], locationId: 'Cockpit A' },
+        ],
+      }),
+    },
+  });
+
+  const script = {
+    topic: 'aviation',
+    durationSeconds: 20,
+    hook: 'A pilot checks the cockpit before departure.',
+    body: ['The instruments are reviewed.', 'The aircraft starts moving.'],
+    payoff: 'Every step is deliberate.',
+    cta: 'Follow for more.',
+  };
+
+  const bible = await generator.generate({ script });
+  const scenes = planScenes(script, bible);
+
+  assert.equal(bible.characters[0].id, 'pilot-one');
+  assert.equal(bible.locations[0].id, 'cockpit-a');
+  assert.deepEqual(scenes[0].continuity.characterIds, ['pilot-one']);
+  assert.equal(scenes[0].continuity.locationId, 'cockpit-a');
+  assert.equal(scenes[1].continuity.locationId, 'cockpit-a');
+});
+
+test('Luma prepares reusable canonical character and location references', async () => {
+  const provider = new LumaRealisticVideoProvider({
+    apiKey: 'luma-key',
+    characterReferenceCount: 2,
+    fetchImpl: async () => {
+      throw new Error('network should not be called');
+    },
+  });
+
+  let counter = 0;
+  provider.createReferenceImage = async ({ prompt }) => {
+    counter += 1;
+    assert.match(prompt, /Photorealistic canonical/i);
+    return {
+      id: `ref-gen-${counter}`,
+      url: `https://cdn.example/ref-${counter}.jpg`,
+    };
+  };
+
+  const prepared = await provider.prepareStoryBible({
+    characters: [{
+      id: 'pilot',
+      name: 'Pilot',
+      description: 'Late-thirties airline pilot.',
+      wardrobe: 'White shirt and navy epaulettes.',
+      physicalTraits: 'Short dark hair.',
+    }],
+    locations: [{
+      id: 'cockpit',
+      name: 'Cockpit',
+      description: 'Modern commercial cockpit.',
+      lighting: 'Daylight.',
+      fixedElements: ['two seats', 'throttle quadrant'],
+    }],
+    visualStyle: {
+      description: 'Photorealistic documentary.',
+      cameraRules: '50mm lens.',
+      lightingRules: 'Natural light.',
+    },
+    sceneBindings: [],
+  }, { projectId: 'vid_bible' });
+
+  assert.equal(prepared.referenceStatus, 'ready');
+  assert.equal(prepared.references.characters.pilot.images.length, 2);
+  assert.equal(prepared.references.locations.cockpit.url, 'https://cdn.example/ref-3.jpg');
+  assert.equal(counter, 3);
+});
+
+test('Luma scene combines character bible, location bible and previous accepted scene reference', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-bible-scene-'));
+  try {
+    const provider = new LumaRealisticVideoProvider({
+      apiKey: 'luma-key',
+      assetDir: dir,
+      continuityWeight: 0.61,
+      locationReferenceWeight: 0.84,
+      fetchImpl: async () => {
+        throw new Error('network should not be called');
+      },
+    });
+
+    let captured = null;
+    provider.createReferenceImage = async (input) => {
+      captured = input;
+      return { id: 'scene-ref-gen', url: 'https://cdn.example/scene-ref.jpg' };
+    };
+    provider.createVideo = async ({ prompt, referenceImageUrl }) => {
+      assert.match(prompt, /Recurring character Pilot/i);
+      assert.match(prompt, /Recurring location Cockpit/i);
+      assert.equal(referenceImageUrl, 'https://cdn.example/scene-ref.jpg');
+      return { id: 'video-gen', url: 'https://cdn.example/video.mp4' };
+    };
+    provider.download = async (_url, destination) => {
+      await writeFile(destination, 'video');
+    };
+
+    const storyBible = {
+      characters: [{
+        id: 'pilot',
+        name: 'Pilot',
+        description: 'Late-thirties airline pilot.',
+        wardrobe: 'White shirt and navy epaulettes.',
+        physicalTraits: 'Short dark hair.',
+      }],
+      locations: [{
+        id: 'cockpit',
+        name: 'Cockpit',
+        description: 'Modern commercial cockpit.',
+        lighting: 'Soft daylight.',
+        fixedElements: ['two seats', 'throttle quadrant'],
+      }],
+      visualStyle: {
+        description: 'Photorealistic documentary.',
+        cameraRules: '50mm lens family.',
+        lightingRules: 'Natural daylight.',
+      },
+      references: {
+        characters: {
+          pilot: {
+            images: [
+              { url: 'https://cdn.example/pilot-portrait.jpg' },
+              { url: 'https://cdn.example/pilot-body.jpg' },
+            ],
+          },
+        },
+        locations: {
+          cockpit: { url: 'https://cdn.example/cockpit.jpg' },
+        },
+      },
+    };
+
+    const scene = {
+      index: 1,
+      narration: 'The pilot checks the instruments.',
+      duration: 5,
+      continuity: {
+        characterIds: ['pilot'],
+        locationId: 'cockpit',
+      },
+      realism: {
+        referencePrompt: 'Photorealistic cockpit still.',
+        motionPrompt: 'Continuous, seamless photorealistic cockpit shot.',
+      },
+    };
+
+    const asset = await provider.resolveScene(scene, {
+      projectId: 'vid_bible',
+      storyBible,
+      previousAsset: {
+        referenceGenerationId: 'previous-gen',
+        referenceImageUrl: 'https://cdn.example/previous-scene.jpg',
+      },
+    });
+
+    assert.equal(captured.imageRefs.length, 2);
+    assert.deepEqual(captured.imageRefs[0], {
+      url: 'https://cdn.example/cockpit.jpg',
+      weight: 0.84,
+    });
+    assert.deepEqual(captured.imageRefs[1], {
+      url: 'https://cdn.example/previous-scene.jpg',
+      weight: 0.61,
+    });
+    assert.deepEqual(captured.characterRef.identity0.images, [
+      'https://cdn.example/pilot-portrait.jpg',
+      'https://cdn.example/pilot-body.jpg',
+    ]);
+    assert.equal(asset.canonicalCharacterRefs, 1);
+    assert.equal(asset.canonicalImageRefs, 2);
+    assert.equal(asset.bibleBinding.locationId, 'cockpit');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pipeline prepares the story bible before resolving scenes and persists the prepared references', async () => {
+  let prepareCalls = 0;
+  const seenBibles = [];
+
+  const visual = {
+    strategy: 'ai-first',
+    prepareStoryBible: async (bible) => {
+      prepareCalls += 1;
+      return {
+        ...bible,
+        referenceStatus: 'ready',
+        references: {
+          provider: 'fake-ai',
+          characters: {},
+          locations: {
+            'location-main': { url: 'https://example.test/location.jpg' },
+          },
+        },
+      };
+    },
+    resolveScene: async (scene, context) => {
+      seenBibles.push(context.storyBible);
+      return {
+        provider: 'fake-ai',
+        type: 'ai-video',
+        localPath: `scene-${scene.index}.mp4`,
+        generationId: `gen-${scene.index}`,
+        referenceImageUrl: `https://example.test/scene-${scene.index}.jpg`,
+      };
+    },
+  };
+
+  const pipeline = new VideoPipeline({
+    llm: new TemplateLlmProvider(),
+    renderer: null,
+    visual,
+    voice: null,
+    store: { saveProject: async () => {} },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'aviation safety',
+    durationSeconds: 30,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(prepareCalls, 1);
+  assert.equal(project.storyBible.referenceStatus, 'ready');
+  assert.ok(seenBibles.length > 0);
+  assert.ok(seenBibles.every((bible) => bible.references.locations['location-main'].url));
 });

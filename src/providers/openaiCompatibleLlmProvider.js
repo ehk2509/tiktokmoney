@@ -32,36 +32,11 @@ export class OpenAICompatibleLlmProvider {
       '- CTA should be short and optional-sounding.',
     ].join('\n');
 
-    const response = await this.fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        temperature: 0.7,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a short-form video creative director. Produce concise, structured JSON only.',
-          },
-          { role: 'user', content: prompt },
-        ],
-      }),
+    const parsed = await this.generateJson({
+      system: 'You are a short-form video creative director. Produce concise, structured JSON only.',
+      prompt,
+      temperature: 0.7,
     });
-
-    const payload = await readJsonResponse(response, 'LLM');
-    const raw = payload?.choices?.[0]?.message?.content;
-    if (!raw) throw new Error('LLM response did not contain message content');
-
-    let parsed;
-    try {
-      parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    } catch (error) {
-      throw new Error(`LLM returned invalid JSON: ${error.message}`);
-    }
 
     validateScript(parsed);
 
@@ -76,6 +51,77 @@ export class OpenAICompatibleLlmProvider {
       source: 'openai-compatible',
       model: this.model,
     };
+  }
+
+  async generateStoryBible({ script }) {
+    const parts = [script.hook, ...(script.body || []), script.payoff, script.cta].filter(Boolean);
+    const prompt = [
+      'Build a strict continuity bible for a photorealistic short-form video.',
+      `Topic: ${script.topic}`,
+      '',
+      'Narration scenes in order:',
+      ...parts.map((part, index) => `${index}: ${part}`),
+      '',
+      'Return JSON with:',
+      '{',
+      '  "characters": [{"id":"pilot","name":"...","description":"...","wardrobe":"...","physicalTraits":"..."}],',
+      '  "locations": [{"id":"cockpit","name":"...","description":"...","lighting":"...","fixedElements":["..."]}],',
+      '  "visualStyle": {"description":"...","cameraRules":"...","lightingRules":"..."},',
+      '  "sceneBindings": [{"sceneIndex":0,"characterIds":["pilot"],"locationId":"cockpit"}]',
+      '}',
+      '',
+      'Rules:',
+      '- Keep only recurring visual entities that help continuity.',
+      '- Maximum 3 characters and 3 locations.',
+      '- Use stable concrete descriptions; never describe a real person unless the script explicitly requires one.',
+      '- Wardrobe and physical traits must remain unchanged across scenes.',
+      '- Locations must list fixed visual anchors that should not move between shots.',
+      '- Camera rules should describe one consistent documentary lens/look.',
+      '- Every narration scene must have exactly one location binding.',
+      '- Only bind a character to scenes where that character is visually useful.',
+      '- Do not invent factual claims; this is visual staging only.',
+    ].join('\n');
+
+    const parsed = await this.generateJson({
+      system: 'You are a continuity supervisor for photorealistic film production. Return JSON only.',
+      prompt,
+      temperature: 0.2,
+    });
+
+    return {
+      ...parsed,
+      source: 'openai-compatible',
+      model: this.model,
+    };
+  }
+
+  async generateJson({ system, prompt, temperature = 0 }) {
+    const response = await this.fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        temperature,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+
+    const payload = await readJsonResponse(response, 'LLM');
+    const raw = payload?.choices?.[0]?.message?.content;
+    if (!raw) throw new Error('LLM response did not contain message content');
+
+    try {
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch (error) {
+      throw new Error(`LLM returned invalid JSON: ${error.message}`);
+    }
   }
 }
 

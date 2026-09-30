@@ -32,7 +32,7 @@
 - [x] Generation polling, failure handling and local download
 - [x] Vision-based photorealism/artifact QC
 - [x] Automatic targeted regeneration
-- [ ] Strong character/location bible across a complete video
+- [x] Strong character/location bible across a complete video
 - [ ] Additional AI video providers / model router
 
 ## M2 - Trend intelligence
