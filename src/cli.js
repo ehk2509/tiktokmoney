@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+import { createApp } from './app.js';
+
+const [command = 'help', ...args] = process.argv.slice(2);
+const options = parseArgs(args);
+const app = createApp();
+
+try {
+  if (command === 'generate') {
+    const topic = options.topic || options.t;
+    if (!topic) throw new Error('Usage: npm run generate -- --topic "Your topic"');
+    const project = await app.pipeline.generate({
+      topic,
+      audience: options.audience || 'curious adults',
+      durationSeconds: Number(options.duration || 35),
+      render: options['no-render'] !== true,
+    });
+    console.log(JSON.stringify(project, null, 2));
+  } else if (command === 'opportunities') {
+    console.log(JSON.stringify(await app.opportunities(), null, 2));
+  } else {
+    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities');
+  }
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
+
+function parseArgs(values) {
+  const result = {};
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    if (!value.startsWith('--')) continue;
+    const key = value.slice(2);
+    const next = values[i + 1];
+    if (!next || next.startsWith('--')) result[key] = true;
+    else {
+      result[key] = next;
+      i += 1;
+    }
+  }
+  return result;
+}
