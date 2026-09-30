@@ -15,6 +15,8 @@ import {
   alignmentToWords,
 } from '../src/providers/elevenLabsVoiceProvider.js';
 import { FfmpegRenderer } from '../src/renderers/ffmpegRenderer.js';
+import { LumaRealisticVideoProvider } from '../src/providers/lumaRealisticVideoProvider.js';
+import { AiFirstVisualProvider } from '../src/providers/visualRouter.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -42,6 +44,9 @@ test('scene planner creates hook and CTA scenes with ordered timestamps', () => 
   });
   assert.equal(scenes[0].purpose, 'hook');
   assert.equal(scenes.at(-1).purpose, 'cta');
+  assert.equal(scenes[0].realism.mode, 'photorealistic');
+  assert.match(scenes[0].realism.referencePrompt, /real camera/i);
+  assert.match(scenes[0].realism.motionPrompt, /continuous, seamless/i);
   assert.ok(scenes.every((scene, index) => index === 0 || scene.start >= scenes[index - 1].start));
 });
 
@@ -250,3 +255,183 @@ test('renderer builds one FFmpeg scene command per scene plus concat and audio s
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+
+test('Luma provider creates reference image, animates it and downloads the realistic clip', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-luma-'));
+  const requests = [];
+  try {
+    const provider = new LumaRealisticVideoProvider({
+      apiKey: 'luma-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 3,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const method = options.method || 'GET';
+        requests.push({ target, method, body: options.body ? JSON.parse(options.body) : null });
+
+        if (target.endsWith('/generations/image') && method === 'POST') {
+          return jsonResponse({ id: 'image-gen-1', state: 'dreaming' }, 201);
+        }
+        if (target.endsWith('/generations/image-gen-1')) {
+          return jsonResponse({
+            id: 'image-gen-1',
+            state: 'completed',
+            assets: { image: 'https://cdn.example/reference.jpg' },
+          });
+        }
+        if (target.endsWith('/generations/video') && method === 'POST') {
+          const body = JSON.parse(options.body);
+          assert.equal(body.aspect_ratio, '9:16');
+          assert.equal(body.keyframes.frame0.type, 'image');
+          assert.equal(body.keyframes.frame0.url, 'https://cdn.example/reference.jpg');
+          assert.match(body.prompt, /photorealistic/i);
+          return jsonResponse({ id: 'video-gen-1', state: 'dreaming' }, 201);
+        }
+        if (target.endsWith('/generations/video-gen-1')) {
+          return jsonResponse({
+            id: 'video-gen-1',
+            state: 'completed',
+            assets: { video: 'https://cdn.example/video.mp4' },
+          });
+        }
+        if (target === 'https://cdn.example/video.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('luma-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${method} ${target}`);
+      },
+    });
+
+    const scene = planScenes({
+      topic: 'commercial aviation',
+      durationSeconds: 20,
+      hook: 'A pilot looks through the cockpit window before takeoff.',
+      body: ['The crew checks the instruments carefully.', 'The aircraft starts taxiing.'],
+      payoff: 'Every step follows a precise sequence.',
+      cta: 'Follow for more.',
+    })[0];
+
+    const asset = await provider.resolveScene(scene, { projectId: 'vid_luma' });
+
+    assert.equal(asset.provider, 'luma');
+    assert.equal(asset.type, 'ai-video');
+    assert.equal(asset.generationId, 'video-gen-1');
+    assert.equal(asset.referenceImageUrl, 'https://cdn.example/reference.jpg');
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'luma-video');
+    assert.ok(requests.some((request) => request.target.endsWith('/generations/image')));
+    assert.ok(requests.some((request) => request.target.endsWith('/generations/video')));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Luma provider carries the previous reference image into the next still for continuity', async () => {
+  const imageBodies = [];
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-luma-continuity-'));
+  try {
+    const provider = new LumaRealisticVideoProvider({
+      apiKey: 'luma-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const method = options.method || 'GET';
+        if (target.endsWith('/generations/image') && method === 'POST') {
+          const body = JSON.parse(options.body);
+          imageBodies.push(body);
+          return jsonResponse({ id: 'image-gen-2' }, 201);
+        }
+        if (target.endsWith('/generations/image-gen-2')) {
+          return jsonResponse({
+            id: 'image-gen-2',
+            state: 'completed',
+            assets: { image: 'https://cdn.example/next-reference.jpg' },
+          });
+        }
+        if (target.endsWith('/generations/video') && method === 'POST') {
+          return jsonResponse({ id: 'video-gen-2' }, 201);
+        }
+        if (target.endsWith('/generations/video-gen-2')) {
+          return jsonResponse({
+            id: 'video-gen-2',
+            state: 'completed',
+            assets: { video: 'https://cdn.example/next-video.mp4' },
+          });
+        }
+        if (target === 'https://cdn.example/next-video.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('next-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${method} ${target}`);
+      },
+    });
+
+    const scene = planScenes({
+      topic: 'realistic office',
+      durationSeconds: 20,
+      hook: 'A woman walks into a bright modern office.',
+      body: ['She sits at the same desk.'],
+      payoff: 'The workspace remains consistent.',
+      cta: 'Follow.',
+    })[1];
+
+    const asset = await provider.resolveScene(scene, {
+      projectId: 'vid_continuity',
+      previousAsset: {
+        referenceGenerationId: 'image-gen-previous',
+        referenceImageUrl: 'https://cdn.example/previous-reference.jpg',
+      },
+    });
+
+    assert.equal(asset.continuityFrom, 'image-gen-previous');
+    assert.equal(imageBodies.length, 1);
+    assert.equal(imageBodies[0].image_ref[0].url, 'https://cdn.example/previous-reference.jpg');
+    assert.equal(imageBodies[0].image_ref[0].weight, 0.72);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('AI-first visual router falls back to stock when AI video generation fails', async () => {
+  const router = new AiFirstVisualProvider({
+    ai: {
+      resolveScene: async () => {
+        throw new Error('generation capacity unavailable');
+      },
+    },
+    stock: {
+      resolveScene: async () => ({
+        provider: 'pexels',
+        type: 'stock-video',
+        localPath: 'fallback.mp4',
+      }),
+    },
+  });
+
+  const asset = await router.resolveScene({ index: 0 }, { projectId: 'vid_router' });
+
+  assert.equal(asset.provider, 'pexels');
+  assert.equal(asset.routing.selected, 'stock');
+  assert.equal(asset.routing.fallbackUsed, true);
+  assert.match(asset.routing.fallbackReason, /capacity unavailable/);
+});
+
+function jsonResponse(payload, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status >= 200 && status < 300 ? 'OK' : 'Error',
+    json: async () => payload,
+  };
+}
