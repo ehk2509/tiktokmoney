@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      OUTPUT_DIR: /app/outputs
+      DATA_DIR: /app/data
+    volumes:
+      - ./outputs:/app/outputs
+      - ./data:/app/data
