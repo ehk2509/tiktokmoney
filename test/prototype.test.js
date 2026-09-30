@@ -20,6 +20,10 @@ import { LumaRealisticVideoProvider } from '../src/providers/lumaRealisticVideoP
 import { AiFirstVisualProvider } from '../src/providers/visualRouter.js';
 import { FrameSampler, denseTemporalTimestamps } from '../src/services/frameSampler.js';
 import { OpenRouterRealismQcProvider } from '../src/providers/openRouterRealismQcProvider.js';
+import { LumaAgentsVideoProvider } from '../src/providers/lumaAgentsVideoProvider.js';
+import { RunwayVideoProvider } from '../src/providers/runwayVideoProvider.js';
+import { VideoModelRouter, classifyScene } from '../src/providers/videoModelRouter.js';
+import { ProviderStatsStore } from '../src/storage/providerStatsStore.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -1199,4 +1203,313 @@ test('pipeline uses temporal QC guidance for targeted regeneration', async () =>
   assert.match(firstSceneCalls[1].regeneration.guidance, /same face/i);
   assert.equal(project.scenes[0].visualQcHistory[0].temporalPassed, false);
   assert.equal(project.scenes[0].visualQcHistory[1].temporalPassed, true);
+});
+
+
+test('scene classifier distinguishes people, action, objects and environments', () => {
+  assert.equal(classifyScene({
+    narration: 'The pilot calmly checks the controls.',
+    continuity: { characterIds: ['pilot'] },
+  }), 'human');
+  assert.equal(classifyScene({
+    narration: 'The athlete starts running at full speed.',
+    continuity: { characterIds: ['athlete'] },
+  }), 'human-action');
+  assert.equal(classifyScene({ narration: 'A smartphone rotates on the table.' }), 'object');
+  assert.equal(classifyScene({ narration: 'A wide mountain landscape at sunrise.' }), 'environment');
+});
+
+test('Luma Agents provider uses current ray-3.2 image-to-video contract', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-luma-agents-'));
+  const requests = [];
+  try {
+    const provider = new LumaAgentsVideoProvider({
+      apiKey: 'agents-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target.endsWith('/generations') && options.method === 'POST') {
+          if (body.type === 'image') return jsonResponse({ id: 'img-current', state: 'queued' }, 201);
+          if (body.type === 'video') {
+            assert.equal(body.model, 'ray-3.2');
+            assert.equal(body.aspect_ratio, '9:16');
+            assert.equal(body.video.resolution, '720p');
+            assert.equal(body.video.duration, '5s');
+            assert.equal(body.video.start_frame.url, 'https://cdn.example/current-ref.jpg');
+            return jsonResponse({ id: 'vid-current', state: 'queued' }, 201);
+          }
+        }
+        if (target.endsWith('/generations/img-current')) {
+          return jsonResponse({
+            id: 'img-current',
+            state: 'completed',
+            output: [{ type: 'image', url: 'https://cdn.example/current-ref.jpg' }],
+          });
+        }
+        if (target.endsWith('/generations/vid-current')) {
+          return jsonResponse({
+            id: 'vid-current',
+            state: 'completed',
+            output: [{ type: 'video', url: 'https://cdn.example/current-video.mp4' }],
+          });
+        }
+        if (target === 'https://cdn.example/current-video.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('ray-3.2-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const scene = {
+      index: 0,
+      narration: 'A realistic pilot looks at the cockpit instruments.',
+      continuity: { characterIds: [], locationId: null },
+      realism: {
+        referencePrompt: 'Photorealistic pilot cockpit still.',
+        motionPrompt: 'Continuous realistic cockpit motion.',
+      },
+    };
+
+    const asset = await provider.resolveScene(scene, { projectId: 'current' });
+
+    assert.equal(asset.providerModelId, 'luma-ray-3.2');
+    assert.equal(asset.model, 'ray-3.2');
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'ray-3.2-video');
+    assert.equal(provider.estimateCostUsd(), 0.3);
+    assert.ok(requests.some((request) => request.body?.type === 'video'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Runway provider creates and polls a Gen-4.5 image-to-video task', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-runway-'));
+  const requests = [];
+  try {
+    const provider = new RunwayVideoProvider({
+      apiKey: 'runway-key',
+      model: 'gen4.5',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({
+          target,
+          method: options.method || 'GET',
+          body,
+          version: options.headers?.['x-runway-version'],
+        });
+
+        if (target.endsWith('/image_to_video') && options.method === 'POST') {
+          assert.equal(body.model, 'gen4.5');
+          assert.equal(body.promptImage, 'https://cdn.example/runway-ref.jpg');
+          assert.equal(body.ratio, '720:1280');
+          assert.equal(body.duration, 5);
+          return jsonResponse({ id: 'runway-video-task' }, 200);
+        }
+        if (target.endsWith('/tasks/runway-video-task')) {
+          return jsonResponse({
+            id: 'runway-video-task',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/runway-video.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/runway-video.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('runway-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const asset = await provider.animateReference(
+      {
+        index: 0,
+        narration: 'A person walks naturally through a real office.',
+        realism: { motionPrompt: 'Continuous photorealistic office shot.' },
+      },
+      { id: 'ref-task', url: 'https://cdn.example/runway-ref.jpg' },
+    );
+
+    assert.equal(asset.providerModelId, 'runway-gen4.5');
+    assert.equal(asset.model, 'gen4.5');
+    assert.equal(provider.estimateCostUsd(), 0.6);
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'runway-video');
+    assert.ok(requests.every((request) => !request.target.includes('runwayml.com/v1') || request.version === '2024-11-06'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('video model router chooses stronger human model but cheap model for generic scenes', async () => {
+  const calls = [];
+  const referenceProvider = {
+    prepareSceneReference: async () => ({ id: 'ref', url: 'https://example.test/ref.jpg' }),
+  };
+
+  const quality = {
+    id: 'quality',
+    profile: {
+      id: 'quality',
+      estimatedCostUsd5s: 0.6,
+      strengths: {
+        human: 0.98, action: 0.96, environment: 0.92, object: 0.9,
+        general: 0.92, continuity: 0.95, temporal: 0.97,
+      },
+    },
+    animateReference: async () => {
+      calls.push('quality');
+      return { type: 'ai-video', providerModelId: 'quality', localPath: 'quality.mp4' };
+    },
+  };
+
+  const cheap = {
+    id: 'cheap',
+    profile: {
+      id: 'cheap',
+      estimatedCostUsd5s: 0.1,
+      strengths: {
+        human: 0.75, action: 0.77, environment: 0.86, object: 0.86,
+        general: 0.9, continuity: 0.8, temporal: 0.82,
+      },
+    },
+    animateReference: async () => {
+      calls.push('cheap');
+      return { type: 'ai-video', providerModelId: 'cheap', localPath: 'cheap.mp4' };
+    },
+  };
+
+  const router = new VideoModelRouter({
+    providers: [quality, cheap],
+    referenceProvider,
+    costWeight: 8,
+    historyWeight: 0,
+  });
+
+  const human = await router.resolveScene({
+    narration: 'A woman speaks naturally to the camera.',
+    continuity: { characterIds: ['woman'] },
+  });
+  assert.equal(human.routing.providerId, 'quality');
+
+  const generic = await router.resolveScene({
+    narration: 'A simple abstract background slowly changes.',
+    continuity: { characterIds: [] },
+  });
+  assert.equal(generic.routing.providerId, 'cheap');
+  assert.deepEqual(calls, ['quality', 'cheap']);
+});
+
+test('router learns from QC history and can switch provider on regeneration', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-router-stats-'));
+  try {
+    const stats = new ProviderStatsStore(path.join(dir, 'stats.json'));
+    for (let index = 0; index < 6; index += 1) {
+      await stats.record('provider-a', {
+        sceneClass: 'human',
+        passed: false,
+        overallScore: 62,
+        temporalScore: 58,
+      });
+      await stats.record('provider-b', {
+        sceneClass: 'human',
+        passed: true,
+        overallScore: 94,
+        temporalScore: 92,
+      });
+    }
+
+    const make = (id) => ({
+      id,
+      profile: {
+        id,
+        estimatedCostUsd5s: 0.3,
+        strengths: {
+          human: 0.9, action: 0.9, environment: 0.9, object: 0.9,
+          general: 0.9, continuity: 0.9, temporal: 0.9,
+        },
+      },
+      resolveScene: async () => ({
+        type: 'ai-video',
+        providerModelId: id,
+        localPath: `${id}.mp4`,
+      }),
+    });
+
+    const router = new VideoModelRouter({
+      providers: [make('provider-a'), make('provider-b')],
+      statsStore: stats,
+      historyWeight: 35,
+      costWeight: 0,
+    });
+
+    const chosen = await router.resolveScene({
+      narration: 'A pilot speaks to camera.',
+      continuity: { characterIds: ['pilot'] },
+    });
+    assert.equal(chosen.routing.providerId, 'provider-b');
+
+    const switched = await router.resolveScene({
+      narration: 'A pilot speaks to camera.',
+      continuity: { characterIds: ['pilot'] },
+    }, {
+      regeneration: {
+        previousProviderId: 'provider-b',
+        issues: [{ code: 'face-morph', severity: 'high' }],
+      },
+    });
+
+    assert.equal(switched.routing.providerId, 'provider-a');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('router records QC outcomes into persistent provider statistics', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-router-record-'));
+  try {
+    const stats = new ProviderStatsStore(path.join(dir, 'stats.json'));
+    const router = new VideoModelRouter({
+      providers: [],
+      statsStore: stats,
+    });
+
+    await router.recordOutcome(
+      { narration: 'A person smiles.', continuity: { characterIds: ['person'] } },
+      {
+        routing: { providerId: 'runway-gen4.5' },
+        sceneClass: 'human',
+        estimatedCostUsd: 0.6,
+      },
+      {
+        passed: true,
+        overallScore: 93,
+        temporalScore: 91,
+      },
+    );
+
+    const recorded = await stats.get('runway-gen4.5');
+    assert.equal(recorded.attempts, 1);
+    assert.equal(recorded.passes, 1);
+    assert.equal(recorded.estimatedSpendUsd, 0.6);
+    assert.equal(recorded.sceneClasses.human.attempts, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
