@@ -7,6 +7,7 @@ import {
   createLlmProvider,
   createVisualProvider,
   createVoiceProvider,
+  createRealismQcProvider,
 } from './providers/providerFactory.js';
 
 export function createApp(overrides = {}) {
@@ -14,6 +15,7 @@ export function createApp(overrides = {}) {
   const trends = overrides.trends || new SampleTrendProvider();
   const visual = overrides.visual || createVisualProvider();
   const voice = overrides.voice || createVoiceProvider();
+  const realismQc = overrides.realismQc || createRealismQcProvider();
   const renderer = overrides.renderer || new FfmpegRenderer();
   const store = overrides.store || new JsonStore(process.env.DATA_DIR || './data');
   const pipeline = new VideoPipeline({
@@ -22,6 +24,7 @@ export function createApp(overrides = {}) {
     store,
     visual,
     voice,
+    realismQc,
   });
 
   return {
