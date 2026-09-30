@@ -1,3 +1,5 @@
+import { buildRealismSceneSpec } from './realismSceneSpec.js';
+
 function seconds(value) {
   return Math.max(0.8, Math.round(value * 100) / 100);
 }
@@ -10,14 +12,21 @@ export function planScenes(script) {
   return parts.map((text, index) => {
     const rawDuration = (text.length / totalWeight) * script.durationSeconds;
     const duration = seconds(rawDuration);
+    const purpose = index === 0 ? 'hook' : index === parts.length - 1 ? 'cta' : 'explain';
     const scene = {
       index,
       start: Math.round(cursor * 100) / 100,
       duration,
-      purpose: index === 0 ? 'hook' : index === parts.length - 1 ? 'cta' : 'explain',
+      purpose,
       narration: text,
       overlay: makeOverlay(text),
       visualPrompt: makeVisualPrompt(script.topic, text, index),
+      realism: buildRealismSceneSpec({
+        topic: script.topic,
+        narration: text,
+        purpose,
+        index,
+      }),
       transition: index === 0 ? 'none' : 'hard-cut',
     };
     cursor += duration;
