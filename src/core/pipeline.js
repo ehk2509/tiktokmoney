@@ -3,6 +3,7 @@ import { ScriptGenerator } from './scriptGenerator.js';
 import { StoryBibleGenerator } from './storyBibleGenerator.js';
 import { planScenes } from './scenePlanner.js';
 import { evaluateProject } from './qualityGate.js';
+import { buildSubtitles } from './subtitleBuilder.js';
 
 export class VideoPipeline {
   constructor({
@@ -13,6 +14,7 @@ export class VideoPipeline {
     stock = null,
     voice = null,
     realismQc = null,
+    subtitleConfig = null,
   }) {
     this.scriptGenerator = new ScriptGenerator({ llm });
     this.storyBibleGenerator = new StoryBibleGenerator({ llm });
@@ -21,6 +23,7 @@ export class VideoPipeline {
     this.visual = visual || stock;
     this.voice = voice;
     this.realismQc = realismQc;
+    this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
   async generate({ topic, audience = 'curious adults', durationSeconds = 35, render = true }) {
@@ -47,6 +50,7 @@ export class VideoPipeline {
       scenes,
       quality,
       voice: null,
+      subtitles: null,
       visualStrategy: this.visual?.strategy || (this.visual ? 'custom' : 'fallback-card'),
       realismQc: {
         enabled: Boolean(this.realismQc),
@@ -121,6 +125,12 @@ export class VideoPipeline {
         project.scenes = scenes;
       }
     }
+
+    project.subtitles = buildSubtitles({
+      voice: project.voice,
+      scenes: project.scenes,
+      config: this.subtitleConfig,
+    });
 
     project.status = 'READY';
 
@@ -420,4 +430,26 @@ function retimeScenes(scenes, totalDuration) {
 
 function round(value) {
   return Math.round(value * 1000) / 1000;
+}
+
+
+function subtitleConfigFromEnv(env = process.env) {
+  return {
+    enabled: env.SUBTITLES_ENABLED == null
+      ? true
+      : ['1', 'true', 'yes', 'on'].includes(String(env.SUBTITLES_ENABLED).toLowerCase()),
+    maxWordsPerCue: env.SUBTITLES_MAX_WORDS
+      ? Number(env.SUBTITLES_MAX_WORDS)
+      : undefined,
+    maxCharsPerCue: env.SUBTITLES_MAX_CHARS
+      ? Number(env.SUBTITLES_MAX_CHARS)
+      : undefined,
+    fontName: env.SUBTITLES_FONT || undefined,
+    fontSize: env.SUBTITLES_FONT_SIZE
+      ? Number(env.SUBTITLES_FONT_SIZE)
+      : undefined,
+    marginV: env.SUBTITLES_MARGIN_V
+      ? Number(env.SUBTITLES_MARGIN_V)
+      : undefined,
+  };
 }
