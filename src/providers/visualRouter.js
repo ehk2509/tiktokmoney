@@ -5,6 +5,11 @@ export class AiFirstVisualProvider {
     this.strategy = ai ? 'ai-first' : stock ? 'stock-only' : 'fallback-card';
   }
 
+  async prepareStoryBible(storyBible, context = {}) {
+    if (!this.ai?.prepareStoryBible) return storyBible;
+    return this.ai.prepareStoryBible(storyBible, context);
+  }
+
   async resolveScene(scene, context = {}) {
     let aiError = null;
 
