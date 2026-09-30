@@ -113,3 +113,41 @@ The Luma image API supports up to four image references and a dedicated `charact
 Canonical references live in `project.storyBible.references` and are reused across regeneration attempts. This prevents targeted QC regeneration from accidentally changing the actor, wardrobe, cockpit/room layout, lighting language or camera identity while correcting an artifact.
 
 The QC evaluator also receives the textual bible and treats visible drift from canonical character, location and style constraints as a continuity defect.
+
+
+## Temporal motion QC
+
+Static-looking frames are not enough for realistic AI video. A clip can look excellent at three checkpoints while briefly morphing, flickering, teleporting objects or changing facial identity between those frames.
+
+TikTokMoney now samples two complementary sets:
+
+```text
+AI clip
+  -> 3 larger realism checkpoints
+  -> 8 smaller chronological temporal frames
+  -> one multimodal vision request
+       -> static realism score
+       -> temporal stability score
+```
+
+The temporal evaluator measures:
+
+- identity stability
+- object persistence
+- geometry stability
+- motion plausibility
+- camera continuity
+- flicker freedom
+- temporal artifact freedom
+- action continuity
+
+Acceptance requires both thresholds. By default:
+
+```text
+static realism >= 82
+temporal stability >= 80
+```
+
+A scene that scores 93 on static realism but 54 on temporal stability is rejected. Its temporal defect description is fed into the existing Luma targeted-regeneration path, so guidance can explicitly request stable facial identity, no morphing, smoother camera motion or removal of texture flicker.
+
+Temporal QC shares the same OpenRouter request as static QC to keep inference cost bounded. The denser sequence uses smaller frames and preserves strict timestamp ordering in the multimodal message.
