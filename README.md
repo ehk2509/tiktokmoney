@@ -111,6 +111,46 @@ FfmpegRenderer
 
 The fallback script provider is deterministic so development and tests do not spend API money. Real providers can be swapped in behind the same interface.
 
+## Provider-backed M1 mode
+
+The default remains zero-key/local. Add environment variables when you want production media:
+
+```bash
+cp .env.example .env
+
+# Structured script generation
+export LLM_PROVIDER=openai-compatible
+export OPENAI_API_KEY=...
+export LLM_BASE_URL=https://api.openai.com/v1
+export LLM_MODEL=...
+
+# Portrait stock footage
+export PEXELS_API_KEY=...
+
+# Narration + timestamps
+export ELEVENLABS_API_KEY=...
+export ELEVENLABS_VOICE_ID=...
+```
+
+With those providers configured, generation becomes:
+
+```text
+topic
+  -> structured LLM script
+  -> timed scenes
+  -> portrait stock lookup + local cache
+  -> ElevenLabs narration + word timing
+  -> narration-aware scene retiming
+  -> per-scene FFmpeg normalization/captions
+  -> scene concatenation
+  -> narration attachment
+  -> 1080x1920 MP4
+```
+
+If Pexels is not configured or a scene lookup fails, that scene falls back to the deterministic visual card instead of aborting the project. If an explicitly configured narration provider fails, the project stops at `VOICE_FAILED` so a silent/broken video is not mistaken for a successful production render.
+
+Pexels asset provenance is retained in each project manifest, including creator/source metadata, so attribution can be surfaced by future publishing/UI layers.
+
 ## Project structure
 
 ```text
@@ -131,12 +171,11 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. real LLM structured generation
-2. stock/AI visual acquisition
-3. TTS + word timings
-4. kinetic captions
-5. multi-scene FFmpeg composition
-6. visual/script alignment QC
+1. kinetic word-level captions using narration timings
+2. visual/script alignment QC
+3. render retry/recovery by failed stage
+4. AI-generated image/video assets alongside cached stock
+5. independent hook variants and creative ranking
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
