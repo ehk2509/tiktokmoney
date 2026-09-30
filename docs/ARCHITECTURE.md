@@ -193,3 +193,23 @@ Current public API pricing is encoded only as a routing estimate, not an account
 New Luma deployments use the current Agents API with `ray-3.2` for video and `uni-1` for reference images. The earlier Dream Machine `ray-2` / Photon integration remains only for backwards compatibility.
 
 Runway uses `POST /v1/image_to_video` with the 2024-11-06 API version and downloads task outputs immediately because Runway output URLs are ephemeral.
+
+
+## Subtitle timeline
+
+Subtitles are a post-QC presentation layer:
+
+```text
+narration
+  -> ElevenLabs word timing when available
+  -> otherwise estimate word timing from retimed scenes
+  -> group into short readable phrases
+  -> create one highlight event per spoken word
+  -> ASS timeline
+  -> final FFmpeg burn-in
+  -> MP4 + ASS + SRT
+```
+
+Subtitles are intentionally not rendered into individual generated scenes. This keeps realism and temporal QC focused on the underlying footage and lets subtitle styling evolve independently.
+
+The default vertical-safe style uses DejaVu Sans, a large font, strong outline, bottom-center alignment and a word-level active highlight. Docker installs `fonts-dejavu-core` so output is deterministic across development and container environments.

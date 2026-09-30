@@ -1,6 +1,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { renderAssDocument, renderSrtDocument } from '../core/subtitleBuilder.js';
 
 export class FfmpegRenderer {
   constructor({
@@ -17,9 +18,17 @@ export class FfmpegRenderer {
     await mkdir(this.outputDir, { recursive: true });
     const manifestPath = path.join(this.outputDir, `${project.id}.render.json`);
     const outputPath = path.join(this.outputDir, `${project.id}.mp4`);
+    const subtitleAssPath = path.join(this.outputDir, `${project.id}.subtitles.ass`);
+    const subtitleSrtPath = path.join(this.outputDir, `${project.id}.subtitles.srt`);
     const workDir = path.join(this.outputDir, `.${project.id}-render`);
     await mkdir(workDir, { recursive: true });
     await writeFile(manifestPath, JSON.stringify(project, null, 2));
+
+    const hasSubtitles = Boolean(project.subtitles?.enabled && project.subtitles?.events?.length);
+    if (hasSubtitles) {
+      await writeFile(subtitleAssPath, renderAssDocument(project.subtitles));
+      await writeFile(subtitleSrtPath, renderSrtDocument(project.subtitles));
+    }
 
     const clips = [];
     for (const scene of project.scenes) {
@@ -44,42 +53,51 @@ export class FfmpegRenderer {
       videoOnlyPath,
     ]);
 
+    const args = ['-y', '-i', videoOnlyPath];
     if (project.voice?.audioPath) {
-      await this.runCommand(this.ffmpegBin, [
-        '-y',
-        '-i', videoOnlyPath,
-        '-i', project.voice.audioPath,
-        '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-c:v', 'copy',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-shortest',
-        '-movflags', '+faststart',
-        outputPath,
-      ]);
+      args.push('-i', project.voice.audioPath);
     } else {
-      await this.runCommand(this.ffmpegBin, [
-        '-y',
-        '-i', videoOnlyPath,
+      args.push(
         '-f', 'lavfi',
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-        '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-c:v', 'copy',
-        '-c:a', 'aac',
-        '-b:a', '96k',
-        '-shortest',
-        '-movflags', '+faststart',
-        outputPath,
-      ]);
+      );
     }
 
+    args.push(
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+    );
+
+    if (hasSubtitles) {
+      args.push(
+        '-vf', `ass=filename='${escapeFilterPath(path.resolve(subtitleAssPath))}'`,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '18',
+        '-pix_fmt', 'yuv420p',
+      );
+    } else {
+      args.push('-c:v', 'copy');
+    }
+
+    args.push(
+      '-c:a', 'aac',
+      '-b:a', project.voice?.audioPath ? '128k' : '96k',
+      '-shortest',
+      '-movflags', '+faststart',
+      outputPath,
+    );
+
+    await this.runCommand(this.ffmpegBin, args);
     await rm(workDir, { recursive: true, force: true });
 
     return {
       outputPath,
       manifestPath,
+      subtitleAssPath: hasSubtitles ? subtitleAssPath : null,
+      subtitleSrtPath: hasSubtitles ? subtitleSrtPath : null,
+      subtitleSource: project.subtitles?.source || 'none',
+      subtitleCueCount: project.subtitles?.cues?.length || 0,
       sceneCount: clips.length,
       width: 1080,
       height: 1920,
@@ -88,14 +106,11 @@ export class FfmpegRenderer {
 
   async renderScene(scene, outputPath) {
     const duration = Math.max(0.5, Number(scene.duration) || 1);
-    const caption = escapeDrawText((scene.overlay || scene.narration || '').slice(0, 110));
     const visualFilter = [
       'scale=1080:1920:force_original_aspect_ratio=increase',
       'crop=1080:1920',
       'setsar=1',
       'fps=30',
-      'drawbox=x=70:y=1320:w=940:h=420:color=black@0.38:t=fill',
-      `drawtext=text='${caption}':fontcolor=white:fontsize=54:x=(w-text_w)/2:y=1390:box=0`,
     ].join(',');
 
     const args = ['-y'];
@@ -111,12 +126,7 @@ export class FfmpegRenderer {
       args.push(
         '-f', 'lavfi',
         '-i', `color=c=0x111827:s=1080x1920:d=${duration}`,
-        '-vf', [
-          'setsar=1',
-          'fps=30',
-          'drawbox=x=70:y=1320:w=940:h=420:color=black@0.38:t=fill',
-          `drawtext=text='${caption}':fontcolor=white:fontsize=54:x=(w-text_w)/2:y=1390:box=0`,
-        ].join(','),
+        '-vf', 'setsar=1,fps=30',
       );
     }
 
@@ -147,16 +157,11 @@ function run(command, args) {
   });
 }
 
-function escapeDrawText(value) {
-  return value
+function escapeFilterPath(value) {
+  return String(value)
     .replaceAll('\\', '\\\\')
     .replaceAll(':', '\\:')
-    .replaceAll("'", '’')
-    .replaceAll('%', '\\%')
-    .replaceAll(',', '\\,')
-    .replaceAll('[', '\\[')
-    .replaceAll(']', '\\]')
-    .replaceAll('\n', ' ');
+    .replaceAll("'", "\\'");
 }
 
 function escapeConcatPath(value) {

@@ -147,6 +147,11 @@ export PEXELS_API_KEY=...
 # Narration + timestamps
 export ELEVENLABS_API_KEY=...
 export ELEVENLABS_VOICE_ID=...
+
+# Subtitles are enabled by default
+export SUBTITLES_ENABLED=true
+export SUBTITLES_MAX_WORDS=5
+export SUBTITLES_FONT_SIZE=68
 ```
 
 With those providers configured, generation becomes:
@@ -178,8 +183,13 @@ topic
   -> stop if no acceptable fallback exists
   -> ElevenLabs narration + word timing
   -> narration-aware scene retiming
+  -> timed subtitle timeline
+       -> exact word timing when available
+       -> scene-estimated fallback otherwise
+       -> active-word highlight
   -> FFmpeg normalization / composition
-  -> 1080x1920 MP4
+  -> ASS subtitle burn-in
+  -> 1080x1920 MP4 + .srt/.ass sidecars
 ```
 
 Visual routing is now **AI-first and multi-model**. When more than one current video backend is configured, TikTokMoney classifies each scene (human, human-action, action, environment, object or general), scores each model's capability profile, subtracts estimated generation cost, and incorporates that model's actual historical QC pass rate plus static/temporal scores. Before scene generation, TikTokMoney creates a Story Bible containing stable recurring characters, locations, wardrobe/physical traits, fixed environment elements, camera rules and lighting rules. Luma then creates canonical character references and location references. Each scene reference frame combines those canonical references with the previous accepted scene reference, substantially reducing identity and environment drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
@@ -208,12 +218,29 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. kinetic word-level captions using narration timings
-2. render/generation retry by failed stage
-3. independent hook variants and creative ranking
-4. live trend intelligence
-5. publishing + performance learning
+1. render/generation retry by failed stage
+2. independent hook variants and creative ranking
+3. live trend intelligence
+4. publishing + performance learning
+5. caption-style experiments driven by retention
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
 See [Architecture](docs/ARCHITECTURE.md) and [Roadmap](docs/ROADMAP.md).
+
+
+## Subtitles
+
+Every rendered video now supports burned-in short-form subtitles. With ElevenLabs narration, TikTokMoney uses the provider's exact word timestamps. If word alignment is unavailable, it derives approximate timings from each retimed scene so subtitles remain available in fallback/local workflows.
+
+The default style uses short phrase groups in the lower safe area with the currently spoken word highlighted. Subtitle graphics are added only after the generated footage has passed realism QC, so text overlays do not interfere with visual quality evaluation.
+
+Each successful render can produce:
+
+```text
+outputs/<video-id>.mp4
+outputs/<video-id>.subtitles.ass
+outputs/<video-id>.subtitles.srt
+```
+
+The ASS file is used for the burned-in styled render; the SRT file is retained for publishing platforms or later editing.
