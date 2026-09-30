@@ -111,6 +111,16 @@ export function renderAssDocument(subtitles) {
   return [...header, ...lines, ''].join('\n');
 }
 
+export function renderSrtDocument(subtitles) {
+  const cues = Array.isArray(subtitles?.cues) ? subtitles.cues : [];
+  return cues.map((cue, index) => [
+    String(index + 1),
+    `${formatSrtTime(cue.start)} --> ${formatSrtTime(cue.end)}`,
+    cue.text,
+    '',
+  ].join('\n')).join('\n');
+}
+
 export function approximateWordTimingsFromScenes(scenes = []) {
   const words = [];
 
@@ -248,6 +258,15 @@ function formatAssTime(value) {
   const seconds = Math.floor((totalCentiseconds % 6000) / 100);
   const centiseconds = totalCentiseconds % 100;
   return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`;
+}
+
+function formatSrtTime(value) {
+  const totalMilliseconds = Math.max(0, Math.round((Number(value) || 0) * 1000));
+  const hours = Math.floor(totalMilliseconds / 3600000);
+  const minutes = Math.floor((totalMilliseconds % 3600000) / 60000);
+  const seconds = Math.floor((totalMilliseconds % 60000) / 1000);
+  const milliseconds = totalMilliseconds % 1000;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
 }
 
 function clampInt(value, min, max, fallback) {
