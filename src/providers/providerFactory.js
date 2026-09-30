@@ -42,6 +42,12 @@ export function createAiVideoProvider(env = process.env) {
     pollIntervalMs: env.LUMA_POLL_INTERVAL_MS ? Number(env.LUMA_POLL_INTERVAL_MS) : undefined,
     maxPolls: env.LUMA_MAX_POLLS ? Number(env.LUMA_MAX_POLLS) : undefined,
     continuityWeight: env.LUMA_CONTINUITY_WEIGHT ? Number(env.LUMA_CONTINUITY_WEIGHT) : undefined,
+    locationReferenceWeight: env.LUMA_LOCATION_REFERENCE_WEIGHT
+      ? Number(env.LUMA_LOCATION_REFERENCE_WEIGHT)
+      : undefined,
+    characterReferenceCount: env.LUMA_CHARACTER_REFERENCE_COUNT
+      ? Number(env.LUMA_CHARACTER_REFERENCE_COUNT)
+      : undefined,
   });
 }
 
