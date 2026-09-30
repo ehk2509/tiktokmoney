@@ -5,14 +5,14 @@ import { JsonStore } from './storage/jsonStore.js';
 import { VideoPipeline } from './core/pipeline.js';
 import {
   createLlmProvider,
-  createStockProvider,
+  createVisualProvider,
   createVoiceProvider,
 } from './providers/providerFactory.js';
 
 export function createApp(overrides = {}) {
   const llm = overrides.llm || createLlmProvider();
   const trends = overrides.trends || new SampleTrendProvider();
-  const stock = overrides.stock || createStockProvider();
+  const visual = overrides.visual || createVisualProvider();
   const voice = overrides.voice || createVoiceProvider();
   const renderer = overrides.renderer || new FfmpegRenderer();
   const store = overrides.store || new JsonStore(process.env.DATA_DIR || './data');
@@ -20,7 +20,7 @@ export function createApp(overrides = {}) {
     llm,
     renderer,
     store,
-    stock,
+    visual,
     voice,
   });
 
