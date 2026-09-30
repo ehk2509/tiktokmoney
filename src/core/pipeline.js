@@ -236,6 +236,9 @@ async function resolveOneScene({
         previousAsset,
         storyBible,
       });
+      if (typeof provider.recordOutcome === 'function') {
+        await provider.recordOutcome(scene, lastAsset, lastQc);
+      }
       qcHistory.push({
         attempt,
         generationId: lastAsset.generationId || null,
@@ -322,7 +325,8 @@ async function resolveOneScene({
       regeneration = {
         attempt: attempt + 1,
         guidance: lastQc.regenerationGuidance,
-        issues: lastQc.issues,
+        issues: [...(lastQc.issues || []), ...(lastQc.temporalIssues || [])],
+        previousProviderId: lastAsset.routing?.providerId || lastAsset.providerModelId || null,
       };
       continue;
     }
