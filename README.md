@@ -149,10 +149,15 @@ With those providers configured, generation becomes:
 ```text
 topic
   -> structured LLM script
-  -> realism scene specification
-  -> photorealistic Luma reference frame
+  -> continuity Story Bible
+       -> recurring characters
+       -> recurring locations
+       -> camera / lighting rules
+       -> per-scene bindings
+  -> canonical Luma character references
+  -> canonical Luma location references
+  -> scene reference combines canonical refs + previous accepted scene
   -> reference-guided Luma image-to-video
-  -> carry previous reference into the next scene
   -> sample 3 frames from each AI scene
   -> OpenRouter vision realism QC
   -> reject + targeted regenerate when score is too low
@@ -164,7 +169,7 @@ topic
   -> 1080x1920 MP4
 ```
 
-Visual routing is now **AI-first**. If `LUMA_API_KEY` is configured, each scene gets a photorealistic reference image and is then animated with Ray using image-to-video. The next scene reuses the previous scene's reference image as an image reference to reduce identity/location drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
+Visual routing is now **AI-first**. Before scene generation, TikTokMoney creates a Story Bible containing stable recurring characters, locations, wardrobe/physical traits, fixed environment elements, camera rules and lighting rules. Luma then creates canonical character references and location references. Each scene reference frame combines those canonical references with the previous accepted scene reference, substantially reducing identity and environment drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
 
 Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. When realism QC is enabled, FFmpeg samples multiple frames from every AI clip and sends those images to a vision-capable OpenRouter model. The evaluator scores photorealism, anatomy, geometry, physics, motion consistency, continuity, scene relevance and artifact freedom.
 
@@ -190,8 +195,8 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. stronger cross-scene character/location bibles
-2. temporal/motion QC beyond sampled frames
+1. temporal/motion QC beyond sampled frames
+2. additional AI video providers + cost/quality router
 3. kinetic word-level captions using narration timings
 4. render/generation retry by failed stage
 5. independent hook variants and creative ranking
