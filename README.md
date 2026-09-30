@@ -124,10 +124,13 @@ export OPENAI_API_KEY=...
 export LLM_BASE_URL=https://api.openai.com/v1
 export LLM_MODEL=...
 
-# Realism-first AI video
-export LUMA_API_KEY=...
-export LUMA_VIDEO_MODEL=ray-2
-export LUMA_IMAGE_MODEL=photon-flash-1
+# Current realism-first AI video backends
+export LUMA_AGENTS_API_KEY=...
+export LUMA_AGENTS_VIDEO_MODEL=ray-3.2
+
+export RUNWAYML_API_SECRET=...
+export RUNWAY_PRIMARY_MODEL=gen4.5
+export RUNWAY_ENABLE_TURBO=true
 
 # Realism QC + targeted regeneration
 export REALISM_QC_ENABLED=true
@@ -159,7 +162,12 @@ topic
   -> canonical Luma character references
   -> canonical Luma location references
   -> scene reference combines canonical refs + previous accepted scene
-  -> reference-guided Luma image-to-video
+  -> adaptive AI video router
+       -> Luma Ray 3.2
+       -> Runway Gen-4.5
+       -> Runway Gen-4 Turbo
+       -> score scene fit + estimated cost + historical QC
+  -> selected reference-guided image-to-video model
   -> sample 3 realism checkpoints
   -> sample 8 ordered temporal frames
   -> one OpenRouter vision QC call
@@ -174,7 +182,7 @@ topic
   -> 1080x1920 MP4
 ```
 
-Visual routing is now **AI-first**. Before scene generation, TikTokMoney creates a Story Bible containing stable recurring characters, locations, wardrobe/physical traits, fixed environment elements, camera rules and lighting rules. Luma then creates canonical character references and location references. Each scene reference frame combines those canonical references with the previous accepted scene reference, substantially reducing identity and environment drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
+Visual routing is now **AI-first and multi-model**. When more than one current video backend is configured, TikTokMoney classifies each scene (human, human-action, action, environment, object or general), scores each model's capability profile, subtracts estimated generation cost, and incorporates that model's actual historical QC pass rate plus static/temporal scores. Before scene generation, TikTokMoney creates a Story Bible containing stable recurring characters, locations, wardrobe/physical traits, fixed environment elements, camera rules and lighting rules. Luma then creates canonical character references and location references. Each scene reference frame combines those canonical references with the previous accepted scene reference, substantially reducing identity and environment drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
 
 Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. When realism QC is enabled, FFmpeg now produces two views of every AI clip: sparse realism checkpoints and a denser chronological sequence. Both are sent in one vision call. The evaluator scores photorealism, anatomy, geometry, physics, continuity and artifact freedom, plus temporal identity stability, object persistence, geometry stability, motion plausibility, camera continuity, flicker freedom and action continuity.
 
@@ -200,11 +208,11 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. additional AI video providers + cost/quality router
-2. kinetic word-level captions using narration timings
-3. render/generation retry by failed stage
-4. independent hook variants and creative ranking
-5. live trend intelligence
+1. kinetic word-level captions using narration timings
+2. render/generation retry by failed stage
+3. independent hook variants and creative ranking
+4. live trend intelligence
+5. publishing + performance learning
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
