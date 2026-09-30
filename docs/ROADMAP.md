@@ -30,8 +30,8 @@
 - [x] AI-first visual routing with Pexels fallback
 - [x] Cross-scene reference-image continuity
 - [x] Generation polling, failure handling and local download
-- [ ] Vision-based photorealism/artifact QC
-- [ ] Automatic targeted regeneration
+- [x] Vision-based photorealism/artifact QC
+- [x] Automatic targeted regeneration
 - [ ] Strong character/location bible across a complete video
 - [ ] Additional AI video providers / model router
 

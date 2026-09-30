@@ -35,19 +35,26 @@ export class LumaRealisticVideoProvider {
     this.sleep = sleepImpl;
   }
 
-  async resolveScene(scene, { projectId, previousAsset = null } = {}) {
+  async resolveScene(scene, {
+    projectId,
+    previousAsset = null,
+    regeneration = null,
+  } = {}) {
     const realism = scene.realism;
     if (!realism?.referencePrompt || !realism?.motionPrompt) {
       throw new Error('scene is missing realism prompts');
     }
 
+    const referencePrompt = applyRegenerationGuidance(realism.referencePrompt, regeneration);
+    const motionPrompt = applyRegenerationGuidance(realism.motionPrompt, regeneration);
+
     const reference = await this.createReferenceImage({
-      prompt: realism.referencePrompt,
+      prompt: referencePrompt,
       previousReferenceUrl: previousAsset?.referenceImageUrl || null,
     });
 
     const video = await this.createVideo({
-      prompt: realism.motionPrompt,
+      prompt: motionPrompt,
       referenceImageUrl: reference.url,
     });
 
@@ -74,8 +81,10 @@ export class LumaRealisticVideoProvider {
       resolution: this.resolution,
       generatedDuration: this.generationDuration,
       aspectRatio: '9:16',
-      prompt: realism.motionPrompt,
-      referencePrompt: realism.referencePrompt,
+      prompt: motionPrompt,
+      referencePrompt,
+      regenerationAttempt: regeneration?.attempt || 0,
+      qcFeedbackApplied: regeneration?.guidance || null,
       continuityFrom: previousAsset?.referenceGenerationId || null,
       continuityReferenceUrl: previousAsset?.referenceImageUrl || null,
       projectId,
@@ -183,6 +192,19 @@ export class LumaRealisticVideoProvider {
 
     return payload;
   }
+}
+
+function applyRegenerationGuidance(prompt, regeneration) {
+  const guidance = regeneration?.guidance?.trim();
+  if (!guidance) return prompt;
+
+  return [
+    prompt,
+    'This is a regeneration after strict visual QC rejected a previous attempt.',
+    `Correct the observed defects: ${guidance}`,
+    'Do not introduce new subjects, locations, text, logos or camera cuts.',
+    'Preserve the intended scene while making the result look like authentic camera footage.',
+  ].join(' ');
 }
 
 function fingerprint(value) {

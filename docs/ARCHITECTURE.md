@@ -57,4 +57,30 @@ The AI video provider stores both the reference-image generation ID and video ge
 
 Pexels remains a fallback instead of the primary visual source. A failure in AI generation can degrade to real licensed footage without making the entire project fail.
 
-The current continuity mechanism is intentionally conservative: the previous reference image is supplied to the next reference-frame generation with a configurable weight. A later milestone will replace this with explicit character/location bibles plus visual QC.
+The current continuity mechanism is intentionally conservative: the previous accepted reference image is supplied to the next reference-frame generation with a configurable weight. A later milestone will replace this with explicit character/location bibles.
+
+## Realism QC and targeted regeneration
+
+When enabled, realism QC runs before narration and final rendering:
+
+```text
+generated AI clip
+  -> FFmpeg frame sampler
+  -> 3 compact JPEG checkpoints
+  -> OpenRouter vision model
+  -> realism score + concrete defect list
+       |
+       +-- pass -> accept scene
+       |
+       +-- fail -> feed corrective guidance back to Luma
+                     |
+                     +-- regenerated scene -> QC again
+                     |
+                     +-- still fails -> Pexels real-footage fallback
+                                          |
+                                          +-- unavailable -> VISUAL_QC_FAILED
+```
+
+The evaluator scores photorealism, anatomy, geometry, physics, motion consistency, continuity, scene relevance and artifact freedom. Each attempt is retained in `visualQcHistory` together with generation IDs and feedback.
+
+QC is opt-in to avoid surprise inference cost, but once enabled it is fail-closed by default. A QC service failure therefore falls back to real footage or stops the project instead of silently accepting an unreviewed AI scene.

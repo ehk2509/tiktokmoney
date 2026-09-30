@@ -26,28 +26,30 @@ export class AiFirstVisualProvider {
     }
 
     if (this.stock) {
-      try {
-        const asset = await this.stock.resolveScene(scene, context);
-        if (asset) {
-          return {
-            ...asset,
-            routing: {
-              selected: 'stock',
-              fallbackUsed: Boolean(aiError),
-              fallbackReason: aiError?.message || null,
-            },
-          };
-        }
-      } catch (stockError) {
-        if (aiError) {
-          throw new Error(`AI video failed: ${aiError.message}; stock fallback failed: ${stockError.message}`);
-        }
-        throw stockError;
-      }
+      return this.resolveFallbackScene(scene, {
+        ...context,
+        reason: aiError?.message || context.reason || 'ai-video-unavailable',
+      });
     }
 
     if (aiError) throw aiError;
     return null;
+  }
+
+  async resolveFallbackScene(scene, context = {}) {
+    if (!this.stock) return null;
+
+    const asset = await this.stock.resolveScene(scene, context);
+    if (!asset) return null;
+
+    return {
+      ...asset,
+      routing: {
+        selected: 'stock',
+        fallbackUsed: true,
+        fallbackReason: context.reason || 'ai-video-rejected',
+      },
+    };
   }
 }
 

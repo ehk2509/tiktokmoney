@@ -129,6 +129,13 @@ export LUMA_API_KEY=...
 export LUMA_VIDEO_MODEL=ray-2
 export LUMA_IMAGE_MODEL=photon-flash-1
 
+# Realism QC + targeted regeneration
+export REALISM_QC_ENABLED=true
+export OPENROUTER_API_KEY=...
+export REALISM_QC_MODEL=google/gemini-3.8-flash
+export REALISM_QC_THRESHOLD=82
+export REALISM_MAX_REGENERATIONS=1
+
 # Licensed footage fallback
 export PEXELS_API_KEY=...
 
@@ -146,7 +153,11 @@ topic
   -> photorealistic Luma reference frame
   -> reference-guided Luma image-to-video
   -> carry previous reference into the next scene
-  -> Pexels only when AI generation fails
+  -> sample 3 frames from each AI scene
+  -> OpenRouter vision realism QC
+  -> reject + targeted regenerate when score is too low
+  -> Pexels when AI still fails QC
+  -> stop if no acceptable fallback exists
   -> ElevenLabs narration + word timing
   -> narration-aware scene retiming
   -> FFmpeg normalization / composition
@@ -155,7 +166,9 @@ topic
 
 Visual routing is now **AI-first**. If `LUMA_API_KEY` is configured, each scene gets a photorealistic reference image and is then animated with Ray using image-to-video. The next scene reuses the previous scene's reference image as an image reference to reduce identity/location drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
 
-Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. Pexels attribution metadata is also retained. If an explicitly configured narration provider fails, the project stops at `VOICE_FAILED` so a silent/broken video is not mistaken for a successful production render.
+Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. When realism QC is enabled, FFmpeg samples multiple frames from every AI clip and sends those images to a vision-capable OpenRouter model. The evaluator scores photorealism, anatomy, geometry, physics, motion consistency, continuity, scene relevance and artifact freedom.
+
+A rejected clip is regenerated with the evaluator's corrective guidance. After the configured retry budget is exhausted, TikTokMoney uses Pexels real footage if available. If no acceptable fallback exists, the project stops at `VISUAL_QC_FAILED` and is not rendered. QC is fail-closed by default once explicitly enabled. Pexels attribution metadata is retained in the manifest.
 
 ## Project structure
 
@@ -177,8 +190,8 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. vision-based realism QC and automatic regeneration
-2. stronger cross-scene identity/location continuity
+1. stronger cross-scene character/location bibles
+2. temporal/motion QC beyond sampled frames
 3. kinetic word-level captions using narration timings
 4. render/generation retry by failed stage
 5. independent hook variants and creative ranking

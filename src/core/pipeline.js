@@ -11,12 +11,14 @@ export class VideoPipeline {
     visual = null,
     stock = null,
     voice = null,
+    realismQc = null,
   }) {
     this.scriptGenerator = new ScriptGenerator({ llm });
     this.renderer = renderer;
     this.store = store;
     this.visual = visual || stock;
     this.voice = voice;
+    this.realismQc = realismQc;
   }
 
   async generate({ topic, audience = 'curious adults', durationSeconds = 35, render = true }) {
@@ -42,6 +44,13 @@ export class VideoPipeline {
       quality,
       voice: null,
       visualStrategy: this.visual?.strategy || (this.visual ? 'custom' : 'fallback-card'),
+      realismQc: {
+        enabled: Boolean(this.realismQc),
+        provider: this.realismQc ? 'openrouter' : null,
+        model: this.realismQc?.model || null,
+        threshold: this.realismQc?.threshold || null,
+        maxRegenerations: this.realismQc?.maxRegenerations || 0,
+      },
       warnings: [],
       render: null,
     };
@@ -51,13 +60,22 @@ export class VideoPipeline {
       return project;
     }
 
-    project.status = 'VISUALS_GENERATING';
-    project.scenes = await resolveVisuals({
+    project.status = this.realismQc ? 'VISUALS_GENERATING_AND_QC' : 'VISUALS_GENERATING';
+    const visualResult = await resolveVisuals({
       provider: this.visual,
+      qc: this.realismQc,
       scenes,
       projectId: id,
       warnings: project.warnings,
     });
+    project.scenes = visualResult.scenes;
+
+    if (visualResult.fatalQcFailures.length) {
+      project.status = 'VISUAL_QC_FAILED';
+      project.visualQcFailures = visualResult.fatalQcFailures;
+      await this.store?.saveProject(project);
+      return project;
+    }
 
     if (this.voice) {
       project.status = 'VOICE_GENERATING';
@@ -97,30 +115,245 @@ export class VideoPipeline {
   }
 }
 
-async function resolveVisuals({ provider, scenes, projectId, warnings }) {
-  if (!provider) return scenes;
+async function resolveVisuals({
+  provider,
+  qc,
+  scenes,
+  projectId,
+  warnings,
+}) {
+  if (!provider) {
+    return { scenes, fatalQcFailures: [] };
+  }
 
   const resolved = [];
-  let previousAsset = null;
+  const fatalQcFailures = [];
+  let previousContinuityAsset = null;
 
   for (const scene of scenes) {
+    const result = await resolveOneScene({
+      provider,
+      qc,
+      scene,
+      projectId,
+      previousAsset: previousContinuityAsset,
+      warnings,
+    });
+
+    resolved.push({
+      ...scene,
+      asset: result.asset,
+      visualQcHistory: result.qcHistory,
+    });
+
+    if (result.fatalQcFailure) {
+      fatalQcFailures.push(result.fatalQcFailure);
+    }
+
+    if (result.asset?.referenceImageUrl) {
+      previousContinuityAsset = result.asset;
+    }
+  }
+
+  return { scenes: resolved, fatalQcFailures };
+}
+
+async function resolveOneScene({
+  provider,
+  qc,
+  scene,
+  projectId,
+  previousAsset,
+  warnings,
+}) {
+  const maxRegenerations = qc?.maxRegenerations || 0;
+  const qcHistory = [];
+  let regeneration = null;
+  let lastAsset = null;
+  let lastQc = null;
+
+  for (let attempt = 0; attempt <= maxRegenerations; attempt += 1) {
     try {
-      const asset = await provider.resolveScene(scene, {
+      lastAsset = await provider.resolveScene(scene, {
         projectId,
         previousAsset,
+        regeneration,
       });
-      resolved.push({ ...scene, asset });
-      if (asset) previousAsset = asset;
     } catch (error) {
       warnings.push({
         stage: 'visuals',
         scene: scene.index,
+        attempt,
         message: error.message,
       });
-      resolved.push({ ...scene, asset: null });
+
+      return {
+        asset: null,
+        qcHistory,
+        fatalQcFailure: null,
+      };
+    }
+
+    if (!lastAsset || !qc || lastAsset.type !== 'ai-video') {
+      return {
+        asset: lastAsset,
+        qcHistory,
+        fatalQcFailure: null,
+      };
+    }
+
+    try {
+      lastQc = await qc.evaluateScene(scene, lastAsset, { previousAsset });
+      qcHistory.push({
+        attempt,
+        generationId: lastAsset.generationId || null,
+        ...lastQc,
+      });
+    } catch (error) {
+      warnings.push({
+        stage: 'visual-qc',
+        scene: scene.index,
+        attempt,
+        message: error.message,
+      });
+
+      const fallback = await tryRealFootageFallback({
+        provider,
+        scene,
+        projectId,
+        previousAsset,
+        lastQc: { overallScore: null },
+        warnings,
+        reason: 'realism-qc-evaluator-error',
+      });
+
+      if (fallback) {
+        return {
+          asset: {
+            ...fallback,
+            qc: {
+              status: 'error',
+              message: error.message,
+            },
+          },
+          qcHistory,
+          fatalQcFailure: null,
+        };
+      }
+
+      if (qc.failClosed !== false) {
+        return {
+          asset: null,
+          qcHistory,
+          fatalQcFailure: {
+            scene: scene.index,
+            score: null,
+            issues: [],
+            reason: `Realism QC failed to evaluate the scene: ${error.message}`,
+          },
+        };
+      }
+
+      return {
+        asset: {
+          ...lastAsset,
+          qc: {
+            status: 'error',
+            message: error.message,
+          },
+        },
+        qcHistory,
+        fatalQcFailure: null,
+      };
+    }
+
+    if (lastQc.passed) {
+      return {
+        asset: {
+          ...lastAsset,
+          qc: lastQc,
+          qcAttempts: attempt + 1,
+        },
+        qcHistory,
+        fatalQcFailure: null,
+      };
+    }
+
+    if (attempt < maxRegenerations) {
+      warnings.push({
+        stage: 'visual-qc-regeneration',
+        scene: scene.index,
+        attempt,
+        message: `Rejected AI scene with score ${lastQc.overallScore}; regenerating`,
+      });
+
+      regeneration = {
+        attempt: attempt + 1,
+        guidance: lastQc.regenerationGuidance,
+        issues: lastQc.issues,
+      };
+      continue;
     }
   }
-  return resolved;
+
+  const fallback = await tryRealFootageFallback({
+    provider,
+    scene,
+    projectId,
+    previousAsset,
+    lastQc,
+    warnings,
+  });
+
+  if (fallback) {
+    return {
+      asset: {
+        ...fallback,
+        rejectedAiQc: lastQc,
+        qcAttempts: qcHistory.length,
+      },
+      qcHistory,
+      fatalQcFailure: null,
+    };
+  }
+
+  return {
+    asset: null,
+    qcHistory,
+    fatalQcFailure: {
+      scene: scene.index,
+      score: lastQc?.overallScore ?? null,
+      issues: lastQc?.issues || [],
+      reason: 'AI scene failed realism QC and no real-footage fallback was available',
+    },
+  };
+}
+
+async function tryRealFootageFallback({
+  provider,
+  scene,
+  projectId,
+  previousAsset,
+  lastQc,
+  warnings,
+  reason = null,
+}) {
+  if (typeof provider.resolveFallbackScene !== 'function') return null;
+
+  try {
+    return await provider.resolveFallbackScene(scene, {
+      projectId,
+      previousAsset,
+      reason: reason || `realism-qc-rejected-score-${lastQc?.overallScore ?? 'unknown'}`,
+    });
+  } catch (error) {
+    warnings.push({
+      stage: 'visual-qc-fallback',
+      scene: scene.index,
+      message: error.message,
+    });
+    return null;
+  }
 }
 
 function narrationText(script) {
