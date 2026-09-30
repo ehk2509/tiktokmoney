@@ -1398,7 +1398,7 @@ test('video model router chooses stronger human model but cheap model for generi
   const router = new VideoModelRouter({
     providers: [quality, cheap],
     referenceProvider,
-    costWeight: 8,
+    costWeight: 25,
     historyWeight: 0,
   });
 
