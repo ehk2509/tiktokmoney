@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -17,6 +17,8 @@ import {
 import { FfmpegRenderer } from '../src/renderers/ffmpegRenderer.js';
 import { LumaRealisticVideoProvider } from '../src/providers/lumaRealisticVideoProvider.js';
 import { AiFirstVisualProvider } from '../src/providers/visualRouter.js';
+import { FrameSampler } from '../src/services/frameSampler.js';
+import { OpenRouterRealismQcProvider } from '../src/providers/openRouterRealismQcProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -435,3 +437,268 @@ function jsonResponse(payload, status = 200) {
     json: async () => payload,
   };
 }
+
+
+test('frame sampler extracts compact JPEG checkpoints across a scene', async () => {
+  const sampler = new FrameSampler({
+    frameCount: 3,
+    maxWidth: 512,
+    runCommand: async (_command, args) => {
+      const outputPath = args.at(-1);
+      await writeFile(outputPath, `frame-${args[2]}`);
+    },
+  });
+
+  const frames = await sampler.sample('/fake/video.mp4', { durationSeconds: 4 });
+
+  assert.equal(frames.length, 3);
+  assert.deepEqual(frames.map((frame) => frame.timestamp), [1, 2, 3]);
+  assert.ok(frames.every((frame) => frame.dataUrl.startsWith('data:image/jpeg;base64,')));
+});
+
+test('OpenRouter realism QC scores sampled frames and returns targeted guidance', async () => {
+  const requests = [];
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'google/gemini-3.8-flash',
+    threshold: 82,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,AAA=' },
+        { index: 1, timestamp: 2, dataUrl: 'data:image/jpeg;base64,BBB=' },
+        { index: 2, timestamp: 3, dataUrl: 'data:image/jpeg;base64,CCC=' },
+      ],
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), body: JSON.parse(options.body) });
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overallScore: 71,
+              scores: {
+                photorealism: 72,
+                anatomy: 45,
+                geometry: 80,
+                physics: 78,
+                motionConsistency: 63,
+                continuity: 77,
+                sceneRelevance: 95,
+                artifactFreedom: 58,
+              },
+              issues: [{
+                code: 'hands',
+                severity: 'high',
+                evidence: 'fingers appear fused in the middle frame',
+              }],
+              summary: 'Scene is relevant but visibly synthetic.',
+              regenerationGuidance: 'Keep hands outside frame and preserve realistic facial geometry.',
+            }),
+          },
+        }],
+        usage: { cost: 0.001 },
+      });
+    },
+  });
+
+  const result = await qc.evaluateScene(
+    {
+      narration: 'A pilot checks the aircraft controls.',
+      duration: 5,
+      realism: { motionPrompt: 'Photorealistic cockpit scene.' },
+    },
+    {
+      type: 'ai-video',
+      localPath: '/fake/scene.mp4',
+      generatedDuration: '5s',
+      prompt: 'Photorealistic cockpit scene.',
+      generationId: 'gen-1',
+    },
+  );
+
+  assert.equal(result.passed, false);
+  assert.equal(result.overallScore, 71);
+  assert.equal(result.issues[0].code, 'hands');
+  assert.match(result.regenerationGuidance, /hands outside frame/i);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  const contentParts = requests[0].body.messages[1].content;
+  assert.equal(contentParts.filter((part) => part.type === 'image_url').length, 3);
+});
+
+test('pipeline regenerates a failed AI scene using QC guidance and accepts the improved attempt', async () => {
+  const visualCalls = [];
+  const qcCallsByScene = new Map();
+
+  const visual = {
+    strategy: 'ai-first',
+    resolveScene: async (scene, context) => {
+      visualCalls.push({
+        scene: scene.index,
+        regeneration: context.regeneration || null,
+      });
+      return {
+        provider: 'fake-ai',
+        type: 'ai-video',
+        localPath: `scene-${scene.index}-attempt-${context.regeneration?.attempt || 0}.mp4`,
+        generationId: `gen-${scene.index}-${context.regeneration?.attempt || 0}`,
+        referenceImageUrl: `https://example.test/ref-${scene.index}.jpg`,
+      };
+    },
+  };
+
+  const realismQc = {
+    model: 'vision-test',
+    threshold: 82,
+    maxRegenerations: 1,
+    evaluateScene: async (scene) => {
+      const seen = qcCallsByScene.get(scene.index) || 0;
+      qcCallsByScene.set(scene.index, seen + 1);
+
+      if (scene.index === 0 && seen === 0) {
+        return {
+          passed: false,
+          overallScore: 60,
+          scores: {},
+          issues: [{ code: 'face', severity: 'high', evidence: 'warped face' }],
+          regenerationGuidance: 'Keep the face stable and anatomically correct.',
+        };
+      }
+
+      return {
+        passed: true,
+        overallScore: 94,
+        scores: {},
+        issues: [],
+        regenerationGuidance: '',
+      };
+    },
+  };
+
+  const pipeline = new VideoPipeline({
+    llm: new TemplateLlmProvider(),
+    renderer: null,
+    visual,
+    realismQc,
+    voice: null,
+    store: { saveProject: async () => {} },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'commercial aviation',
+    durationSeconds: 30,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(project.scenes[0].asset.qc.passed, true);
+  assert.equal(project.scenes[0].asset.qcAttempts, 2);
+  assert.equal(project.scenes[0].visualQcHistory.length, 2);
+
+  const firstSceneCalls = visualCalls.filter((call) => call.scene === 0);
+  assert.equal(firstSceneCalls.length, 2);
+  assert.match(firstSceneCalls[1].regeneration.guidance, /face stable/i);
+  assert.ok(project.warnings.some((warning) => warning.stage === 'visual-qc-regeneration'));
+});
+
+test('pipeline replaces repeatedly rejected AI with real stock footage when available', async () => {
+  const visual = {
+    strategy: 'ai-first',
+    resolveScene: async (scene) => ({
+      provider: 'fake-ai',
+      type: 'ai-video',
+      localPath: `ai-${scene.index}.mp4`,
+      generationId: `ai-${scene.index}`,
+      referenceImageUrl: `https://example.test/ref-${scene.index}.jpg`,
+    }),
+    resolveFallbackScene: async (scene, context) => ({
+      provider: 'pexels',
+      type: 'stock-video',
+      localPath: `stock-${scene.index}.mp4`,
+      routing: {
+        selected: 'stock',
+        fallbackUsed: true,
+        fallbackReason: context.reason,
+      },
+    }),
+  };
+
+  const realismQc = {
+    model: 'vision-test',
+    threshold: 82,
+    maxRegenerations: 1,
+    evaluateScene: async () => ({
+      passed: false,
+      overallScore: 55,
+      scores: {},
+      issues: [{ code: 'geometry', severity: 'high', evidence: 'warped environment' }],
+      regenerationGuidance: 'Keep all architecture geometrically stable.',
+    }),
+  };
+
+  const pipeline = new VideoPipeline({
+    llm: new TemplateLlmProvider(),
+    renderer: null,
+    visual,
+    realismQc,
+    voice: null,
+    store: { saveProject: async () => {} },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'modern architecture',
+    durationSeconds: 30,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.ok(project.scenes.every((scene) => scene.asset.provider === 'pexels'));
+  assert.ok(project.scenes.every((scene) => scene.asset.rejectedAiQc.overallScore === 55));
+  assert.ok(project.scenes.every((scene) => scene.visualQcHistory.length === 2));
+});
+
+test('pipeline stops instead of rendering when realism QC fails and no fallback exists', async () => {
+  const visual = {
+    strategy: 'ai-first',
+    resolveScene: async (scene) => ({
+      provider: 'fake-ai',
+      type: 'ai-video',
+      localPath: `ai-${scene.index}.mp4`,
+      generationId: `ai-${scene.index}`,
+      referenceImageUrl: `https://example.test/ref-${scene.index}.jpg`,
+    }),
+  };
+
+  const realismQc = {
+    model: 'vision-test',
+    threshold: 82,
+    maxRegenerations: 0,
+    evaluateScene: async () => ({
+      passed: false,
+      overallScore: 40,
+      scores: {},
+      issues: [{ code: 'anatomy', severity: 'critical', evidence: 'impossible limb structure' }],
+      regenerationGuidance: 'Use anatomically plausible human proportions.',
+    }),
+  };
+
+  let rendered = false;
+  const pipeline = new VideoPipeline({
+    llm: new TemplateLlmProvider(),
+    renderer: { render: async () => { rendered = true; } },
+    visual,
+    realismQc,
+    voice: null,
+    store: { saveProject: async () => {} },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'a person walking through an office',
+    durationSeconds: 30,
+    render: true,
+  });
+
+  assert.equal(project.status, 'VISUAL_QC_FAILED');
+  assert.equal(rendered, false);
+  assert.ok(project.visualQcFailures.length > 0);
+});
