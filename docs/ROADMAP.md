@@ -17,7 +17,7 @@
 - [x] OpenAI-compatible structured LLM provider
 - [x] Real stock footage provider (Pexels)
 - [x] TTS provider + word timestamps (ElevenLabs)
-- [ ] Kinetic captions
+- [x] Timing-aware kinetic subtitles + ASS/SRT sidecars
 - [x] Multi-scene FFmpeg timeline
 - [x] Asset cache and license metadata
 - [ ] Render retry by failed stage
