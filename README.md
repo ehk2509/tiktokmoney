@@ -124,7 +124,12 @@ export OPENAI_API_KEY=...
 export LLM_BASE_URL=https://api.openai.com/v1
 export LLM_MODEL=...
 
-# Portrait stock footage
+# Realism-first AI video
+export LUMA_API_KEY=...
+export LUMA_VIDEO_MODEL=ray-2
+export LUMA_IMAGE_MODEL=photon-flash-1
+
+# Licensed footage fallback
 export PEXELS_API_KEY=...
 
 # Narration + timestamps
@@ -137,19 +142,20 @@ With those providers configured, generation becomes:
 ```text
 topic
   -> structured LLM script
-  -> timed scenes
-  -> portrait stock lookup + local cache
+  -> realism scene specification
+  -> photorealistic Luma reference frame
+  -> reference-guided Luma image-to-video
+  -> carry previous reference into the next scene
+  -> Pexels only when AI generation fails
   -> ElevenLabs narration + word timing
   -> narration-aware scene retiming
-  -> per-scene FFmpeg normalization/captions
-  -> scene concatenation
-  -> narration attachment
+  -> FFmpeg normalization / composition
   -> 1080x1920 MP4
 ```
 
-If Pexels is not configured or a scene lookup fails, that scene falls back to the deterministic visual card instead of aborting the project. If an explicitly configured narration provider fails, the project stops at `VOICE_FAILED` so a silent/broken video is not mistaken for a successful production render.
+Visual routing is now **AI-first**. If `LUMA_API_KEY` is configured, each scene gets a photorealistic reference image and is then animated with Ray using image-to-video. The next scene reuses the previous scene's reference image as an image reference to reduce identity/location drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
 
-Pexels asset provenance is retained in each project manifest, including creator/source metadata, so attribution can be surfaced by future publishing/UI layers.
+Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. Pexels attribution metadata is also retained. If an explicitly configured narration provider fails, the project stops at `VOICE_FAILED` so a silent/broken video is not mistaken for a successful production render.
 
 ## Project structure
 
@@ -171,10 +177,10 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. kinetic word-level captions using narration timings
-2. visual/script alignment QC
-3. render retry/recovery by failed stage
-4. AI-generated image/video assets alongside cached stock
+1. vision-based realism QC and automatic regeneration
+2. stronger cross-scene identity/location continuity
+3. kinetic word-level captions using narration timings
+4. render/generation retry by failed stage
 5. independent hook variants and creative ranking
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
