@@ -1,9 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 export class FfmpegRenderer {
-  constructor({ ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg', outputDir = process.env.OUTPUT_DIR || './outputs' } = {}) {
+  constructor({
+    ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
+    outputDir = process.env.OUTPUT_DIR || './outputs',
+  } = {}) {
     this.ffmpegBin = ffmpegBin;
     this.outputDir = outputDir;
   }
@@ -12,36 +15,120 @@ export class FfmpegRenderer {
     await mkdir(this.outputDir, { recursive: true });
     const manifestPath = path.join(this.outputDir, `${project.id}.render.json`);
     const outputPath = path.join(this.outputDir, `${project.id}.mp4`);
+    const workDir = path.join(this.outputDir, `.${project.id}-render`);
+    await mkdir(workDir, { recursive: true });
     await writeFile(manifestPath, JSON.stringify(project, null, 2));
 
-    const duration = Math.max(5, Math.min(90, Math.ceil(project.script.durationSeconds)));
-    const safeTitle = escapeDrawText(project.topic.slice(0, 80));
-    const safeHook = escapeDrawText(project.script.hook.slice(0, 170));
-    const filter = [
-      'drawbox=x=70:y=150:w=940:h=1620:color=black@0.20:t=fill',
-      `drawtext=text='${safeTitle}':fontcolor=white:fontsize=58:x=(w-text_w)/2:y=260`,
-      `drawtext=text='${safeHook}':fontcolor=white:fontsize=42:x=110:y=620:box=1:boxcolor=black@0.35:boxborderw=24`,
-      "drawtext=text='TikTokMoney prototype':fontcolor=white@0.65:fontsize=30:x=(w-text_w)/2:y=h-180",
+    const clips = [];
+    for (const scene of project.scenes) {
+      const clipPath = path.join(workDir, `scene-${String(scene.index).padStart(3, '0')}.mp4`);
+      await this.renderScene(scene, clipPath);
+      clips.push(clipPath);
+    }
+
+    const concatFile = path.join(workDir, 'concat.txt');
+    await writeFile(
+      concatFile,
+      clips.map((clip) => `file '${escapeConcatPath(path.resolve(clip))}'`).join('\n'),
+    );
+
+    const videoOnlyPath = path.join(workDir, 'video.mp4');
+    await run(this.ffmpegBin, [
+      '-y',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatFile,
+      '-c', 'copy',
+      videoOnlyPath,
+    ]);
+
+    if (project.voice?.audioPath) {
+      await run(this.ffmpegBin, [
+        '-y',
+        '-i', videoOnlyPath,
+        '-i', project.voice.audioPath,
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-shortest',
+        '-movflags', '+faststart',
+        outputPath,
+      ]);
+    } else {
+      await run(this.ffmpegBin, [
+        '-y',
+        '-i', videoOnlyPath,
+        '-f', 'lavfi',
+        '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '96k',
+        '-shortest',
+        '-movflags', '+faststart',
+        outputPath,
+      ]);
+    }
+
+    await rm(workDir, { recursive: true, force: true });
+
+    return {
+      outputPath,
+      manifestPath,
+      sceneCount: clips.length,
+      width: 1080,
+      height: 1920,
+    };
+  }
+
+  async renderScene(scene, outputPath) {
+    const duration = Math.max(0.5, Number(scene.duration) || 1);
+    const caption = escapeDrawText((scene.overlay || scene.narration || '').slice(0, 110));
+    const visualFilter = [
+      'scale=1080:1920:force_original_aspect_ratio=increase',
+      'crop=1080:1920',
+      'setsar=1',
+      'fps=30',
+      'drawbox=x=70:y=1320:w=940:h=420:color=black@0.38:t=fill',
+      `drawtext=text='${caption}':fontcolor=white:fontsize=54:x=(w-text_w)/2:y=1390:box=0`,
     ].join(',');
 
-    const args = [
-      '-y',
-      '-f', 'lavfi',
-      '-i', `color=c=0x111827:s=1080x1920:d=${duration}`,
-      '-f', 'lavfi',
-      '-i', `sine=frequency=220:sample_rate=44100:duration=${duration}`,
-      '-vf', filter,
+    const args = ['-y'];
+
+    if (scene.asset?.localPath) {
+      args.push(
+        '-stream_loop', '-1',
+        '-i', scene.asset.localPath,
+        '-t', String(duration),
+        '-vf', visualFilter,
+      );
+    } else {
+      args.push(
+        '-f', 'lavfi',
+        '-i', `color=c=0x111827:s=1080x1920:d=${duration}`,
+        '-vf', [
+          'setsar=1',
+          'fps=30',
+          'drawbox=x=70:y=1320:w=940:h=420:color=black@0.38:t=fill',
+          `drawtext=text='${caption}':fontcolor=white:fontsize=54:x=(w-text_w)/2:y=1390:box=0`,
+        ].join(','),
+      );
+    }
+
+    args.push(
+      '-an',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', '96k',
-      '-shortest',
+      '-r', '30',
+      '-movflags', '+faststart',
       outputPath,
-    ];
+    );
 
     await run(this.ffmpegBin, args);
-    return { outputPath, manifestPath };
   }
 }
 
@@ -53,7 +140,7 @@ function run(command, args) {
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) return resolve();
-      reject(new Error(`${command} exited with code ${code}: ${stderr.slice(-2000)}`));
+      reject(new Error(`${command} exited with code ${code}: ${stderr.slice(-3000)}`));
     });
   });
 }
@@ -64,5 +151,12 @@ function escapeDrawText(value) {
     .replaceAll(':', '\\:')
     .replaceAll("'", '’')
     .replaceAll('%', '\\%')
+    .replaceAll(',', '\\,')
+    .replaceAll('[', '\\[')
+    .replaceAll(']', '\\]')
     .replaceAll('\n', ' ');
+}
+
+function escapeConcatPath(value) {
+  return value.replaceAll("'", "'\\''");
 }
