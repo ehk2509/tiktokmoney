@@ -151,3 +151,45 @@ temporal stability >= 80
 A scene that scores 93 on static realism but 54 on temporal stability is rejected. Its temporal defect description is fed into the existing Luma targeted-regeneration path, so guidance can explicitly request stable facial identity, no morphing, smoother camera motion or removal of texture flicker.
 
 Temporal QC shares the same OpenRouter request as static QC to keep inference cost bounded. The denser sequence uses smaller frames and preserves strict timestamp ordering in the multimodal message.
+
+
+## Adaptive multi-model video routing
+
+TikTokMoney no longer treats one video model as universally best. Current production candidates can include:
+
+```text
+Luma Agents / Ray 3.2
+Runway / Gen-4.5
+Runway / Gen-4 Turbo
+```
+
+The router classifies every scene as `human`, `human-action`, `action`, `environment`, `object`, or `general`. It then combines:
+
+- a static capability profile for that model
+- estimated generation cost
+- provider generation-failure history
+- historical realism-QC pass rate
+- average static realism score
+- average temporal stability score
+- the current regeneration defect type
+
+Routing outcomes are persisted to `provider-stats.json`. This turns the QC system into training data for future routing decisions without requiring an ML model yet.
+
+On a QC rejection, the retry carries the previous provider ID. By default the router penalizes that same provider, making cross-model recovery possible:
+
+```text
+scene
+  -> Gen-4 Turbo
+  -> temporal QC fails
+  -> retry router penalizes Gen-4 Turbo
+  -> Ray 3.2 or Gen-4.5
+  -> QC passes
+```
+
+Current public API pricing is encoded only as a routing estimate, not an accounting guarantee. Provider prices can change and should be refreshed periodically. The router's observed quality history is therefore more important than the initial hand-authored capability scores.
+
+### Current provider surfaces
+
+New Luma deployments use the current Agents API with `ray-3.2` for video and `uni-1` for reference images. The earlier Dream Machine `ray-2` / Photon integration remains only for backwards compatibility.
+
+Runway uses `POST /v1/image_to_video` with the 2024-11-06 API version and downloads task outputs immediately because Runway output URLs are ephemeral.
