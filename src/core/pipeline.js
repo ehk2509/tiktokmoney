@@ -53,6 +53,8 @@ export class VideoPipeline {
         provider: this.realismQc ? 'openrouter' : null,
         model: this.realismQc?.model || null,
         threshold: this.realismQc?.threshold || null,
+        temporalEnabled: this.realismQc?.temporalEnabled || false,
+        temporalThreshold: this.realismQc?.temporalThreshold || null,
         maxRegenerations: this.realismQc?.maxRegenerations || 0,
       },
       warnings: [],
