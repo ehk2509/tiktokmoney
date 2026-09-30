@@ -3,7 +3,7 @@ import { OpenAICompatibleLlmProvider } from './openaiCompatibleLlmProvider.js';
 import { PexelsStockProvider, NullStockProvider } from './pexelsStockProvider.js';
 import { ElevenLabsVoiceProvider, NullVoiceProvider } from './elevenLabsVoiceProvider.js';
 import { LumaRealisticVideoProvider } from './lumaRealisticVideoProvider.js';
-import { AiFirstVisualProvider, NullVisualProvider } from './visualRouter.js';
+import { AiFirstVisualProvider } from './visualRouter.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -47,7 +47,7 @@ export function createAiVideoProvider(env = process.env) {
 export function createVisualProvider(env = process.env) {
   const ai = createAiVideoProvider(env);
   const stock = env.PEXELS_API_KEY ? createStockProvider(env) : null;
-  if (!ai && !stock) return new NullVisualProvider();
+  if (!ai && !stock) return null;
   return new AiFirstVisualProvider({ ai, stock });
 }
 
