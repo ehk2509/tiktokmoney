@@ -13,7 +13,10 @@ export function buildSubtitles({
   scenes = [],
   config = {},
 } = {}) {
-  const options = { ...DEFAULTS, ...config };
+  const cleanConfig = Object.fromEntries(
+    Object.entries(config).filter(([, value]) => value !== undefined && value !== null),
+  );
+  const options = { ...DEFAULTS, ...cleanConfig };
   if (!options.enabled) {
     return {
       enabled: false,
