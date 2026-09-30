@@ -22,6 +22,19 @@
 - [x] Asset cache and license metadata
 - [ ] Render retry by failed stage
 
+## M1.5 - Realism-first AI video
+
+- [x] Realism-specific scene specification
+- [x] Luma Photon reference-frame generation
+- [x] Luma Ray image-to-video generation
+- [x] AI-first visual routing with Pexels fallback
+- [x] Cross-scene reference-image continuity
+- [x] Generation polling, failure handling and local download
+- [ ] Vision-based photorealism/artifact QC
+- [ ] Automatic targeted regeneration
+- [ ] Strong character/location bible across a complete video
+- [ ] Additional AI video providers / model router
+
 ## M2 - Trend intelligence
 
 - [ ] Pluggable trend ingestion
