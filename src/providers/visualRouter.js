@@ -2,7 +2,7 @@ export class AiFirstVisualProvider {
   constructor({ ai = null, stock = null } = {}) {
     this.ai = ai;
     this.stock = stock;
-    this.strategy = ai ? 'ai-first' : stock ? 'stock-only' : 'fallback-card';
+    this.strategy = ai?.strategy || (ai ? 'ai-first' : stock ? 'stock-only' : 'fallback-card');
   }
 
   async prepareStoryBible(storyBible, context = {}) {
@@ -20,7 +20,8 @@ export class AiFirstVisualProvider {
           return {
             ...asset,
             routing: {
-              selected: 'ai-video',
+              ...(asset.routing || {}),
+              selected: asset.routing?.selected || 'ai-video',
               fallbackUsed: false,
             },
           };
@@ -55,6 +56,12 @@ export class AiFirstVisualProvider {
         fallbackReason: context.reason || 'ai-video-rejected',
       },
     };
+  }
+
+  async recordOutcome(scene, asset, qc) {
+    if (typeof this.ai?.recordOutcome === 'function') {
+      await this.ai.recordOutcome(scene, asset, qc);
+    }
   }
 }
 
