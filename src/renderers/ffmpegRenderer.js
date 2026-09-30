@@ -6,9 +6,11 @@ export class FfmpegRenderer {
   constructor({
     ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
     outputDir = process.env.OUTPUT_DIR || './outputs',
+    runCommand = run,
   } = {}) {
     this.ffmpegBin = ffmpegBin;
     this.outputDir = outputDir;
+    this.runCommand = runCommand;
   }
 
   async render(project) {
@@ -33,7 +35,7 @@ export class FfmpegRenderer {
     );
 
     const videoOnlyPath = path.join(workDir, 'video.mp4');
-    await run(this.ffmpegBin, [
+    await this.runCommand(this.ffmpegBin, [
       '-y',
       '-f', 'concat',
       '-safe', '0',
@@ -43,7 +45,7 @@ export class FfmpegRenderer {
     ]);
 
     if (project.voice?.audioPath) {
-      await run(this.ffmpegBin, [
+      await this.runCommand(this.ffmpegBin, [
         '-y',
         '-i', videoOnlyPath,
         '-i', project.voice.audioPath,
@@ -57,7 +59,7 @@ export class FfmpegRenderer {
         outputPath,
       ]);
     } else {
-      await run(this.ffmpegBin, [
+      await this.runCommand(this.ffmpegBin, [
         '-y',
         '-i', videoOnlyPath,
         '-f', 'lavfi',
@@ -128,7 +130,7 @@ export class FfmpegRenderer {
       outputPath,
     );
 
-    await run(this.ffmpegBin, args);
+    await this.runCommand(this.ffmpegBin, args);
   }
 }
 
