@@ -70,6 +70,9 @@ export function createRealismQcProvider(env = process.env) {
     maxRegenerations: env.REALISM_MAX_REGENERATIONS
       ? Number(env.REALISM_MAX_REGENERATIONS)
       : undefined,
+    failClosed: env.REALISM_QC_FAIL_CLOSED == null
+      ? undefined
+      : isEnabled(env.REALISM_QC_FAIL_CLOSED),
   });
 }
 
