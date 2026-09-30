@@ -8,33 +8,53 @@ export class FrameSampler {
     ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
     frameCount = Number(process.env.REALISM_QC_FRAMES || 3),
     maxWidth = Number(process.env.REALISM_QC_FRAME_WIDTH || 512),
+    temporalFrameCount = Number(process.env.REALISM_QC_TEMPORAL_FRAMES || 8),
+    temporalMaxWidth = Number(process.env.REALISM_QC_TEMPORAL_FRAME_WIDTH || 384),
     runCommand = run,
   } = {}) {
     this.ffmpegBin = ffmpegBin;
-    this.frameCount = Math.max(1, Math.min(5, Number(frameCount) || 3));
-    this.maxWidth = Math.max(256, Math.min(1024, Number(maxWidth) || 512));
+    this.frameCount = clampInt(frameCount, 1, 5, 3);
+    this.maxWidth = clampInt(maxWidth, 256, 1024, 512);
+    this.temporalFrameCount = clampInt(temporalFrameCount, 4, 12, 8);
+    this.temporalMaxWidth = clampInt(temporalMaxWidth, 256, 768, 384);
     this.runCommand = runCommand;
   }
 
   async sample(localPath, { durationSeconds = 5 } = {}) {
+    const duration = normalizeDuration(durationSeconds);
+    const timestamps = evenlySpacedTimestamps(duration, this.frameCount);
+    return this.sampleAt(localPath, timestamps, {
+      maxWidth: this.maxWidth,
+      prefix: 'frame',
+    });
+  }
+
+  async sampleTemporal(localPath, { durationSeconds = 5 } = {}) {
+    const duration = normalizeDuration(durationSeconds);
+    const timestamps = denseTemporalTimestamps(duration, this.temporalFrameCount);
+    return this.sampleAt(localPath, timestamps, {
+      maxWidth: this.temporalMaxWidth,
+      prefix: 'temporal',
+    });
+  }
+
+  async sampleAt(localPath, timestamps, { maxWidth, prefix }) {
     if (!localPath) throw new Error('localPath is required to sample video frames');
 
-    const duration = Math.max(1, Number(durationSeconds) || 5);
     const workDir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-qc-'));
 
     try {
       const frames = [];
-      for (let index = 0; index < this.frameCount; index += 1) {
-        const position = (index + 1) / (this.frameCount + 1);
-        const timestamp = round(Math.min(Math.max(0.05, duration * position), Math.max(0.05, duration - 0.05)));
-        const outputPath = path.join(workDir, `frame-${index}.jpg`);
+      for (let index = 0; index < timestamps.length; index += 1) {
+        const timestamp = round(timestamps[index]);
+        const outputPath = path.join(workDir, `${prefix}-${index}.jpg`);
 
         await this.runCommand(this.ffmpegBin, [
           '-y',
           '-ss', String(timestamp),
           '-i', localPath,
           '-frames:v', '1',
-          '-vf', `scale='min(${this.maxWidth},iw)':-2`,
+          '-vf', `scale='min(${maxWidth},iw)':-2`,
           '-q:v', '4',
           outputPath,
         ]);
@@ -53,6 +73,43 @@ export class FrameSampler {
       await rm(workDir, { recursive: true, force: true });
     }
   }
+}
+
+export function evenlySpacedTimestamps(durationSeconds, count) {
+  const duration = normalizeDuration(durationSeconds);
+  return Array.from({ length: count }, (_, index) => {
+    const position = (index + 1) / (count + 1);
+    return round(safeTimestamp(duration, duration * position));
+  });
+}
+
+export function denseTemporalTimestamps(durationSeconds, count) {
+  const duration = normalizeDuration(durationSeconds);
+  const start = Math.min(0.12, duration * 0.04);
+  const end = Math.max(start, duration - Math.min(0.12, duration * 0.04));
+
+  if (count <= 1 || end <= start) return [round(safeTimestamp(duration, duration / 2))];
+
+  const step = (end - start) / (count - 1);
+  return Array.from({ length: count }, (_, index) => (
+    round(safeTimestamp(duration, start + (step * index)))
+  ));
+}
+
+function safeTimestamp(duration, value) {
+  const lower = Math.min(0.05, duration / 4);
+  const upper = Math.max(lower, duration - lower);
+  return Math.min(Math.max(lower, value), upper);
+}
+
+function normalizeDuration(value) {
+  return Math.max(1, Number(value) || 5);
+}
+
+function clampInt(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(number)));
 }
 
 function run(command, args) {

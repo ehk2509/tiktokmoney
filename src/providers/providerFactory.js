@@ -73,6 +73,12 @@ export function createRealismQcProvider(env = process.env) {
     baseUrl: env.OPENROUTER_BASE_URL,
     model: env.REALISM_QC_MODEL,
     threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
+    temporalThreshold: env.REALISM_QC_TEMPORAL_THRESHOLD
+      ? Number(env.REALISM_QC_TEMPORAL_THRESHOLD)
+      : undefined,
+    temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
+      ? undefined
+      : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),
     maxRegenerations: env.REALISM_MAX_REGENERATIONS
       ? Number(env.REALISM_MAX_REGENERATIONS)
       : undefined,

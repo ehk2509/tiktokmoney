@@ -33,6 +33,7 @@
 - [x] Vision-based photorealism/artifact QC
 - [x] Automatic targeted regeneration
 - [x] Strong character/location bible across a complete video
+- [x] Temporal motion / morphing / flicker QC
 - [ ] Additional AI video providers / model router
 
 ## M2 - Trend intelligence

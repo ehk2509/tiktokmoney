@@ -8,6 +8,8 @@ export class OpenRouterRealismQcProvider {
     baseUrl = process.env.OPENROUTER_BASE_URL || DEFAULT_BASE_URL,
     model = process.env.REALISM_QC_MODEL,
     threshold = Number(process.env.REALISM_QC_THRESHOLD || 82),
+    temporalThreshold = Number(process.env.REALISM_QC_TEMPORAL_THRESHOLD || 80),
+    temporalEnabled = parseBoolean(process.env.REALISM_QC_TEMPORAL_ENABLED, true),
     maxRegenerations = Number(process.env.REALISM_MAX_REGENERATIONS || 1),
     failClosed = parseBoolean(process.env.REALISM_QC_FAIL_CLOSED, true),
     frameSampler = new FrameSampler(),
@@ -21,6 +23,8 @@ export class OpenRouterRealismQcProvider {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.model = model;
     this.threshold = clampScore(threshold);
+    this.temporalThreshold = clampScore(temporalThreshold);
+    this.temporalEnabled = Boolean(temporalEnabled);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
     this.failClosed = Boolean(failClosed);
     this.frameSampler = frameSampler;
@@ -32,20 +36,33 @@ export class OpenRouterRealismQcProvider {
       throw new Error('realism QC requires a local video asset');
     }
 
-    const frames = await this.frameSampler.sample(asset.localPath, {
-      durationSeconds: parseDuration(asset.generatedDuration)
-        || Number(asset.durationSeconds)
-        || Number(scene.duration)
-        || 5,
+    const durationSeconds = parseDuration(asset.generatedDuration)
+      || Number(asset.durationSeconds)
+      || Number(scene.duration)
+      || 5;
+
+    const frames = await this.frameSampler.sample(asset.localPath, { durationSeconds });
+    const temporalFrames = this.temporalEnabled
+      ? await this.frameSampler.sampleTemporal(asset.localPath, { durationSeconds })
+      : [];
+
+    const prompt = buildPrompt({
+      scene,
+      asset,
+      previousAsset,
+      storyBible,
+      temporalEnabled: this.temporalEnabled,
+      temporalFrameCount: temporalFrames.length,
     });
 
-    const prompt = buildPrompt({ scene, asset, previousAsset, storyBible });
     const content = [
       { type: 'text', text: prompt },
-      ...frames.map((frame) => ({
-        type: 'image_url',
-        image_url: { url: frame.dataUrl },
-      })),
+      { type: 'text', text: 'STATIC REALISM CHECKPOINTS — judge individual visual quality:' },
+      ...labelledImageParts(frames, 'Static'),
+      ...(this.temporalEnabled ? [
+        { type: 'text', text: 'TEMPORAL SEQUENCE — these frames are strictly chronological. Compare adjacent frames for motion and identity stability:' },
+        ...labelledImageParts(temporalFrames, 'Temporal'),
+      ] : []),
     ];
 
     const response = await this.fetch(`${this.baseUrl}/chat/completions`, {
@@ -62,9 +79,10 @@ export class OpenRouterRealismQcProvider {
           {
             role: 'system',
             content: [
-              'You are a strict visual quality-control reviewer for photorealistic short-form video.',
+              'You are a strict visual and temporal quality-control reviewer for photorealistic short-form video.',
               'Judge only what is visible in the supplied sampled frames.',
-              'Do not reward cinematic style if the scene looks synthetic or physically implausible.',
+              'The temporal sequence is ordered chronologically; compare adjacent frames carefully.',
+              'Do not reward cinematic style if the scene looks synthetic, morphs, flickers, teleports, or violates physics.',
               'Return JSON only.',
             ].join(' '),
           },
@@ -81,32 +99,71 @@ export class OpenRouterRealismQcProvider {
     const parsed = parseJsonObject(raw);
 
     const scores = normalizeScores(parsed?.scores);
+    const temporalScores = normalizeTemporalScores(parsed?.temporalScores);
     const issues = normalizeIssues(parsed?.issues);
+    const temporalIssues = normalizeIssues(parsed?.temporalIssues);
+
     const overallScore = clampScore(
       parsed?.overallScore ?? average(Object.values(scores)),
     );
-    const criticalFailure = issues.some((issue) => issue.severity === 'critical');
-    const passed = overallScore >= this.threshold && !criticalFailure;
+    const temporalScore = this.temporalEnabled
+      ? clampScore(parsed?.temporalScore ?? average(Object.values(temporalScores)))
+      : 100;
+
+    const allIssues = [...issues, ...temporalIssues];
+    const criticalFailure = allIssues.some((issue) => issue.severity === 'critical');
+    const staticPassed = overallScore >= this.threshold;
+    const temporalPassed = !this.temporalEnabled || temporalScore >= this.temporalThreshold;
+    const passed = staticPassed && temporalPassed && !criticalFailure;
 
     return {
       provider: 'openrouter',
       model: this.model,
       threshold: this.threshold,
+      temporalThreshold: this.temporalThreshold,
+      temporalEnabled: this.temporalEnabled,
       passed,
+      staticPassed,
+      temporalPassed,
       overallScore,
+      temporalScore,
       scores,
+      temporalScores,
       issues,
+      temporalIssues,
       summary: stringOrEmpty(parsed?.summary),
+      temporalSummary: stringOrEmpty(parsed?.temporalSummary),
       regenerationGuidance: stringOrEmpty(parsed?.regenerationGuidance)
-        || buildGuidance(issues, scores),
+        || buildGuidance(allIssues, scores, temporalScores),
       sampledFrames: frames.map(({ index, timestamp }) => ({ index, timestamp })),
+      temporalFrames: temporalFrames.map(({ index, timestamp }) => ({ index, timestamp })),
       previousGenerationId: previousAsset?.generationId || null,
       rawUsage: payload?.usage || null,
     };
   }
 }
 
-function buildPrompt({ scene, asset, previousAsset, storyBible }) {
+function labelledImageParts(frames, prefix) {
+  return frames.flatMap((frame, index) => ([
+    {
+      type: 'text',
+      text: `${prefix} frame ${index + 1}/${frames.length} at ${frame.timestamp.toFixed(3)}s`,
+    },
+    {
+      type: 'image_url',
+      image_url: { url: frame.dataUrl },
+    },
+  ]));
+}
+
+function buildPrompt({
+  scene,
+  asset,
+  previousAsset,
+  storyBible,
+  temporalEnabled,
+  temporalFrameCount,
+}) {
   const binding = scene.continuity || {};
   const characters = (storyBible?.characters || [])
     .filter((character) => (binding.characterIds || []).includes(character.id));
@@ -115,7 +172,7 @@ function buildPrompt({ scene, asset, previousAsset, storyBible }) {
   const style = storyBible?.visualStyle || {};
 
   return [
-    'Evaluate these frames from ONE AI-generated vertical video scene.',
+    'Evaluate ONE AI-generated vertical video scene.',
     '',
     `Narrative requirement: ${scene.narration}`,
     `Intended visual prompt: ${asset.prompt || scene.realism?.motionPrompt || scene.visualPrompt || ''}`,
@@ -141,28 +198,49 @@ function buildPrompt({ scene, asset, previousAsset, storyBible }) {
       : '',
     'Treat visible drift from canonical character/location/style details as a continuity defect.',
     '',
-    'Score each dimension from 0 to 100:',
+    'STATIC scores, each from 0 to 100:',
     '- photorealism: would an ordinary viewer plausibly believe this was camera footage?',
     '- anatomy: faces, hands, limbs and bodies are structurally plausible.',
     '- geometry: objects, architecture and backgrounds are coherent and stable.',
     '- physics: gravity, contact, reflections, perspective and physical interactions look plausible.',
-    '- motionConsistency: sampled frames imply stable identity and non-morphing motion.',
-    '- continuity: subject/environment/style stay coherent across the sampled frames.',
+    '- motionConsistency: sparse checkpoints imply stable identity and non-morphing motion.',
+    '- continuity: subject/environment/style stay coherent.',
     '- sceneRelevance: visuals actually illustrate the narration.',
     '- artifactFreedom: no obvious AI artifacts, duplicate objects, warped text, watermarks or impossible details.',
+    ...(temporalEnabled ? [
+      '',
+      `TEMPORAL sequence contains ${temporalFrameCount} ordered frames. Score each from 0 to 100:`,
+      '- identityStability: faces, bodies, clothing and recurring subjects do not morph between adjacent frames.',
+      '- objectPersistence: objects neither appear/disappear nor change shape without a physical reason.',
+      '- geometryStability: environment and object geometry remain structurally stable through motion.',
+      '- motionPlausibility: velocities, acceleration, body mechanics and object motion are physically believable.',
+      '- cameraContinuity: camera movement is smooth and consistent with the intended shot, without teleporting or unexplained jumps.',
+      '- flickerFreedom: lighting, texture, color and fine detail do not pulse or flicker unnaturally.',
+      '- temporalArtifactFreedom: no melting, rubbery motion, frame-to-frame duplication anomalies or sudden AI artifacts.',
+      '- actionContinuity: the intended action progresses coherently through time.',
+      '',
+      'Look especially for defects that may exist for only one or two adjacent frames.',
+    ] : []),
     '',
     'List only concrete visible defects. Severity must be low, medium, high, or critical.',
-    'regenerationGuidance must be a compact instruction describing what the next generation should correct.',
+    'regenerationGuidance must specifically describe how the next generation should correct both static and temporal failures.',
     '',
     'Return exactly one JSON object shaped like:',
     '{',
     '  "overallScore": 0,',
+    '  "temporalScore": 0,',
     '  "scores": {',
     '    "photorealism": 0, "anatomy": 0, "geometry": 0, "physics": 0,',
     '    "motionConsistency": 0, "continuity": 0, "sceneRelevance": 0, "artifactFreedom": 0',
     '  },',
+    '  "temporalScores": {',
+    '    "identityStability": 0, "objectPersistence": 0, "geometryStability": 0, "motionPlausibility": 0,',
+    '    "cameraContinuity": 0, "flickerFreedom": 0, "temporalArtifactFreedom": 0, "actionContinuity": 0',
+    '  },',
     '  "issues": [{"code":"hands","severity":"high","evidence":"brief visible evidence"}],',
+    '  "temporalIssues": [{"code":"face-morph","severity":"high","evidence":"face shape changes between temporal frames 4 and 5"}],',
     '  "summary": "one sentence",',
+    '  "temporalSummary": "one sentence",',
     '  "regenerationGuidance": "one compact corrective instruction"',
     '}',
   ].join('\n');
@@ -183,12 +261,27 @@ function normalizeScores(scores = {}) {
   return Object.fromEntries(keys.map((key) => [key, clampScore(scores?.[key] ?? 0)]));
 }
 
+function normalizeTemporalScores(scores = {}) {
+  const keys = [
+    'identityStability',
+    'objectPersistence',
+    'geometryStability',
+    'motionPlausibility',
+    'cameraContinuity',
+    'flickerFreedom',
+    'temporalArtifactFreedom',
+    'actionContinuity',
+  ];
+
+  return Object.fromEntries(keys.map((key) => [key, clampScore(scores?.[key] ?? 0)]));
+}
+
 function normalizeIssues(issues) {
   if (!Array.isArray(issues)) return [];
 
   return issues
     .filter((issue) => issue && typeof issue === 'object')
-    .slice(0, 8)
+    .slice(0, 10)
     .map((issue) => ({
       code: String(issue.code || 'unspecified').slice(0, 80),
       severity: normalizeSeverity(issue.severity),
@@ -202,23 +295,28 @@ function normalizeSeverity(value) {
   return 'medium';
 }
 
-function buildGuidance(issues, scores) {
+function buildGuidance(issues, scores, temporalScores) {
   const severe = issues
     .filter((issue) => ['high', 'critical'].includes(issue.severity))
     .map((issue) => `${issue.code}: ${issue.evidence}`)
-    .slice(0, 3);
+    .slice(0, 4);
 
   if (severe.length) {
-    return `Correct these visible defects: ${severe.join('; ')}. Preserve realistic anatomy, geometry, physics and identity.`;
+    return `Correct these visible defects: ${severe.join('; ')}. Preserve canonical identity, geometry, realistic physics and smooth temporal continuity.`;
   }
 
-  const weakest = Object.entries(scores)
-    .sort((a, b) => a[1] - b[1])
-    .slice(0, 2)
-    .map(([name]) => name)
-    .join(' and ');
+  const weakestStatic = weakestNames(scores, 1);
+  const weakestTemporal = weakestNames(temporalScores, 2);
+  const targets = [...weakestStatic, ...weakestTemporal].filter(Boolean);
 
-  return `Improve ${weakest || 'photorealism'} while preserving the scene content and continuity.`;
+  return `Improve ${targets.join(', ') || 'photorealism and temporal stability'} while preserving the scene content and canonical continuity.`;
+}
+
+function weakestNames(scores, count) {
+  return Object.entries(scores || {})
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, count)
+    .map(([name]) => name);
 }
 
 function parseJsonObject(raw) {
