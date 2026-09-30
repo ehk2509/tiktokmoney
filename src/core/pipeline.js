@@ -4,11 +4,18 @@ import { planScenes } from './scenePlanner.js';
 import { evaluateProject } from './qualityGate.js';
 
 export class VideoPipeline {
-  constructor({ llm, renderer, store, stock = null, voice = null }) {
+  constructor({
+    llm,
+    renderer,
+    store,
+    visual = null,
+    stock = null,
+    voice = null,
+  }) {
     this.scriptGenerator = new ScriptGenerator({ llm });
     this.renderer = renderer;
     this.store = store;
-    this.stock = stock;
+    this.visual = visual || stock;
     this.voice = voice;
   }
 
@@ -34,6 +41,7 @@ export class VideoPipeline {
       scenes,
       quality,
       voice: null,
+      visualStrategy: this.visual ? 'ai-first' : 'fallback-card',
       warnings: [],
       render: null,
     };
@@ -43,9 +51,9 @@ export class VideoPipeline {
       return project;
     }
 
-    project.status = 'ASSETS_RESOLVING';
-    project.scenes = await resolveAssets({
-      provider: this.stock,
+    project.status = 'VISUALS_GENERATING';
+    project.scenes = await resolveVisuals({
+      provider: this.visual,
       scenes,
       projectId: id,
       warnings: project.warnings,
@@ -89,17 +97,23 @@ export class VideoPipeline {
   }
 }
 
-async function resolveAssets({ provider, scenes, projectId, warnings }) {
+async function resolveVisuals({ provider, scenes, projectId, warnings }) {
   if (!provider) return scenes;
 
   const resolved = [];
+  let previousAsset = null;
+
   for (const scene of scenes) {
     try {
-      const asset = await provider.resolveScene(scene, { projectId });
+      const asset = await provider.resolveScene(scene, {
+        projectId,
+        previousAsset,
+      });
       resolved.push({ ...scene, asset });
+      if (asset) previousAsset = asset;
     } catch (error) {
       warnings.push({
-        stage: 'assets',
+        stage: 'visuals',
         scene: scene.index,
         message: error.message,
       });
