@@ -4,6 +4,7 @@ import { PexelsStockProvider, NullStockProvider } from './pexelsStockProvider.js
 import { ElevenLabsVoiceProvider, NullVoiceProvider } from './elevenLabsVoiceProvider.js';
 import { LumaRealisticVideoProvider } from './lumaRealisticVideoProvider.js';
 import { AiFirstVisualProvider } from './visualRouter.js';
+import { OpenRouterRealismQcProvider } from './openRouterRealismQcProvider.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -51,6 +52,27 @@ export function createVisualProvider(env = process.env) {
   return new AiFirstVisualProvider({ ai, stock });
 }
 
+export function createRealismQcProvider(env = process.env) {
+  if (!isEnabled(env.REALISM_QC_ENABLED)) return null;
+
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required when REALISM_QC_ENABLED=true');
+  }
+  if (!env.REALISM_QC_MODEL) {
+    throw new Error('REALISM_QC_MODEL is required when REALISM_QC_ENABLED=true');
+  }
+
+  return new OpenRouterRealismQcProvider({
+    apiKey: env.OPENROUTER_API_KEY,
+    baseUrl: env.OPENROUTER_BASE_URL,
+    model: env.REALISM_QC_MODEL,
+    threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
+    maxRegenerations: env.REALISM_MAX_REGENERATIONS
+      ? Number(env.REALISM_MAX_REGENERATIONS)
+      : undefined,
+  });
+}
+
 export function createVoiceProvider(env = process.env) {
   if (!env.ELEVENLABS_API_KEY || !env.ELEVENLABS_VOICE_ID) {
     return new NullVoiceProvider();
@@ -62,4 +84,8 @@ export function createVoiceProvider(env = process.env) {
     modelId: env.ELEVENLABS_MODEL_ID,
     outputDir: env.OUTPUT_DIR,
   });
+}
+
+function isEnabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
 }
