@@ -18,7 +18,7 @@ import {
 import { FfmpegRenderer } from '../src/renderers/ffmpegRenderer.js';
 import { LumaRealisticVideoProvider } from '../src/providers/lumaRealisticVideoProvider.js';
 import { AiFirstVisualProvider } from '../src/providers/visualRouter.js';
-import { FrameSampler } from '../src/services/frameSampler.js';
+import { FrameSampler, denseTemporalTimestamps } from '../src/services/frameSampler.js';
 import { OpenRouterRealismQcProvider } from '../src/providers/openRouterRealismQcProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
@@ -463,6 +463,7 @@ test('OpenRouter realism QC scores sampled frames and returns targeted guidance'
     apiKey: 'router-key',
     model: 'google/gemini-3.8-flash',
     threshold: 82,
+    temporalEnabled: false,
     frameSampler: {
       sample: async () => [
         { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,AAA=' },
@@ -960,4 +961,242 @@ test('pipeline prepares the story bible before resolving scenes and persists the
   assert.equal(project.storyBible.referenceStatus, 'ready');
   assert.ok(seenBibles.length > 0);
   assert.ok(seenBibles.every((bible) => bible.references.locations['location-main'].url));
+});
+
+
+test('dense temporal timestamps cover the shot in chronological order', () => {
+  const timestamps = denseTemporalTimestamps(5, 8);
+
+  assert.equal(timestamps.length, 8);
+  assert.ok(timestamps.every((value, index) => index === 0 || value > timestamps[index - 1]));
+  assert.ok(timestamps[0] <= 0.2);
+  assert.ok(timestamps.at(-1) >= 4.8);
+});
+
+test('frame sampler extracts a dense ordered temporal sequence', async () => {
+  const sampler = new FrameSampler({
+    temporalFrameCount: 6,
+    temporalMaxWidth: 384,
+    runCommand: async (_command, args) => {
+      const outputPath = args.at(-1);
+      await writeFile(outputPath, `temporal-${args[2]}`);
+    },
+  });
+
+  const frames = await sampler.sampleTemporal('/fake/video.mp4', { durationSeconds: 5 });
+
+  assert.equal(frames.length, 6);
+  assert.ok(frames.every((frame, index) => index === 0 || frame.timestamp > frames[index - 1].timestamp));
+  assert.ok(frames.every((frame) => frame.dataUrl.startsWith('data:image/jpeg;base64,')));
+});
+
+test('temporal QC rejects a scene that looks good in stills but morphs during motion', async () => {
+  const requests = [];
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    threshold: 82,
+    temporalThreshold: 80,
+    temporalEnabled: true,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,S1' },
+        { index: 1, timestamp: 2.5, dataUrl: 'data:image/jpeg;base64,S2' },
+        { index: 2, timestamp: 4, dataUrl: 'data:image/jpeg;base64,S3' },
+      ],
+      sampleTemporal: async () => Array.from({ length: 6 }, (_, index) => ({
+        index,
+        timestamp: 0.2 + (index * 0.8),
+        dataUrl: `data:image/jpeg;base64,T${index}`,
+      })),
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), body: JSON.parse(options.body) });
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overallScore: 93,
+              temporalScore: 54,
+              scores: {
+                photorealism: 95,
+                anatomy: 93,
+                geometry: 94,
+                physics: 91,
+                motionConsistency: 86,
+                continuity: 92,
+                sceneRelevance: 96,
+                artifactFreedom: 91,
+              },
+              temporalScores: {
+                identityStability: 42,
+                objectPersistence: 80,
+                geometryStability: 67,
+                motionPlausibility: 55,
+                cameraContinuity: 83,
+                flickerFreedom: 49,
+                temporalArtifactFreedom: 41,
+                actionContinuity: 72,
+              },
+              issues: [],
+              temporalIssues: [
+                {
+                  code: 'face-morph',
+                  severity: 'high',
+                  evidence: 'facial geometry changes between temporal frames 3 and 4',
+                },
+                {
+                  code: 'texture-flicker',
+                  severity: 'medium',
+                  evidence: 'skin texture pulses between adjacent frames',
+                },
+              ],
+              summary: 'Individual frames are realistic.',
+              temporalSummary: 'Motion contains visible identity morphing and flicker.',
+              regenerationGuidance: 'Lock facial identity and eliminate frame-to-frame texture flicker while keeping the same action.',
+            }),
+          },
+        }],
+      });
+    },
+  });
+
+  const result = await qc.evaluateScene(
+    {
+      narration: 'A pilot calmly checks the cockpit instruments.',
+      duration: 5,
+      continuity: { characterIds: ['pilot'], locationId: 'cockpit' },
+      realism: { motionPrompt: 'Continuous photorealistic cockpit shot.' },
+    },
+    {
+      type: 'ai-video',
+      localPath: '/fake/scene.mp4',
+      generatedDuration: '5s',
+      prompt: 'Continuous photorealistic cockpit shot.',
+      generationId: 'gen-temporal',
+    },
+    {
+      storyBible: {
+        characters: [{
+          id: 'pilot',
+          name: 'Pilot',
+          description: 'Late-thirties airline pilot.',
+          wardrobe: 'White pilot shirt.',
+          physicalTraits: 'Short dark hair.',
+        }],
+        locations: [{
+          id: 'cockpit',
+          name: 'Cockpit',
+          description: 'Commercial aircraft cockpit.',
+          lighting: 'Daylight.',
+          fixedElements: ['two seats'],
+        }],
+        visualStyle: {
+          description: 'Photorealistic documentary.',
+          cameraRules: 'Stable 50mm lens feel.',
+          lightingRules: 'Natural daylight.',
+        },
+      },
+    },
+  );
+
+  assert.equal(result.overallScore, 93);
+  assert.equal(result.staticPassed, true);
+  assert.equal(result.temporalScore, 54);
+  assert.equal(result.temporalPassed, false);
+  assert.equal(result.passed, false);
+  assert.equal(result.temporalIssues[0].code, 'face-morph');
+  assert.match(result.regenerationGuidance, /facial identity/i);
+
+  const parts = requests[0].body.messages[1].content;
+  assert.equal(parts.filter((part) => part.type === 'image_url').length, 9);
+  assert.ok(parts.some((part) => part.type === 'text' && /strictly chronological/i.test(part.text)));
+});
+
+test('pipeline uses temporal QC guidance for targeted regeneration', async () => {
+  const regenerations = [];
+  const calls = new Map();
+
+  const visual = {
+    strategy: 'ai-first',
+    resolveScene: async (scene, context) => {
+      regenerations.push({
+        sceneIndex: scene.index,
+        regeneration: context.regeneration || null,
+      });
+      return {
+        provider: 'fake-ai',
+        type: 'ai-video',
+        localPath: `temporal-${scene.index}-${context.regeneration?.attempt || 0}.mp4`,
+        generationId: `temporal-${scene.index}-${context.regeneration?.attempt || 0}`,
+        referenceImageUrl: `https://example.test/temporal-ref-${scene.index}.jpg`,
+      };
+    },
+  };
+
+  const realismQc = {
+    model: 'vision-test',
+    threshold: 82,
+    temporalEnabled: true,
+    temporalThreshold: 80,
+    maxRegenerations: 1,
+    evaluateScene: async (scene) => {
+      const count = calls.get(scene.index) || 0;
+      calls.set(scene.index, count + 1);
+
+      if (scene.index === 0 && count === 0) {
+        return {
+          passed: false,
+          staticPassed: true,
+          temporalPassed: false,
+          overallScore: 94,
+          temporalScore: 48,
+          scores: {},
+          temporalScores: { identityStability: 35 },
+          issues: [],
+          temporalIssues: [{
+            code: 'face-morph',
+            severity: 'high',
+            evidence: 'face changes during motion',
+          }],
+          regenerationGuidance: 'Preserve the exact same face in every frame and remove morphing.',
+        };
+      }
+
+      return {
+        passed: true,
+        staticPassed: true,
+        temporalPassed: true,
+        overallScore: 94,
+        temporalScore: 92,
+        scores: {},
+        temporalScores: {},
+        issues: [],
+        temporalIssues: [],
+        regenerationGuidance: '',
+      };
+    },
+  };
+
+  const pipeline = new VideoPipeline({
+    llm: new TemplateLlmProvider(),
+    renderer: null,
+    visual,
+    realismQc,
+    voice: null,
+    store: { saveProject: async () => {} },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'a realistic pilot in a cockpit',
+    durationSeconds: 30,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  const firstSceneCalls = regenerations.filter((entry) => entry.sceneIndex === 0);
+  assert.equal(firstSceneCalls.length, 2);
+  assert.match(firstSceneCalls[1].regeneration.guidance, /same face/i);
+  assert.equal(project.scenes[0].visualQcHistory[0].temporalPassed, false);
+  assert.equal(project.scenes[0].visualQcHistory[1].temporalPassed, true);
 });
