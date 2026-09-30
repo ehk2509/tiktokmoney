@@ -24,6 +24,11 @@ import { LumaAgentsVideoProvider } from '../src/providers/lumaAgentsVideoProvide
 import { RunwayVideoProvider } from '../src/providers/runwayVideoProvider.js';
 import { VideoModelRouter, classifyScene } from '../src/providers/videoModelRouter.js';
 import { ProviderStatsStore } from '../src/storage/providerStatsStore.js';
+import {
+  buildSubtitles,
+  renderAssDocument,
+  renderSrtDocument,
+} from '../src/core/subtitleBuilder.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -1512,4 +1517,166 @@ test('router records QC outcomes into persistent provider statistics', async () 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test('subtitle builder uses exact voice word timings and creates word-highlight events', () => {
+  const subtitles = buildSubtitles({
+    voice: {
+      wordTimings: [
+        { word: 'This', start: 0.0, end: 0.25 },
+        { word: 'looks', start: 0.25, end: 0.52 },
+        { word: 'real', start: 0.52, end: 0.82 },
+        { word: 'because', start: 0.9, end: 1.2 },
+        { word: 'timing', start: 1.2, end: 1.52 },
+        { word: 'matters.', start: 1.52, end: 1.9 },
+      ],
+    },
+    scenes: [],
+    config: {
+      maxWordsPerCue: 3,
+      maxCharsPerCue: 40,
+    },
+  });
+
+  assert.equal(subtitles.source, 'voice-word-timings');
+  assert.equal(subtitles.cues.length, 2);
+  assert.equal(subtitles.events.length, 6);
+  assert.equal(subtitles.events[0].start, 0);
+  assert.equal(subtitles.events[0].end, 0.25);
+  assert.match(subtitles.events[0].assText, /&H0000FFFF/);
+  assert.match(subtitles.events[0].assText, /This/);
+  assert.match(subtitles.events[1].assText, /looks/);
+});
+
+test('subtitle builder falls back to scene-estimated timing without TTS word alignment', () => {
+  const subtitles = buildSubtitles({
+    voice: null,
+    scenes: [
+      {
+        start: 0,
+        duration: 2,
+        narration: 'A realistic pilot checks the controls.',
+      },
+      {
+        start: 2,
+        duration: 2,
+        narration: 'The aircraft starts moving.',
+      },
+    ],
+    config: { maxWordsPerCue: 4 },
+  });
+
+  assert.equal(subtitles.source, 'scene-estimate');
+  assert.ok(subtitles.cues.length >= 2);
+  assert.ok(subtitles.events.length >= 9);
+  assert.equal(subtitles.events[0].start, 0);
+  assert.ok(subtitles.events.at(-1).end <= 4.001);
+});
+
+test('subtitle documents emit ASS styling and standard SRT sidecar', () => {
+  const subtitles = buildSubtitles({
+    voice: {
+      wordTimings: [
+        { word: 'Hello', start: 0, end: 0.5 },
+        { word: 'world.', start: 0.5, end: 1.0 },
+      ],
+    },
+  });
+
+  const ass = renderAssDocument(subtitles);
+  const srt = renderSrtDocument(subtitles);
+
+  assert.match(ass, /\[V4\+ Styles\]/);
+  assert.match(ass, /PlayResX: 1080/);
+  assert.match(ass, /Dialogue: 0,0:00:00\.00,0:00:00\.50/);
+  assert.match(srt, /00:00:00,000 --> 00:00:01,000/);
+  assert.match(srt, /Hello world\./);
+});
+
+test('renderer burns ASS subtitles after scene composition and writes ASS/SRT sidecars', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-subtitles-'));
+  const commands = [];
+  try {
+    const renderer = new FfmpegRenderer({
+      outputDir: dir,
+      runCommand: async (command, args) => commands.push({ command, args }),
+    });
+
+    const subtitles = buildSubtitles({
+      voice: {
+        wordTimings: [
+          { word: 'Realistic', start: 0, end: 0.5 },
+          { word: 'subtitles.', start: 0.5, end: 1 },
+        ],
+      },
+    });
+
+    const result = await renderer.render({
+      id: 'vid_subtitles',
+      topic: 'test',
+      scenes: [
+        { index: 0, start: 0, duration: 1, narration: 'Realistic subtitles.', asset: null },
+      ],
+      voice: {
+        audioPath: '/fake/voice.mp3',
+        wordTimings: [],
+      },
+      subtitles,
+    });
+
+    assert.equal(result.subtitleSource, 'voice-word-timings');
+    assert.equal(result.subtitleCueCount, 1);
+    assert.match(await readFile(result.subtitleAssPath, 'utf8'), /Dialogue:/);
+    assert.match(await readFile(result.subtitleSrtPath, 'utf8'), /Realistic subtitles\./);
+
+    assert.equal(commands.length, 3);
+    const sceneArgs = commands[0].args.join(' ');
+    assert.doesNotMatch(sceneArgs, /drawtext|drawbox/);
+
+    const finalArgs = commands[2].args;
+    const filterIndex = finalArgs.indexOf('-vf');
+    assert.ok(filterIndex >= 0);
+    assert.match(finalArgs[filterIndex + 1], /ass=filename=/);
+    assert.ok(finalArgs.includes('libx264'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pipeline always prepares subtitle metadata before render', async () => {
+  const voice = {
+    synthesize: async () => ({
+      provider: 'fake-voice',
+      audioPath: '/fake/voice.mp3',
+      durationSeconds: 3,
+      wordTimings: [
+        { word: 'A', start: 0, end: 0.2 },
+        { word: 'short', start: 0.2, end: 0.5 },
+        { word: 'video', start: 0.5, end: 0.8 },
+        { word: 'with', start: 0.8, end: 1.0 },
+        { word: 'subtitles.', start: 1.0, end: 1.4 },
+      ],
+    }),
+  };
+
+  const pipeline = new VideoPipeline({
+    llm: new TemplateLlmProvider(),
+    renderer: null,
+    visual: null,
+    voice,
+    store: { saveProject: async () => {} },
+    subtitleConfig: { maxWordsPerCue: 4 },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'subtitles for short videos',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(project.subtitles.source, 'voice-word-timings');
+  assert.ok(project.subtitles.cues.length > 0);
+  assert.ok(project.subtitles.events.length > 0);
 });
