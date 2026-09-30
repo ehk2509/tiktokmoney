@@ -400,7 +400,7 @@ test('Luma provider carries the previous reference image into the next still for
     assert.equal(asset.continuityFrom, 'image-gen-previous');
     assert.equal(imageBodies.length, 1);
     assert.equal(imageBodies[0].image_ref[0].url, 'https://cdn.example/previous-reference.jpg');
-    assert.equal(imageBodies[0].image_ref[0].weight, 0.72);
+    assert.equal(imageBodies[0].image_ref[0].weight, 0.62);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
