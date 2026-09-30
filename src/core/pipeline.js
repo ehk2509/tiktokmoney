@@ -217,6 +217,43 @@ async function resolveOneScene({
         message: error.message,
       });
 
+      const fallback = await tryRealFootageFallback({
+        provider,
+        scene,
+        projectId,
+        previousAsset,
+        lastQc: { overallScore: null },
+        warnings,
+        reason: 'realism-qc-evaluator-error',
+      });
+
+      if (fallback) {
+        return {
+          asset: {
+            ...fallback,
+            qc: {
+              status: 'error',
+              message: error.message,
+            },
+          },
+          qcHistory,
+          fatalQcFailure: null,
+        };
+      }
+
+      if (qc.failClosed !== false) {
+        return {
+          asset: null,
+          qcHistory,
+          fatalQcFailure: {
+            scene: scene.index,
+            score: null,
+            issues: [],
+            reason: `Realism QC failed to evaluate the scene: ${error.message}`,
+          },
+        };
+      }
+
       return {
         asset: {
           ...lastAsset,
@@ -299,6 +336,7 @@ async function tryRealFootageFallback({
   previousAsset,
   lastQc,
   warnings,
+  reason = null,
 }) {
   if (typeof provider.resolveFallbackScene !== 'function') return null;
 
@@ -306,7 +344,7 @@ async function tryRealFootageFallback({
     return await provider.resolveFallbackScene(scene, {
       projectId,
       previousAsset,
-      reason: `realism-qc-rejected-score-${lastQc?.overallScore ?? 'unknown'}`,
+      reason: reason || `realism-qc-rejected-score-${lastQc?.overallScore ?? 'unknown'}`,
     });
   } catch (error) {
     warnings.push({
