@@ -41,7 +41,7 @@ export class VideoPipeline {
       scenes,
       quality,
       voice: null,
-      visualStrategy: this.visual ? 'ai-first' : 'fallback-card',
+      visualStrategy: this.visual?.strategy || (this.visual ? 'custom' : 'fallback-card'),
       warnings: [],
       render: null,
     };
