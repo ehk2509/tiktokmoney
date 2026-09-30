@@ -37,3 +37,24 @@ Trend Provider -> Opportunity Scorer -> Creative Pipeline
 ## Design rule
 
 AI decides *what* to create; deterministic code controls *how* the final media is assembled. This keeps the pipeline testable, recoverable and cheap to iterate.
+
+
+## Realism-first visual generation
+
+When `LUMA_API_KEY` is configured, visual generation is AI-first:
+
+```text
+Scene
+  -> RealismSceneSpec
+  -> Luma Photon vertical reference frame
+  -> previous reference reused as image_ref when available
+  -> Luma Ray image-to-video
+  -> local cached MP4
+  -> FFmpeg timeline
+```
+
+The AI video provider stores both the reference-image generation ID and video generation ID. This lets later work add targeted regeneration, continuity scoring and generation-level cost/performance analysis.
+
+Pexels remains a fallback instead of the primary visual source. A failure in AI generation can degrade to real licensed footage without making the entire project fail.
+
+The current continuity mechanism is intentionally conservative: the previous reference image is supplied to the next reference-frame generation with a configurable weight. A later milestone will replace this with explicit character/location bibles plus visual QC.
