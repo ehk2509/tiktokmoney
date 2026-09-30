@@ -9,6 +9,7 @@ export class OpenRouterRealismQcProvider {
     model = process.env.REALISM_QC_MODEL,
     threshold = Number(process.env.REALISM_QC_THRESHOLD || 82),
     maxRegenerations = Number(process.env.REALISM_MAX_REGENERATIONS || 1),
+    failClosed = parseBoolean(process.env.REALISM_QC_FAIL_CLOSED, true),
     frameSampler = new FrameSampler(),
     fetchImpl = globalThis.fetch,
   } = {}) {
@@ -21,6 +22,7 @@ export class OpenRouterRealismQcProvider {
     this.model = model;
     this.threshold = clampScore(threshold);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
+    this.failClosed = Boolean(failClosed);
     this.frameSampler = frameSampler;
     this.fetch = fetchImpl;
   }
@@ -55,6 +57,7 @@ export class OpenRouterRealismQcProvider {
       body: JSON.stringify({
         model: this.model,
         temperature: 0,
+        response_format: { type: 'json_object' },
         messages: [
           {
             role: 'system',
@@ -253,6 +256,11 @@ function average(values) {
   const valid = values.filter((value) => Number.isFinite(Number(value)));
   if (!valid.length) return 0;
   return valid.reduce((sum, value) => sum + Number(value), 0) / valid.length;
+}
+
+function parseBoolean(value, fallback) {
+  if (value == null || value === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
 
 function stringOrEmpty(value) {
