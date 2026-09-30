@@ -134,6 +134,8 @@ export REALISM_QC_ENABLED=true
 export OPENROUTER_API_KEY=...
 export REALISM_QC_MODEL=google/gemini-3.8-flash
 export REALISM_QC_THRESHOLD=82
+export REALISM_QC_TEMPORAL_ENABLED=true
+export REALISM_QC_TEMPORAL_THRESHOLD=80
 export REALISM_MAX_REGENERATIONS=1
 
 # Licensed footage fallback
@@ -158,9 +160,12 @@ topic
   -> canonical Luma location references
   -> scene reference combines canonical refs + previous accepted scene
   -> reference-guided Luma image-to-video
-  -> sample 3 frames from each AI scene
-  -> OpenRouter vision realism QC
-  -> reject + targeted regenerate when score is too low
+  -> sample 3 realism checkpoints
+  -> sample 8 ordered temporal frames
+  -> one OpenRouter vision QC call
+       -> static realism score
+       -> temporal motion score
+  -> reject + targeted regenerate when either score is too low
   -> Pexels when AI still fails QC
   -> stop if no acceptable fallback exists
   -> ElevenLabs narration + word timing
@@ -171,7 +176,7 @@ topic
 
 Visual routing is now **AI-first**. Before scene generation, TikTokMoney creates a Story Bible containing stable recurring characters, locations, wardrobe/physical traits, fixed environment elements, camera rules and lighting rules. Luma then creates canonical character references and location references. Each scene reference frame combines those canonical references with the previous accepted scene reference, substantially reducing identity and environment drift. If Luma fails and Pexels is configured, the router falls back to licensed stock footage. If neither produces a visual, FFmpeg retains the deterministic fallback card.
 
-Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. When realism QC is enabled, FFmpeg samples multiple frames from every AI clip and sends those images to a vision-capable OpenRouter model. The evaluator scores photorealism, anatomy, geometry, physics, motion consistency, continuity, scene relevance and artifact freedom.
+Luma generation IDs, prompts, models and reference-image lineage are stored in the project manifest. When realism QC is enabled, FFmpeg now produces two views of every AI clip: sparse realism checkpoints and a denser chronological sequence. Both are sent in one vision call. The evaluator scores photorealism, anatomy, geometry, physics, continuity and artifact freedom, plus temporal identity stability, object persistence, geometry stability, motion plausibility, camera continuity, flicker freedom and action continuity.
 
 A rejected clip is regenerated with the evaluator's corrective guidance. After the configured retry budget is exhausted, TikTokMoney uses Pexels real footage if available. If no acceptable fallback exists, the project stops at `VISUAL_QC_FAILED` and is not rendered. QC is fail-closed by default once explicitly enabled. Pexels attribution metadata is retained in the manifest.
 
@@ -195,11 +200,11 @@ docs/                    architecture and roadmap
 
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
-1. temporal/motion QC beyond sampled frames
-2. additional AI video providers + cost/quality router
-3. kinetic word-level captions using narration timings
-4. render/generation retry by failed stage
-5. independent hook variants and creative ranking
+1. additional AI video providers + cost/quality router
+2. kinetic word-level captions using narration timings
+3. render/generation retry by failed stage
+4. independent hook variants and creative ranking
+5. live trend intelligence
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
