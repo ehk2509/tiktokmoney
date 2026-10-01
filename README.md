@@ -418,3 +418,63 @@ TikTokMoney converts frame offset to milliseconds, checks confidence and per-tra
 The command adapter is generic. A stronger evaluator may additionally return normalized `phonemeAlignmentScore` and `visemeAlignmentScore`; if corresponding minimum thresholds are configured, those scores become hard gates too.
 
 SyncNet itself is treated accurately as a learned frame-level audiovisual synchronization metric, **not** a phoneme/viseme classifier.
+
+
+## Bundled phoneme↔viseme verifier
+
+TikTokMoney now includes an optional local phoneme/viseme QC implementation instead of only accepting scores from an external evaluator.
+
+Install its isolated Python dependencies:
+
+```bash
+python3 -m venv .venv-viseme
+. .venv-viseme/bin/activate
+pip install -r requirements-viseme.txt
+```
+
+Enable:
+
+```env
+PHONEME_VISEME_ENABLED=true
+PHONEME_VISEME_MIN_PHONEME_ALIGNMENT=0.72
+PHONEME_VISEME_MIN_VISEME_ALIGNMENT=0.68
+PHONEME_VISEME_MIN_COVERAGE=0.72
+```
+
+The local verifier runs:
+
+```text
+independent transcript word timestamps
+  -> English G2P / CMUdict
+  -> ARPAbet phonemes
+  -> 15-viseme mapping
+  -> visually compatible mouth-shape families
+
+generated video
+  -> MediaPipe face landmarks
+  -> normalized lip opening / width geometry
+  -> local mouth-shape classifier
+
+expected phoneme/viseme timeline
+        ↕
+observed mouth-shape timeline
+        ↓
+phoneme alignment score
+viseme alignment score
+visible-face coverage
+confusion matrix
+worst timestamped mismatches
+```
+
+The evaluator intentionally merges visually ambiguous sounds into coarse visual families such as `closed`, `narrow`, `rounded`, `wide`, and `open`. It does not pretend that mouth geometry alone can reliably separate phonemes that share the same visible articulation.
+
+Failures produce targeted regeneration guidance with timestamped examples, for example:
+
+```text
+1.20s P/closed -> open
+2.40s OW/rounded -> wide
+```
+
+A terminal failure returns `PHONEME_VISEME_QC_FAILED`.
+
+The stronger SyncNet-class global A/V offset gate remains complementary: SyncNet measures learned audio/video synchronization, while this verifier checks whether the visible mouth-shape family is compatible with the spoken phoneme sequence.
