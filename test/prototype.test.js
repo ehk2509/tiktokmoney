@@ -74,6 +74,12 @@ import { buildResearchPacket } from '../src/core/researchPacketBuilder.js';
 import { YouTubeTrendProvider } from '../src/providers/youtubeTrendProvider.js';
 import { RedditTrendProvider } from '../src/providers/redditTrendProvider.js';
 import { RssTrendProvider } from '../src/providers/rssTrendProvider.js';
+import {
+  DailyContentPlanner,
+  chooseCreativeCandidateCount,
+  closestRecentTopic,
+} from '../src/core/dailyContentPlanner.js';
+import { DailyPlanStore } from '../src/storage/dailyPlanStore.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -4559,4 +4565,358 @@ test('audiovisual creative tournament receives live research before any media ge
   assert.deepEqual(tournamentResearch, packet);
   assert.deepEqual(screenplayResearch, packet);
   assert.equal(project.researchPacket.evidence[0].url, 'https://example.com/source');
+});
+
+
+test('daily planner allocates high-conviction opportunities without exceeding budget or video limit', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-daily-plan-'));
+  try {
+    const store = new DailyPlanStore(path.join(dir, 'plans.json'));
+    const planner = new DailyContentPlanner({
+      opportunitySource: {
+        list: async () => [
+          {
+            id: 'top',
+            topic: 'AI video agents are accelerating',
+            opportunityScore: 88,
+            velocity: 91,
+            acceleration: 80,
+            sourceCount: 3,
+            researchPacket: { evidence: [{ url: 'a' }, { url: 'b' }] },
+          },
+          {
+            id: 'second',
+            topic: 'New battery chemistry explained',
+            opportunityScore: 74,
+            velocity: 72,
+            acceleration: 58,
+            sourceCount: 2,
+            researchPacket: { evidence: [{ url: 'c' }] },
+          },
+        ],
+      },
+      store,
+      dailyBudgetUsd: 4.5,
+      maxVideos: 3,
+      estimatedVideoCostUsd: 1.5,
+      minOpportunityScore: 52,
+      minEvidenceCount: 1,
+      highConvictionScore: 78,
+      highConvictionAcceleration: 62,
+      maxVideosPerOpportunity: 2,
+    });
+
+    const plan = await planner.createPlan({
+      date: '2026-10-01',
+      budgetUsd: 4.5,
+      maxVideos: 3,
+      render: false,
+    });
+
+    assert.equal(plan.status, 'PLANNED');
+    assert.equal(plan.jobs.length, 3);
+    assert.equal(plan.jobs[0].opportunityId, 'top');
+    assert.equal(plan.jobs[1].opportunityId, 'top');
+    assert.equal(plan.jobs[0].variantCount, 2);
+    assert.equal(plan.jobs[0].creativeCandidateCount, 8);
+    assert.equal(plan.jobs[2].opportunityId, 'second');
+    assert.equal(plan.budget.committedUsd, 4.5);
+    assert.equal(plan.budget.remainingUsd, 0);
+    assert.ok(plan.jobs.every((job) => job.estimatedCostUsd === 1.5));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('daily planner skips recent near-duplicate topics during cooldown', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-topic-cooldown-'));
+  try {
+    const store = new DailyPlanStore(path.join(dir, 'plans.json'));
+    await store.savePlan({
+      id: 'plan_old',
+      date: '2026-09-30',
+      createdAt: '2026-09-30T10:00:00.000Z',
+      jobs: [{
+        id: 'job_old',
+        topic: 'New real-time AI video generation model launches',
+        status: 'COMPLETED',
+      }],
+    });
+
+    const planner = new DailyContentPlanner({
+      opportunitySource: {
+        list: async () => [
+          {
+            id: 'repeat',
+            topic: 'Real time AI video generation model just launched',
+            opportunityScore: 92,
+            velocity: 94,
+            acceleration: 88,
+            sourceCount: 3,
+            researchPacket: { evidence: [{ url: 'a' }] },
+          },
+          {
+            id: 'fresh',
+            topic: 'Ocean robot maps a newly discovered deep-sea ecosystem',
+            opportunityScore: 71,
+            velocity: 70,
+            acceleration: 55,
+            sourceCount: 2,
+            researchPacket: { evidence: [{ url: 'b' }] },
+          },
+        ],
+      },
+      store,
+      dailyBudgetUsd: 3,
+      maxVideos: 2,
+      estimatedVideoCostUsd: 1.5,
+      topicSimilarityThreshold: 0.4,
+      recentTopicDays: 7,
+    });
+
+    const plan = await planner.createPlan({ date: '2026-10-01' });
+
+    assert.equal(plan.jobs.length, 1);
+    assert.equal(plan.jobs[0].opportunityId, 'fresh');
+    const skipped = plan.skipped.find((item) => item.opportunityId === 'repeat');
+    assert.ok(skipped);
+    assert.ok(skipped.reasons.some((reason) => /recent-topic similarity/i.test(reason)));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('daily plan store persists queue state and exposes recent topics', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-plan-store-'));
+  try {
+    const store = new DailyPlanStore(path.join(dir, 'plans.json'));
+    const plan = {
+      id: 'plan_1',
+      date: '2026-10-01',
+      createdAt: '2026-10-01T08:00:00.000Z',
+      status: 'PLANNED',
+      jobs: [{
+        id: 'job_1',
+        topic: 'A persistent topic',
+        status: 'QUEUED',
+      }],
+    };
+    await store.savePlan(plan);
+
+    const loaded = await store.getPlan('plan_1');
+    const recent = await store.recentTopics({
+      days: 7,
+      now: new Date('2026-10-01T12:00:00.000Z'),
+    });
+
+    assert.equal(loaded.id, 'plan_1');
+    assert.equal(recent.length, 1);
+    assert.equal(recent[0].topic, 'A persistent topic');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('daily planner execution reuses planned research and creative budget for every queued job', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-plan-execution-'));
+  try {
+    const store = new DailyPlanStore(path.join(dir, 'plans.json'));
+    const planner = new DailyContentPlanner({
+      opportunitySource: { list: async () => [] },
+      store,
+    });
+    const packet = {
+      topic: 'AI video',
+      evidence: [{ source: 'rss:tech', url: 'https://example.com/evidence' }],
+    };
+    await store.savePlan({
+      id: 'plan_exec',
+      date: '2026-10-01',
+      createdAt: '2026-10-01T08:00:00.000Z',
+      status: 'PLANNED',
+      jobs: [
+        {
+          id: 'job_a',
+          status: 'QUEUED',
+          opportunityId: 'op_a',
+          topic: 'AI video',
+          audience: 'curious adults',
+          durationSeconds: 30,
+          render: false,
+          variantIndex: 0,
+          creativeCandidateCount: 7,
+          estimatedCostUsd: 1.5,
+          researchPacket: packet,
+        },
+        {
+          id: 'job_b',
+          status: 'QUEUED',
+          opportunityId: 'op_a',
+          topic: 'AI video',
+          audience: 'curious adults',
+          durationSeconds: 30,
+          render: false,
+          variantIndex: 1,
+          creativeCandidateCount: 7,
+          estimatedCostUsd: 1.5,
+          researchPacket: packet,
+        },
+      ],
+    });
+
+    const calls = [];
+    const result = await planner.executePlan('plan_exec', {
+      pipeline: {
+        generate: async (input) => {
+          calls.push(input);
+          return {
+            id: `project_${input.productionVariantIndex}`,
+            status: 'READY',
+          };
+        },
+      },
+    });
+
+    assert.equal(result.status, 'COMPLETED');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].creativeCandidateCount, 7);
+    assert.equal(calls[1].productionVariantIndex, 1);
+    assert.deepEqual(calls[0].researchPacket, packet);
+    assert.ok(result.jobs.every((job) => job.status === 'COMPLETED'));
+    assert.equal(result.jobs[1].projectId, 'project_1');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('daily planner records rejected generation without treating it as successful production', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-plan-rejected-'));
+  try {
+    const store = new DailyPlanStore(path.join(dir, 'plans.json'));
+    const planner = new DailyContentPlanner({
+      opportunitySource: { list: async () => [] },
+      store,
+    });
+    await store.savePlan({
+      id: 'plan_reject',
+      date: '2026-10-01',
+      createdAt: '2026-10-01T08:00:00.000Z',
+      status: 'PLANNED',
+      jobs: [{
+        id: 'job_reject',
+        status: 'QUEUED',
+        topic: 'Weak concept',
+        audience: 'curious adults',
+        durationSeconds: 30,
+        render: false,
+        variantIndex: 0,
+        creativeCandidateCount: 5,
+        estimatedCostUsd: 1.5,
+        researchPacket: null,
+      }],
+    });
+
+    const result = await planner.executePlan('plan_reject', {
+      pipeline: {
+        generate: async () => ({
+          id: 'project_rejected',
+          status: 'CREATIVE_REJECTED',
+          error: 'quality floor',
+        }),
+      },
+    });
+
+    assert.equal(result.status, 'FAILED');
+    assert.equal(result.jobs[0].status, 'REJECTED');
+    assert.equal(result.jobs[0].resultStatus, 'CREATIVE_REJECTED');
+    assert.equal(result.jobs[0].error, 'quality floor');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('daily planner helper scales creative search depth with opportunity conviction', () => {
+  assert.equal(chooseCreativeCandidateCount({
+    opportunityScore: 88,
+    acceleration: 80,
+  }, true), 8);
+  assert.equal(chooseCreativeCandidateCount({
+    opportunityScore: 80,
+    acceleration: 65,
+  }, true), 7);
+  assert.equal(chooseCreativeCandidateCount({
+    opportunityScore: 72,
+    acceleration: 40,
+  }, false), 6);
+  assert.equal(chooseCreativeCandidateCount({
+    opportunityScore: 60,
+    acceleration: 40,
+  }, false), 5);
+
+  const recent = closestRecentTopic('AI video model launch', [
+    { topic: 'New AI video model launches today', planId: 'x' },
+    { topic: 'Deep sea robotics discovery', planId: 'y' },
+  ]);
+  assert.equal(recent.planId, 'x');
+  assert.ok(recent.similarity > 0.4);
+});
+
+test('creative tournament accepts planner candidate-count and variant overrides', async () => {
+  let generatedInput = null;
+  let judgedInput = null;
+  const llm = {
+    generateCreativeCandidates: async (input) => {
+      generatedInput = input;
+      return {
+        candidates: Array.from({ length: input.count }, (_, index) => ({
+          id: `candidate-${index}`,
+          angle: `angle ${index}`,
+          hook: `Specific hook number ${index} because it matters`,
+          format: 'direct explainer',
+          retentionDevice: 'open loop',
+          payoff: 'payoff',
+          visualOpportunity: 'demonstration',
+          monetizationFit: 'evergreen',
+          riskNotes: [],
+        })),
+      };
+    },
+    judgeCreativeCandidates: async (input) => {
+      judgedInput = input;
+      return {
+        judgments: input.candidates.map((candidate, index) => ({
+          candidateId: candidate.id,
+          scores: {
+            hookStrength: 80 + index,
+            retentionPotential: 80,
+            clarity: 85,
+            novelty: 75,
+            productionFeasibility: 90,
+            monetizationFit: 80,
+            factualSafety: 95,
+            platformFit: 85,
+          },
+        })),
+      };
+    },
+  };
+  const tournament = new CreativeTournament({
+    llm,
+    candidateCount: 5,
+    minWinnerScore: 60,
+  });
+
+  const result = await tournament.run({
+    topic: 'planned variant',
+    audience: 'adults',
+    durationSeconds: 30,
+    candidateCount: 7,
+    variantIndex: 1,
+  });
+
+  assert.equal(generatedInput.count, 7);
+  assert.equal(generatedInput.variantIndex, 1);
+  assert.equal(judgedInput.variantIndex, 1);
+  assert.equal(result.requestedCandidateCount, 7);
+  assert.equal(result.variantIndex, 1);
 });
