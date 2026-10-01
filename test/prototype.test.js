@@ -65,6 +65,15 @@ import {
   CreativeTournament,
   rankCandidates,
 } from '../src/core/creativeTournament.js';
+import {
+  TrendIntelligence,
+  clusterTrendSignals,
+} from '../src/core/trendIntelligence.js';
+import { TrendHistoryStore } from '../src/storage/trendHistoryStore.js';
+import { buildResearchPacket } from '../src/core/researchPacketBuilder.js';
+import { YouTubeTrendProvider } from '../src/providers/youtubeTrendProvider.js';
+import { RedditTrendProvider } from '../src/providers/redditTrendProvider.js';
+import { RssTrendProvider } from '../src/providers/rssTrendProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -4202,4 +4211,352 @@ test('OpenAI creative judge can use a separate model from candidate generation',
   assert.equal(bodies[0].model, 'generator-model');
   assert.equal(bodies[1].model, 'judge-model');
   assert.match(bodies[1].messages[0].content, /independent short-form creative judge/i);
+});
+
+
+test('trend clustering merges near-duplicate stories across independent sources', () => {
+  const clusters = clusterTrendSignals([
+    {
+      id: 'yt-1',
+      source: 'youtube',
+      topic: 'AI video model launches new real-time generation feature',
+      title: 'AI video model launches new real-time generation feature',
+      strength: 84,
+      publishedAt: new Date().toISOString(),
+    },
+    {
+      id: 'reddit-1',
+      source: 'reddit',
+      topic: 'New real time AI video generation feature just launched',
+      title: 'New real time AI video generation feature just launched',
+      strength: 76,
+      publishedAt: new Date().toISOString(),
+    },
+    {
+      id: 'other',
+      source: 'rss:tech',
+      topic: 'Space telescope finds unusual exoplanet atmosphere',
+      title: 'Space telescope finds unusual exoplanet atmosphere',
+      strength: 71,
+      publishedAt: new Date().toISOString(),
+    },
+  ], { threshold: 0.42 });
+
+  assert.equal(clusters.length, 2);
+  const ai = clusters.find((cluster) => /AI video/i.test(cluster.topic));
+  assert.ok(ai);
+  assert.equal(ai.sourceCount, 2);
+  assert.equal(ai.signals.length, 2);
+  assert.ok(ai.strength > 70);
+});
+
+test('trend history persists snapshots and turns rising strength into positive acceleration', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-trend-history-'));
+  const filePath = path.join(dir, 'history.json');
+  try {
+    const store = new TrendHistoryStore(filePath);
+    const base = {
+      clusterKey: 'abc',
+      topic: 'AI video',
+      sourceCount: 1,
+      signals: [{ source: 'youtube' }],
+    };
+
+    const first = await store.enrich([
+      { ...base, strength: 45 },
+    ], { observedAt: '2026-10-01T10:00:00.000Z' });
+    const second = await store.enrich([
+      { ...base, strength: 70 },
+    ], { observedAt: '2026-10-01T11:00:00.000Z' });
+
+    assert.equal(first[0].acceleration, 50);
+    assert.ok(second[0].acceleration > 50);
+    assert.ok(second[0].velocity > first[0].velocity);
+    assert.equal(second[0].history.samples, 2);
+
+    const saved = JSON.parse(await readFile(filePath, 'utf8'));
+    assert.equal(saved.abc.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('YouTube trend provider combines search results with current video statistics', async () => {
+  const calls = [];
+  const provider = new YouTubeTrendProvider({
+    apiKey: 'youtube-key',
+    regionCode: 'FR',
+    maxResults: 5,
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('/search?')) {
+        return jsonResponse({
+          items: [{
+            id: { videoId: 'abc123' },
+            snippet: {
+              title: 'AI video update | Example Channel',
+              publishedAt: new Date(Date.now() - 2 * 3600000).toISOString(),
+            },
+          }],
+        });
+      }
+      if (String(url).includes('/videos?')) {
+        return jsonResponse({
+          items: [{
+            id: 'abc123',
+            snippet: {
+              title: 'AI video update | Example Channel',
+              description: 'A concrete description of the update.',
+              publishedAt: new Date(Date.now() - 2 * 3600000).toISOString(),
+              channelTitle: 'Example Channel',
+            },
+            statistics: {
+              viewCount: '200000',
+              likeCount: '12000',
+              commentCount: '900',
+            },
+          }],
+        });
+      }
+      throw new Error('unexpected YouTube request');
+    },
+  });
+
+  const signals = await provider.search('AI video');
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].source, 'youtube');
+  assert.equal(signals[0].sourceId, 'abc123');
+  assert.equal(signals[0].engagement.views, 200000);
+  assert.equal(signals[0].sourceMetrics.regionCode, 'FR');
+  assert.ok(signals[0].strength > 50);
+  assert.ok(calls[0].includes('q=AI+video'));
+  assert.ok(calls[1].includes('part=snippet%2Cstatistics'));
+});
+
+test('Reddit trend provider uses OAuth listing data and engagement rate', async () => {
+  let captured = null;
+  const provider = new RedditTrendProvider({
+    accessToken: 'reddit-token',
+    subreddit: 'technology',
+    fetchImpl: async (url, options) => {
+      captured = { url: String(url), options };
+      return jsonResponse({
+        data: {
+          children: [{
+            data: {
+              id: 'post1',
+              title: 'A new AI video system is spreading quickly',
+              selftext: 'People are testing the new release.',
+              permalink: '/r/technology/comments/post1/example/',
+              score: 4200,
+              num_comments: 650,
+              upvote_ratio: 0.93,
+              created_utc: Math.floor(Date.now() / 1000) - 3600,
+              subreddit: 'technology',
+            },
+          }],
+        },
+      });
+    },
+  });
+
+  const signals = await provider.list();
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].source, 'reddit');
+  assert.equal(signals[0].engagement.score, 4200);
+  assert.equal(signals[0].sourceMetrics.subreddit, 'technology');
+  assert.match(captured.url, /\/r\/technology\/hot/);
+  assert.equal(captured.options.headers.authorization, 'Bearer reddit-token');
+});
+
+test('RSS trend provider parses RSS evidence without runtime dependencies', async () => {
+  const provider = new RssTrendProvider({
+    feeds: [{ name: 'tech', url: 'https://example.com/feed.xml' }],
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => `<?xml version="1.0"?>
+        <rss><channel>
+          <item>
+            <title>New AI video generation system launches</title>
+            <link>https://example.com/story</link>
+            <description><![CDATA[The release adds faster realistic video generation.]]></description>
+            <pubDate>Thu, 01 Oct 2026 10:00:00 GMT</pubDate>
+          </item>
+        </channel></rss>`,
+    }),
+  });
+
+  const signals = await provider.list();
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].source, 'rss:tech');
+  assert.equal(signals[0].url, 'https://example.com/story');
+  assert.match(signals[0].snippet, /faster realistic video/i);
+});
+
+test('trend intelligence ranks clustered live signals and attaches source-grounded research packets', async () => {
+  const history = {
+    enrich: async (clusters) => clusters.map((cluster) => ({
+      ...cluster,
+      velocity: 88,
+      acceleration: 74,
+      history: { samples: 3, delta: 8 },
+    })),
+  };
+  const intelligence = new TrendIntelligence({
+    providers: [
+      {
+        id: 'youtube',
+        list: async () => [{
+          id: 'yt',
+          source: 'youtube',
+          topic: 'AI video generation gets faster',
+          title: 'AI video generation gets faster',
+          snippet: 'A new release improves generation speed.',
+          url: 'https://youtube.example/video',
+          strength: 86,
+          publishedAt: new Date().toISOString(),
+        }],
+        search: async () => [],
+      },
+      {
+        id: 'rss',
+        list: async () => [{
+          id: 'rss',
+          source: 'rss:tech',
+          topic: 'Faster AI video generation arrives',
+          title: 'Faster AI video generation arrives',
+          snippet: 'The same release is covered by a technology publication.',
+          url: 'https://news.example/story',
+          strength: 75,
+          publishedAt: new Date().toISOString(),
+        }],
+        search: async () => [],
+      },
+    ],
+    historyStore: history,
+    clusterThreshold: 0.4,
+  });
+
+  const opportunities = await intelligence.list();
+  assert.equal(opportunities.length, 1);
+  assert.equal(opportunities[0].sourceCount, 2);
+  assert.equal(opportunities[0].velocity, 88);
+  assert.equal(opportunities[0].acceleration, 74);
+  assert.equal(opportunities[0].researchPacket.evidence.length, 2);
+  assert.deepEqual(
+    opportunities[0].researchPacket.sourceNames.sort(),
+    ['rss:tech', 'youtube'],
+  );
+  assert.ok(opportunities[0].opportunityScore > 0);
+});
+
+test('research packet preserves URLs and warns creative stages not to treat snippets as verified facts', () => {
+  const packet = buildResearchPacket({
+    topic: 'AI video',
+    signals: [{
+      source: 'rss:tech',
+      title: 'AI video story',
+      snippet: 'Reported details from the source.',
+      url: 'https://example.com/article',
+      publishedAt: '2026-10-01T10:00:00.000Z',
+      strength: 75,
+    }],
+  });
+
+  assert.equal(packet.evidence[0].url, 'https://example.com/article');
+  assert.ok(packet.provenancePolicy.some((line) => /not automatically verified facts/i.test(line)));
+});
+
+test('audiovisual creative tournament receives live research before any media generation', async () => {
+  let tournamentResearch = null;
+  let screenplayResearch = null;
+  const packet = {
+    topic: 'AI video',
+    evidence: [{
+      source: 'rss:tech',
+      title: 'A sourced trend',
+      url: 'https://example.com/source',
+      snippet: 'Evidence snippet.',
+    }],
+  };
+  const llm = {
+    generateProductionScript: async ({ topic, researchPacket }) => {
+      screenplayResearch = researchPacket;
+      return {
+        title: topic,
+        synopsis: 'Grounded production.',
+        characters: [{
+          id: 'presenter',
+          name: 'Presenter',
+          description: 'A credible adult presenter.',
+          physicalTraits: 'Natural appearance.',
+          wardrobe: 'Neutral clothing.',
+          voice: { presetId: 'Bernard', languageCode: 'en' },
+        }],
+        locations: [{
+          id: 'room',
+          name: 'Room',
+          description: 'A real room.',
+          lighting: 'Daylight.',
+          fixedElements: ['table'],
+        }],
+        segments: [{
+          durationSeconds: 6,
+          purpose: 'hook',
+          speakerCharacterId: 'presenter',
+          characterIds: ['presenter'],
+          locationId: 'room',
+          dialogue: 'A grounded opening line.',
+          action: 'Presenter speaks.',
+          camera: 'Medium close-up.',
+          ambience: 'Room tone.',
+          soundEffects: [],
+          music: '',
+        }],
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm,
+    audiovisual: {
+      generateSegment: async ({ segment }) => ({
+        type: 'ai-video',
+        localPath: '/fake/grounded.mp4',
+        generationId: 'grounded-video',
+        prompt: segment.dialogue,
+      }),
+    },
+    renderer: null,
+    store: { saveProject: async () => {} },
+    trendIntelligence: {
+      research: async () => packet,
+    },
+    creativeTournament: {
+      run: async ({ researchPacket }) => {
+        tournamentResearch = researchPacket;
+        return {
+          enabled: true,
+          accepted: true,
+          winner: { id: 'grounded', hook: 'A grounded opening line.' },
+          winnerScore: 88,
+          minimumWinnerScore: 68,
+          candidates: [],
+          ranking: [],
+        };
+      },
+    },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'AI video',
+    durationSeconds: 6,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.deepEqual(tournamentResearch, packet);
+  assert.deepEqual(screenplayResearch, packet);
+  assert.equal(project.researchPacket.evidence[0].url, 'https://example.com/source');
 });
