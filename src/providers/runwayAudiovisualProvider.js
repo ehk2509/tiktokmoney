@@ -111,6 +111,11 @@ export class RunwayAudiovisualProvider {
             `multi-speaker dialogue master is ${dialogueTrack.durationSeconds}s; locked WAN reference audio must stay within 15 seconds`,
           );
         }
+        if (dialogueTrack.durationSeconds > Number(segment.durationSeconds) + 0.25) {
+          throw new Error(
+            `multi-speaker dialogue master is ${dialogueTrack.durationSeconds}s but act budget is ${segment.durationSeconds}s; shorten dialogue turns or increase act duration`,
+          );
+        }
         referenceAudio.push({ type: 'audio', uri: dialogueTrack.dataUri });
       } else {
         const character = productionScript.characters.find(
