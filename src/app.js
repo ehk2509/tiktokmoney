@@ -3,6 +3,8 @@ import { rankOpportunities } from './core/opportunityScorer.js';
 import { FfmpegRenderer } from './renderers/ffmpegRenderer.js';
 import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
+import { DailyPlanStore } from './storage/dailyPlanStore.js';
+import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { VideoPipeline } from './core/pipeline.js';
 import { AudiovisualPipeline } from './core/audiovisualPipeline.js';
 import {
@@ -28,6 +30,9 @@ export function createApp(overrides = {}) {
   const visual = overrides.visual || createVisualProvider();
   const realismQc = overrides.realismQc || createRealismQcProvider();
   const store = overrides.store || new JsonStore(process.env.DATA_DIR || './data');
+  const dailyPlanStore = overrides.dailyPlanStore || new DailyPlanStore(
+    process.env.DAILY_PLAN_PATH || './data/daily-plans.json',
+  );
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
 
   let pipeline;
@@ -84,9 +89,18 @@ export function createApp(overrides = {}) {
     });
   }
 
+  const dailyPlanner = overrides.dailyPlanner || new DailyContentPlanner({
+    opportunitySource: { list: async () => {
+      const items = await trends.list();
+      return trendIntelligence ? items : rankOpportunities(items);
+    } },
+    store: dailyPlanStore,
+  });
+
   return {
     mode,
     pipeline,
+    dailyPlanner,
     async opportunities() {
       const items = await trends.list();
       return trendIntelligence ? items : rankOpportunities(items);
@@ -94,6 +108,21 @@ export function createApp(overrides = {}) {
     async research(topic) {
       if (!trendIntelligence) return null;
       return trendIntelligence.research(topic);
+    },
+    async planDay(options = {}) {
+      return dailyPlanner.createPlan(options);
+    },
+    async runPlan(planId, options = {}) {
+      return dailyPlanner.executePlan(planId, {
+        pipeline,
+        ...options,
+      });
+    },
+    async getPlan(planId) {
+      return dailyPlanStore.getPlan(planId);
+    },
+    async listPlans(options = {}) {
+      return dailyPlanStore.listPlans(options);
     },
   };
 }
