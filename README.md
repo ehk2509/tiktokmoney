@@ -3,7 +3,7 @@
 Prototype autonomous short-form video engine inspired by the production-pipeline strengths of MoneyPrinterTurbo, but designed around a larger loop:
 
 ```text
-trend -> opportunity -> creative -> scenes -> quality gate -> render -> publish -> analytics -> learn
+live signals -> trend history -> cluster -> opportunity -> research -> creative tournament -> production -> QC -> publish -> analytics -> learn
 ```
 
 TikTokMoney now supports two production paths. The original **scene-composer** remains available and can work with zero API keys. The new **Audiovisual Director** writes a complete production screenplay and uses a specialized native-audio video model to generate picture, dialogue, ambience and effects together.
@@ -228,9 +228,8 @@ docs/                    architecture and roadmap
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
 1. render/generation retry by failed stage
-2. live trend intelligence
-3. publishing + performance learning
-4. caption-style experiments driven by retention
+2. publishing + performance learning
+3. caption-style experiments driven by retention
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
@@ -614,3 +613,102 @@ platform fit             7%
 If no candidate reaches the configured quality floor, the project stops as `CREATIVE_REJECTED` before production-screenplay generation, TTS, image references, or video generation. This makes the tournament a spend gate as well as a creative selector.
 
 The complete candidate set, independent judgments, ranking, score margin, winner, strengths, weaknesses, and red flags are persisted in the project manifest. The winner is then injected into the production-screenplay prompt as binding direction, so the downstream writer cannot silently fall back to a generic explainer.
+
+
+## Live trend intelligence
+
+TikTokMoney can now replace the deterministic sample trends with real external signals when any live trend source is configured.
+
+Current adapters:
+
+- **YouTube Data API** — discovers recent high-view videos and enriches them with current view/like/comment statistics.
+- **Reddit official OAuth API** — reads hot/search listings and derives engagement velocity from score/comments versus post age.
+- **RSS / Atom** — accepts arbitrary configured feeds for news, technology, niche publications, or owned research sources.
+
+When none are configured, the existing deterministic `SampleTrendProvider` remains the zero-key fallback.
+
+Configuration:
+
+```env
+TREND_REGION=US
+TREND_LOOKBACK_HOURS=24
+TREND_HISTORY_PATH=./data/trend-history.json
+TREND_CLUSTER_THRESHOLD=0.52
+TREND_MAX_SIGNALS=120
+
+YOUTUBE_API_KEY=
+YOUTUBE_TREND_MAX_RESULTS=25
+
+REDDIT_ACCESS_TOKEN=
+REDDIT_USER_AGENT=tiktokmoney/0.16 trend-intelligence
+REDDIT_TREND_SUBREDDIT=all
+
+TREND_RSS_FEEDS=[{"name":"tech","url":"https://example.com/feed.xml"}]
+```
+
+### Normalized signal pipeline
+
+```text
+YouTube ----+
+Reddit -----+--> normalized signals
+RSS/Atom ---+       -> title/topic
+                    -> source URL
+                    -> published time
+                    -> source metrics
+                    -> normalized strength
+                         ↓
+                   topic clustering
+                         ↓
+                   persisted history
+                         ↓
+                velocity + acceleration
+                         ↓
+                 opportunity scoring
+                         ↓
+                 research packet
+```
+
+Near-duplicate stories from different providers are clustered using normalized token similarity. A cluster keeps the strongest lead title while retaining every unique source and URL.
+
+`trend-history.json` stores bounded snapshots for each cluster. The first observation starts with neutral acceleration; later observations compare signal strength against previous snapshots so rising stories receive positive acceleration and decaying stories lose momentum.
+
+### Source-grounded research packets
+
+Each opportunity includes `researchPacket`:
+
+```json
+{
+  "topic": "example trend",
+  "sourceNames": ["youtube", "reddit", "rss:tech"],
+  "evidence": [
+    {
+      "source": "youtube",
+      "title": "...",
+      "url": "...",
+      "snippet": "...",
+      "publishedAt": "...",
+      "strength": 82
+    }
+  ]
+}
+```
+
+The packet explicitly tells downstream AI that titles/snippets are evidence leads rather than automatically verified facts. The Creative Tournament, independent judge, and ProductionScript writer all receive the same packet and are instructed not to invent unsupported numbers, dates, quotes, or causal claims.
+
+This also works when generating directly from a topic: audiovisual mode searches configured trend providers for that topic before running the tournament.
+
+Inspect it independently:
+
+```bash
+npm run opportunities
+node --env-file-if-exists=.env src/cli.js research --topic "AI video"
+```
+
+HTTP:
+
+```text
+GET /api/opportunities
+GET /api/research?topic=AI%20video
+```
+
+A provider failure is isolated with `Promise.allSettled`: healthy sources still produce opportunities and provider errors are retained with the result rather than taking the whole trend pipeline down.
