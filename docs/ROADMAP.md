@@ -63,12 +63,12 @@
 
 ## M2 - Trend intelligence
 
-- [ ] Pluggable trend ingestion
-- [ ] Velocity/acceleration history
-- [ ] Topic clustering and deduplication
+- [x] Pluggable trend ingestion (YouTube, Reddit, RSS/Atom)
+- [x] Velocity/acceleration history
+- [x] Topic clustering and deduplication
 - [x] Creative candidate diversity + weighted ranking
 - [x] Pre-generation creative quality/spend gate
-- [ ] Research packets with claim/source provenance
+- [x] Research packets with source provenance and downstream grounding
 - [x] Idea tournament and independent judge
 
 ## M3 - Publishing + analytics
