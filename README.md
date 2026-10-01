@@ -374,3 +374,47 @@ LIPSYNC_QC_FRAMES=10
 When dialogue verification passes, its actual word timestamps become the subtitle timing source. Captions therefore follow the generated speech rather than an estimated scene clock.
 
 The current lip-sync check is deliberately described as a **visual speech-timing proxy**: it verifies speaker visibility, mouth activity during speech, relative stillness during pauses, face stability and broad timing plausibility. It does not claim phoneme/viseme-level alignment.
+
+
+## Deep audiovisual synchronization QC
+
+For a learned frame-level lip-sync metric, TikTokMoney can call an external evaluator through a safe no-shell command contract.
+
+A ready adapter for the optional `syncnet-python` package is included:
+
+```bash
+python3 -m venv .venv-lipsync
+. .venv-lipsync/bin/activate
+pip install -r requirements-lipsync.txt
+```
+
+Provide the S3FD and SyncNet model weights required by that package, then configure:
+
+```env
+DEEP_LIPSYNC_ENABLED=true
+DEEP_LIPSYNC_COMMAND=python3
+DEEP_LIPSYNC_ARGS=["scripts/syncnet_qc.py","--video","{video}","--s3fd-weights","weights/sfd_face.pth","--syncnet-weights","weights/syncnet_v2.model","--device","cpu"]
+DEEP_LIPSYNC_MAX_OFFSET_MS=80
+DEEP_LIPSYNC_MIN_CONFIDENCE=5
+DEEP_LIPSYNC_MIN_SEGMENT_PASS_RATE=0.8
+```
+
+The evaluator returns machine-readable metrics such as:
+
+```json
+{
+  "offsetFrames": 1,
+  "frameRate": 25,
+  "confidence": 8.5,
+  "segments": [
+    {"offsetFrames": 1, "confidence": 8.1},
+    {"offsetFrames": 0, "confidence": 7.8}
+  ]
+}
+```
+
+TikTokMoney converts frame offset to milliseconds, checks confidence and per-track/segment stability, and feeds concrete measured lag/lead guidance back into audiovisual regeneration.
+
+The command adapter is generic. A stronger evaluator may additionally return normalized `phonemeAlignmentScore` and `visemeAlignmentScore`; if corresponding minimum thresholds are configured, those scores become hard gates too.
+
+SyncNet itself is treated accurately as a learned frame-level audiovisual synchronization metric, **not** a phoneme/viseme classifier.
