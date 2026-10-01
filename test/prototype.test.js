@@ -61,6 +61,10 @@ import {
   OpenRouterSpeakerTurnQcProvider,
   buildSpeakerSamples,
 } from '../src/providers/openRouterSpeakerTurnQcProvider.js';
+import {
+  CreativeTournament,
+  rankCandidates,
+} from '../src/core/creativeTournament.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -3807,4 +3811,395 @@ test('publishability gate blocks failed multi-speaker attribution', () => {
 
   assert.equal(result.passed, false);
   assert.ok(result.blockers.some((blocker) => blocker.code === 'speaker-turn'));
+});
+
+
+test('creative tournament hard-rejects unsafe concepts even with strong raw scores', () => {
+  const candidates = [
+    {
+      id: 'safe',
+      hook: 'Here is the mechanism that makes this topic surprising.',
+      angle: 'mechanism reveal',
+      format: 'direct explainer',
+      retentionDevice: 'open loop',
+      visualOpportunity: 'simple demonstration',
+      riskNotes: [],
+    },
+    {
+      id: 'unsafe',
+      hook: 'A shocking claim that sounds irresistible.',
+      angle: 'sensational unsupported claim',
+      format: 'direct explainer',
+      retentionDevice: 'shock',
+      visualOpportunity: 'dramatic',
+      riskNotes: ['unsupported factual claim'],
+    },
+  ];
+  const ranking = rankCandidates({
+    candidates,
+    judgments: [
+      {
+        candidateId: 'safe',
+        scores: {
+          hookStrength: 84,
+          retentionPotential: 86,
+          clarity: 90,
+          novelty: 78,
+          productionFeasibility: 92,
+          monetizationFit: 80,
+          factualSafety: 96,
+          platformFit: 90,
+        },
+      },
+      {
+        candidateId: 'unsafe',
+        hardReject: true,
+        scores: {
+          hookStrength: 99,
+          retentionPotential: 98,
+          clarity: 90,
+          novelty: 92,
+          productionFeasibility: 90,
+          monetizationFit: 95,
+          factualSafety: 15,
+          platformFit: 92,
+        },
+      },
+    ],
+  });
+
+  assert.equal(ranking[0].candidateId, 'safe');
+  assert.equal(ranking[1].candidateId, 'unsafe');
+  assert.equal(ranking[1].score, 0);
+  assert.equal(ranking[1].hardReject, true);
+});
+
+test('creative tournament selects the independently judged winner and exposes margin', async () => {
+  const llm = {
+    generateCreativeCandidates: async () => ({
+      candidates: [
+        {
+          id: 'generic',
+          angle: 'generic explainer',
+          hook: 'Here is something about the topic.',
+          format: 'direct explainer',
+          emotionalDriver: 'curiosity',
+          retentionDevice: 'basic open loop',
+          payoff: 'explain it',
+          visualOpportunity: 'presenter',
+          dialogueStyle: 'direct',
+          monetizationFit: 'general interest',
+          productionNotes: 'simple',
+          riskNotes: [],
+        },
+        {
+          id: 'dialogue',
+          angle: 'skeptic versus expert',
+          hook: '“That cannot be true.” “It is—watch what happens next.”',
+          format: 'dialogue',
+          emotionalDriver: 'tension',
+          retentionDevice: 'objection followed by visual proof',
+          payoff: 'resolve the disagreement with mechanism',
+          visualOpportunity: 'two-person demonstration',
+          dialogueStyle: 'skeptic and expert',
+          monetizationFit: 'repeatable series format',
+          productionNotes: 'two actors one location',
+          riskNotes: [],
+        },
+      ],
+    }),
+    judgeCreativeCandidates: async () => ({
+      source: 'test-judge',
+      model: 'judge-model',
+      judgments: [
+        {
+          candidateId: 'generic',
+          scores: {
+            hookStrength: 65,
+            retentionPotential: 66,
+            clarity: 82,
+            novelty: 50,
+            productionFeasibility: 95,
+            monetizationFit: 67,
+            factualSafety: 95,
+            platformFit: 72,
+          },
+          rationale: 'Safe but generic.',
+        },
+        {
+          candidateId: 'dialogue',
+          scores: {
+            hookStrength: 92,
+            retentionPotential: 94,
+            clarity: 90,
+            novelty: 87,
+            productionFeasibility: 86,
+            monetizationFit: 84,
+            factualSafety: 94,
+            platformFit: 93,
+          },
+          rationale: 'Strong tension, clear payoff and executable dialogue.',
+        },
+      ],
+    }),
+  };
+
+  const tournament = new CreativeTournament({
+    llm,
+    candidateCount: 2,
+    minWinnerScore: 68,
+    minMargin: 2,
+  });
+
+  const result = await tournament.run({
+    topic: 'why habits compound',
+    audience: 'curious adults',
+    durationSeconds: 30,
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.winner.id, 'dialogue');
+  assert.equal(result.ranking[0].candidateId, 'dialogue');
+  assert.equal(result.judge.model, 'judge-model');
+  assert.ok(result.margin > 2);
+  assert.equal(result.confidence, 'clear');
+});
+
+test('audiovisual pipeline passes winning creative brief into screenplay generation', async () => {
+  let receivedBrief = null;
+  let audiovisualCalls = 0;
+  const winningBrief = {
+    id: 'winner',
+    angle: 'skeptic versus expert',
+    hook: 'That sounds wrong—until you see the mechanism.',
+    format: 'dialogue',
+    retentionDevice: 'objection then proof',
+    payoff: 'resolve the objection',
+    score: 91,
+  };
+
+  const llm = {
+    generateProductionScript: async ({ topic, creativeBrief }) => {
+      receivedBrief = creativeBrief;
+      return {
+        title: topic,
+        synopsis: 'A dialogue-led explanation.',
+        characters: [{
+          id: 'presenter',
+          name: 'Presenter',
+          description: 'A credible adult presenter.',
+          physicalTraits: 'Natural realistic appearance.',
+          wardrobe: 'Neutral clothing.',
+          voice: { presetId: 'Bernard', languageCode: 'en' },
+        }],
+        locations: [{
+          id: 'room',
+          name: 'Room',
+          description: 'A realistic room.',
+          lighting: 'Daylight.',
+          fixedElements: ['table'],
+        }],
+        segments: [{
+          durationSeconds: 6,
+          purpose: 'hook',
+          speakerCharacterId: 'presenter',
+          characterIds: ['presenter'],
+          locationId: 'room',
+          dialogue: creativeBrief.hook,
+          action: 'Presenter demonstrates the idea.',
+          camera: 'Medium close-up.',
+          ambience: 'Room tone.',
+          soundEffects: [],
+          music: '',
+        }],
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm,
+    audiovisual: {
+      generateSegment: async ({ segment }) => {
+        audiovisualCalls += 1;
+        return {
+          type: 'ai-video',
+          localPath: '/fake/winner.mp4',
+          generationId: 'winner-video',
+          prompt: segment.dialogue,
+        };
+      },
+    },
+    renderer: null,
+    store: { saveProject: async () => {} },
+    creativeTournament: {
+      run: async () => ({
+        enabled: true,
+        accepted: true,
+        winner: winningBrief,
+        winnerScore: 91,
+        minimumWinnerScore: 68,
+        candidates: [winningBrief],
+        ranking: [{ candidateId: 'winner', score: 91 }],
+      }),
+    },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'why habits compound',
+    durationSeconds: 6,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(audiovisualCalls, 1);
+  assert.deepEqual(receivedBrief, winningBrief);
+  assert.equal(project.creativeBrief.id, 'winner');
+  assert.equal(project.productionScript.segments[0].dialogue, winningBrief.hook);
+});
+
+test('audiovisual pipeline stops before media generation when no creative clears the quality floor', async () => {
+  let scriptCalls = 0;
+  let audiovisualCalls = 0;
+  const saved = [];
+  const pipeline = new AudiovisualPipeline({
+    llm: {
+      generateProductionScript: async () => {
+        scriptCalls += 1;
+        throw new Error('should not generate production script');
+      },
+    },
+    audiovisual: {
+      generateSegment: async () => {
+        audiovisualCalls += 1;
+        throw new Error('should not generate video');
+      },
+    },
+    renderer: null,
+    store: { saveProject: async (project) => saved.push(structuredClone(project)) },
+    creativeTournament: {
+      run: async () => ({
+        enabled: true,
+        accepted: false,
+        winner: { id: 'weak', hook: 'weak hook' },
+        winnerScore: 54,
+        minimumWinnerScore: 68,
+        candidates: [{ id: 'weak', hook: 'weak hook' }],
+        ranking: [{ candidateId: 'weak', score: 54 }],
+      }),
+    },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'weak creative',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'CREATIVE_REJECTED');
+  assert.equal(scriptCalls, 0);
+  assert.equal(audiovisualCalls, 0);
+  assert.equal(saved.length, 1);
+  assert.match(project.error, /minimum score of 68/i);
+});
+
+test('OpenAI creative judge can use a separate model from candidate generation', async () => {
+  const bodies = [];
+  const responses = [
+    {
+      candidates: [
+        {
+          id: 'a',
+          angle: 'angle a',
+          hook: 'A specific useful hook.',
+          format: 'direct explainer',
+          emotionalDriver: 'curiosity',
+          retentionDevice: 'open loop',
+          payoff: 'payoff',
+          visualOpportunity: 'demonstration',
+          dialogueStyle: 'direct',
+          monetizationFit: 'evergreen',
+          productionNotes: 'simple',
+          riskNotes: [],
+        },
+        {
+          id: 'b',
+          angle: 'angle b',
+          hook: 'A second specific useful hook.',
+          format: 'dialogue',
+          emotionalDriver: 'tension',
+          retentionDevice: 'debate',
+          payoff: 'resolution',
+          visualOpportunity: 'two-person scene',
+          dialogueStyle: 'conversation',
+          monetizationFit: 'repeatable',
+          productionNotes: 'simple',
+          riskNotes: [],
+        },
+      ],
+    },
+    {
+      judgments: [
+        {
+          candidateId: 'a',
+          scores: {
+            hookStrength: 80,
+            retentionPotential: 80,
+            clarity: 85,
+            novelty: 75,
+            productionFeasibility: 90,
+            monetizationFit: 80,
+            factualSafety: 95,
+            platformFit: 85,
+          },
+        },
+        {
+          candidateId: 'b',
+          scores: {
+            hookStrength: 90,
+            retentionPotential: 92,
+            clarity: 88,
+            novelty: 85,
+            productionFeasibility: 85,
+            monetizationFit: 84,
+            factualSafety: 95,
+            platformFit: 90,
+          },
+        },
+      ],
+    },
+  ];
+
+  const provider = new OpenAICompatibleLlmProvider({
+    apiKey: 'test-key',
+    model: 'generator-model',
+    judgeModel: 'judge-model',
+    fetchImpl: async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      const body = responses.shift();
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify(body) } }],
+        }),
+      };
+    },
+  });
+
+  const generated = await provider.generateCreativeCandidates({
+    topic: 'topic',
+    audience: 'audience',
+    durationSeconds: 30,
+    count: 2,
+  });
+  await provider.judgeCreativeCandidates({
+    topic: 'topic',
+    audience: 'audience',
+    durationSeconds: 30,
+    candidates: generated.candidates,
+  });
+
+  assert.equal(bodies[0].model, 'generator-model');
+  assert.equal(bodies[1].model, 'judge-model');
+  assert.match(bodies[1].messages[0].content, /independent short-form creative judge/i);
 });
