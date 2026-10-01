@@ -61,6 +61,7 @@ export class OpenAICompatibleLlmProvider {
     durationSeconds,
     count = 5,
     researchPacket = null,
+    variantIndex = 0,
   }) {
     const prompt = [
       'Generate DISTINCT creative concepts for a high-retention photorealistic vertical short-form video.',
@@ -68,6 +69,9 @@ export class OpenAICompatibleLlmProvider {
       `Audience: ${audience}`,
       `Target duration: ${durationSeconds} seconds`,
       `Return exactly ${count} candidates.`,
+      variantIndex
+        ? `This is production variant batch ${variantIndex + 1}; deliberately explore angles different from a previous batch for the same opportunity.`
+        : '',
       researchPacket?.evidence?.length
         ? `SOURCE-GROUNDED RESEARCH PACKET: ${JSON.stringify(researchPacket)}`
         : 'No external research packet is available; avoid specific factual claims that require verification.',
@@ -122,9 +126,11 @@ export class OpenAICompatibleLlmProvider {
     durationSeconds,
     candidates,
     researchPacket = null,
+    variantIndex = 0,
   }) {
     const prompt = [
       'Independently judge short-form video creative concepts before any expensive video generation.',
+      variantIndex ? `This is production variant batch ${variantIndex + 1} for the same opportunity.` : '',
       `Topic: ${topic}`,
       `Audience: ${audience}`,
       `Target duration: ${durationSeconds} seconds`,
