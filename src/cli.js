@@ -18,8 +18,14 @@ try {
     console.log(JSON.stringify(project, null, 2));
   } else if (command === 'opportunities') {
     console.log(JSON.stringify(await app.opportunities(), null, 2));
+  } else if (command === 'research') {
+    const topic = options.topic || options.t;
+    if (!topic) throw new Error('Usage: node src/cli.js research --topic "Your topic"');
+    const packet = await app.research(topic);
+    if (!packet) throw new Error('Live trend intelligence is not configured');
+    console.log(JSON.stringify(packet, null, 2));
   } else {
-    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities');
+    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities\n  research --topic "..."');
   }
 } catch (error) {
   console.error(error.message);
