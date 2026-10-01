@@ -63,6 +63,7 @@ export class RunwayAudiovisualProvider {
       character,
       dialogueTrack,
       regeneration,
+      previousAsset,
     });
 
     const task = await this.createTask('/text_to_video', {
@@ -190,6 +191,7 @@ function buildAudiovisualPrompt({
   character,
   dialogueTrack,
   regeneration,
+  previousAsset,
 }) {
   const location = productionScript.locations.find((item) => item.id === segment.locationId);
   return [
