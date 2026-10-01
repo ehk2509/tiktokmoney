@@ -53,6 +53,73 @@ export class OpenAICompatibleLlmProvider {
     };
   }
 
+  async generateProductionScript({ topic, audience, durationSeconds }) {
+    const prompt = [
+      'Write a complete production screenplay for a photorealistic vertical short-form video.',
+      `Topic: ${topic}`,
+      `Audience: ${audience}`,
+      `Target total duration: ${durationSeconds} seconds`,
+      '',
+      'The result will be sent to a specialized audiovisual video model that generates picture, spoken dialogue, ambience and sound effects together.',
+      'Return JSON only with this shape:',
+      '{',
+      '  "title": "string",',
+      '  "synopsis": "string",',
+      '  "characters": [{',
+      '    "id": "presenter", "name": "string", "description": "string",',
+      '    "physicalTraits": "string", "wardrobe": "string",',
+      '    "voice": {"presetId":"Bernard","description":"string","delivery":"string","languageCode":"en"}',
+      '  }],',
+      '  "locations": [{',
+      '    "id":"location-main","name":"string","description":"string","lighting":"string",',
+      '    "fixedElements":["string"]',
+      '  }],',
+      '  "visualStyle": {"description":"string","cameraRules":"string","lightingRules":"string"},',
+      '  "audioDirection": {"mix":"string","musicPolicy":"string"},',
+      '  "segments": [{',
+      '    "durationSeconds": 8, "purpose":"hook|explain|payoff|cta",',
+      '    "speakerCharacterId":"presenter", "characterIds":["presenter"],',
+      '    "locationId":"location-main",',
+      '    "dialogue":"EXACT WORDS TO BE SPOKEN",',
+      '    "action":"detailed physical action",',
+      '    "camera":"shot size, lens feel and camera movement",',
+      '    "ambience":"environment sound description",',
+      '    "soundEffects":["specific sound"],',
+      '    "music":"music direction",',
+      '    "transition":"transition to next act"',
+      '  }]',
+      '}',
+      '',
+      'Strict rules:',
+      '- Write the ACTUAL final spoken script. Never describe how a script should be written.',
+      '- Dialogue must be useful, topic-specific and natural when spoken aloud.',
+      '- No meta-language such as "a strong explanation should" or "the viewer should".',
+      '- Keep each segment between 4 and 15 seconds so exact dialogue audio can be used as a model reference.',
+      '- Prefer 3-5 segments for a 30-45 second video.',
+      '- Only one speaking character per segment in this version.',
+      '- Character descriptions must be stable enough for visual continuity: apparent age, face, hair, body type and wardrobe.',
+      '- Locations must include fixed physical anchors and exact lighting.',
+      '- Camera/action descriptions must be physically plausible and filmable.',
+      '- Ambience and sound effects must match what is visible.',
+      '- Music must stay under dialogue.',
+      '- The hook must immediately communicate tension or curiosity.',
+      '- The final segment must resolve the promise made by the hook.',
+      '- Do not invent factual claims beyond the supplied topic/context.',
+    ].join('\n');
+
+    const parsed = await this.generateJson({
+      system: 'You are a film screenwriter, director and sound designer creating executable audiovisual production scripts. Return JSON only.',
+      prompt,
+      temperature: 0.55,
+    });
+
+    return {
+      ...parsed,
+      source: 'openai-compatible',
+      model: this.model,
+    };
+  }
+
   async generateStoryBible({ script }) {
     const parts = [script.hook, ...(script.body || []), script.payoff, script.cta].filter(Boolean);
     const prompt = [
