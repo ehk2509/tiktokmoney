@@ -6,7 +6,7 @@ Prototype autonomous short-form video engine inspired by the production-pipeline
 trend -> opportunity -> creative -> scenes -> quality gate -> render -> publish -> analytics -> learn
 ```
 
-The first prototype intentionally focuses on the first executable slice. It works with **zero API keys** and can already score content opportunities, generate a structured short-form script, plan scenes, run a quality gate, and render a real **1080x1920 MP4** with FFmpeg.
+TikTokMoney now supports two production paths. The original **scene-composer** remains available and can work with zero API keys. The new **Audiovisual Director** writes a complete production screenplay and uses a specialized native-audio video model to generate picture, dialogue, ambience and effects together.
 
 ## Why this architecture
 
@@ -124,7 +124,16 @@ export OPENAI_API_KEY=...
 export LLM_BASE_URL=https://api.openai.com/v1
 export LLM_MODEL=...
 
-# Current realism-first AI video backends
+# Choose the complete audiovisual pipeline
+export VIDEO_PIPELINE_MODE=audiovisual
+
+# Runway is required for the audiovisual path
+export RUNWAYML_API_SECRET=...
+export AUDIOVISUAL_VIDEO_MODEL=wan3
+export AUDIOVISUAL_DIALOGUE_MODE=locked
+export AUDIOVISUAL_TTS_MODEL=eleven_v3
+
+# Optional/current realism-first scene-composer backends
 export LUMA_AGENTS_API_KEY=...
 export LUMA_AGENTS_VIDEO_MODEL=ray-3.2
 
@@ -244,3 +253,59 @@ outputs/<video-id>.subtitles.srt
 ```
 
 The ASS file is used for the burned-in styled render; the SRT file is retained for publishing platforms or later editing.
+
+
+## Audiovisual Director mode
+
+Set:
+
+```bash
+export VIDEO_PIPELINE_MODE=audiovisual
+export LLM_PROVIDER=openai-compatible
+export OPENAI_API_KEY=...
+export RUNWAYML_API_SECRET=...
+```
+
+The production path becomes:
+
+```text
+topic
+  -> AI ProductionScript
+       -> exact spoken dialogue
+       -> character descriptions
+       -> apparent age / face / hair / body traits
+       -> wardrobe
+       -> voice preset + delivery
+       -> locations + fixed physical anchors
+       -> lighting
+       -> action
+       -> camera
+       -> ambience
+       -> sound effects
+       -> music direction
+  -> canonical character/location references when available
+  -> per-act exact voice generation
+  -> WAN 3 native-audio video generation
+       -> video
+       -> synchronized dialogue
+       -> ambience
+       -> effects
+  -> static + temporal realism QC
+  -> targeted audiovisual regeneration
+  -> subtitles
+  -> audio-preserving final composition
+```
+
+### Dialogue modes
+
+`AUDIOVISUAL_DIALOGUE_MODE=locked` is the production default. Each 4–15 second act first creates the exact dialogue using Runway text-to-speech, then passes that audio into WAN 3 through `referenceAudio`. The video prompt explicitly requires the visible performance to preserve those words verbatim.
+
+`AUDIOVISUAL_DIALOGUE_MODE=native` skips the separate TTS request and asks WAN 3 to generate synchronized speech directly from the screenplay. It is cheaper/simpler but less strict about exact wording.
+
+Acts are capped at 15 seconds in the production-script contract because Runway currently limits WAN 3 reference audio to 15 seconds total per request. WAN 3 itself can generate 2–30 second native-audio clips.
+
+The original `scene-composer` mode is retained as a fallback:
+
+```bash
+export VIDEO_PIPELINE_MODE=scene-composer
+```
