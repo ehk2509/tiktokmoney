@@ -229,7 +229,8 @@ The next milestone is **not** auto-posting. It is improving `CreativeSpec -> hig
 
 1. render/generation retry by failed stage
 2. publishing + performance learning
-3. caption-style experiments driven by retention
+3. actual provider cost ledger + budget reconciliation
+4. caption-style experiments driven by retention
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
@@ -712,3 +713,129 @@ GET /api/research?topic=AI%20video
 ```
 
 A provider failure is isolated with `Promise.allSettled`: healthy sources still produce opportunities and provider errors are retained with the result rather than taking the whole trend pipeline down.
+
+
+## Autonomous daily content planning
+
+TikTokMoney can now convert ranked opportunities into a persisted production queue before any expensive generation starts.
+
+```text
+live opportunities
+  -> opportunity score floor
+  -> source-evidence floor
+  -> recent-topic cooldown
+  -> daily budget
+  -> daily video limit
+  -> conviction-based allocation
+       -> normal opportunity: 1 video
+       -> strong rising multi-source opportunity: up to N variants
+  -> queued production jobs
+  -> execute sequentially
+  -> project results written back to the plan
+```
+
+Defaults:
+
+```env
+DAILY_PLAN_PATH=./data/daily-plans.json
+DAILY_CONTENT_BUDGET_USD=6
+DAILY_CONTENT_MAX_VIDEOS=3
+DAILY_CONTENT_MIN_OPPORTUNITY_SCORE=52
+DAILY_CONTENT_MIN_EVIDENCE=1
+DAILY_CONTENT_ESTIMATED_VIDEO_COST_USD=1.5
+DAILY_CONTENT_TOPIC_COOLDOWN_DAYS=7
+DAILY_CONTENT_TOPIC_SIMILARITY=0.52
+DAILY_CONTENT_HIGH_CONVICTION_SCORE=78
+DAILY_CONTENT_HIGH_CONVICTION_ACCELERATION=62
+DAILY_CONTENT_MAX_VIDEOS_PER_OPPORTUNITY=2
+```
+
+The default evidence floor of `1` intentionally prevents autonomous production from the sample trend provider. Set it to `0` only if you explicitly want unsourced/sample opportunities to be eligible.
+
+### Budget allocation
+
+The planner walks already-ranked opportunities and allocates jobs while both limits remain:
+
+```text
+committed estimated cost <= daily budget
+jobs <= daily max videos
+```
+
+A high-conviction opportunity must satisfy:
+- opportunity score >= configured high-conviction score
+- acceleration >= configured acceleration threshold
+- at least two independent trend sources
+
+Those opportunities may receive multiple video variants, bounded by `DAILY_CONTENT_MAX_VIDEOS_PER_OPPORTUNITY`, budget, and the global daily video limit.
+
+The planner also scales creative search depth:
+
+```text
+ordinary opportunity       -> 5 creative candidates
+score >= 70                -> 6 candidates
+high conviction            -> 7 candidates
+very strong + accelerating -> 8 candidates
+```
+
+Each variant gets a fresh creative tournament and is explicitly labeled as a separate production batch so the LLM is asked to explore a different angle.
+
+### Topic repetition control
+
+`daily-plans.json` is used as short-term production memory. Before selecting a topic, TikTokMoney compares it with topics already queued/produced during the configured cooldown window.
+
+A sufficiently similar topic is skipped with provenance such as:
+
+```json
+{
+  "topic": "Real-time AI video model just launched",
+  "reasons": ["recent-topic similarity 0.81 >= 0.52"],
+  "recentMatch": {
+    "topic": "New real-time AI video generation model launches",
+    "planId": "plan_..."
+  }
+}
+```
+
+Multiple variants intentionally allocated to the **same high-conviction opportunity inside one plan** are allowed.
+
+### Queue execution
+
+Planning and production are separate operations:
+
+```bash
+npm run plan -- --budget 6 --max-videos 3
+
+npm run run-plan -- --id "plan_..."
+```
+
+Inspect history:
+
+```bash
+node --env-file-if-exists=.env src/cli.js plans
+```
+
+HTTP:
+
+```text
+POST /api/plans
+GET  /api/plans
+GET  /api/plans/:id
+POST /api/plans/:id/run
+```
+
+Each job persists:
+- selected opportunity and cluster
+- research packet frozen at planning time
+- opportunity/velocity/acceleration scores
+- evidence/source counts
+- planned cost
+- creative candidate count
+- variant number
+- project id
+- terminal project status/error
+
+Execution reuses the frozen research packet rather than fetching new evidence, making a daily plan reproducible.
+
+### Cost semantics
+
+`DAILY_CONTENT_ESTIMATED_VIDEO_COST_USD` is currently a **planning estimate**, not provider-billing truth. It prevents planned work from exceeding a configured budget under the estimate, but the next cost-control milestone should reconcile actual LLM/TTS/video/QC usage against the plan after generation.
