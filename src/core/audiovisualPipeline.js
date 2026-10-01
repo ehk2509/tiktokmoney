@@ -11,6 +11,8 @@ export class AudiovisualPipeline {
     store,
     visual = null,
     realismQc = null,
+    dialogueQc = null,
+    lipSyncQc = null,
     subtitleConfig = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
@@ -19,6 +21,8 @@ export class AudiovisualPipeline {
     this.store = store;
     this.visual = visual;
     this.realismQc = realismQc;
+    this.dialogueQc = dialogueQc;
+    this.lipSyncQc = lipSyncQc;
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
@@ -65,7 +69,9 @@ export class AudiovisualPipeline {
     for (const segment of productionScript.segments) {
       const generated = await generateWithQc({
         provider: this.audiovisual,
-        qc: this.realismQc,
+        realismQc: this.realismQc,
+        dialogueQc: this.dialogueQc,
+        lipSyncQc: this.lipSyncQc,
         segment,
         productionScript,
         storyBible: project.storyBible,
@@ -86,10 +92,12 @@ export class AudiovisualPipeline {
         production: segment,
         asset: generated.asset,
         visualQcHistory: generated.qcHistory,
+        dialogueVerification: generated.dialogueVerification,
+        lipSyncQc: generated.lipSyncQc,
       });
 
       if (generated.failure) {
-        project.status = 'AUDIOVISUAL_QC_FAILED';
+        project.status = generated.failureStatus || 'AUDIOVISUAL_QC_FAILED';
         project.error = generated.failure;
         await this.store?.saveProject(project);
         return project;
@@ -98,8 +106,9 @@ export class AudiovisualPipeline {
       previousAsset = generated.asset;
     }
 
+    const verifiedWordTimings = collectVerifiedWordTimings(project.scenes);
     project.subtitles = buildSubtitles({
-      voice: null,
+      voice: verifiedWordTimings.length ? { wordTimings: verifiedWordTimings } : null,
       scenes: project.scenes,
       config: this.subtitleConfig,
     });
@@ -141,7 +150,9 @@ export class AudiovisualPipeline {
 
 async function generateWithQc({
   provider,
-  qc,
+  realismQc,
+  dialogueQc,
+  lipSyncQc,
   segment,
   productionScript,
   storyBible,
@@ -150,7 +161,12 @@ async function generateWithQc({
 }) {
   const qcHistory = [];
   let regeneration = null;
-  const maxRegenerations = qc?.maxRegenerations || 0;
+  const maxRegenerations = Math.max(
+    realismQc?.maxRegenerations || 0,
+    dialogueQc?.maxRegenerations || 0,
+    lipSyncQc?.maxRegenerations || 0,
+  );
+  const hasQc = Boolean(realismQc || dialogueQc || lipSyncQc);
 
   for (let attempt = 0; attempt <= maxRegenerations; attempt += 1) {
     const asset = await provider.generateSegment({
@@ -162,7 +178,16 @@ async function generateWithQc({
       projectId,
     });
 
-    if (!qc) return { asset, qcHistory, failure: null };
+    if (!hasQc) {
+      return {
+        asset,
+        qcHistory,
+        dialogueVerification: null,
+        lipSyncQc: null,
+        failure: null,
+        failureStatus: null,
+      };
+    }
 
     const sceneLike = {
       index: segment.index,
@@ -177,33 +202,147 @@ async function generateWithQc({
       },
     };
 
-    const result = await qc.evaluateScene(sceneLike, asset, { previousAsset, storyBible });
-    qcHistory.push({ attempt, generationId: asset.generationId, ...result });
-    if (result.passed) {
+    const realism = realismQc
+      ? await realismQc.evaluateScene(sceneLike, asset, { previousAsset, storyBible })
+      : null;
+
+    const speaker = productionScript.characters.find(
+      (character) => character.id === segment.speakerCharacterId,
+    ) || null;
+
+    const dialogue = dialogueQc
+      ? await dialogueQc.evaluate(asset, {
+        expectedText: segment.dialogue,
+        language: speaker?.voice?.languageCode || null,
+      })
+      : null;
+
+    const lipSync = lipSyncQc
+      ? dialogue?.transcription
+        ? await lipSyncQc.evaluate(asset, {
+          transcription: dialogue.transcription,
+          expectedText: segment.dialogue,
+          speakerDescription: speaker
+            ? [speaker.name, speaker.description, speaker.physicalTraits].filter(Boolean).join('. ')
+            : '',
+        })
+        : {
+          passed: false,
+          score: 0,
+          issues: [{
+            code: 'lip-sync-transcription-missing',
+            severity: 'high',
+            evidence: 'Lip-sync QC requires an independent transcript with word timestamps.',
+          }],
+          regenerationGuidance: 'Regenerate with clearly audible synchronized dialogue.',
+        }
+      : null;
+
+    const passed = [realism, dialogue, lipSync]
+      .filter(Boolean)
+      .every((result) => result.passed);
+
+    const issues = [
+      ...prefixIssues(realism?.issues, 'realism'),
+      ...prefixIssues(realism?.temporalIssues, 'temporal'),
+      ...prefixIssues(dialogue?.issues, 'dialogue'),
+      ...prefixIssues(lipSync?.issues, 'lip-sync'),
+    ];
+    const regenerationGuidance = [
+      realism && !realism.passed ? realism.regenerationGuidance : '',
+      dialogue && !dialogue.passed ? dialogue.regenerationGuidance : '',
+      lipSync && !lipSync.passed ? lipSync.regenerationGuidance : '',
+    ].filter(Boolean).join(' ');
+
+    const historyEntry = {
+      attempt,
+      generationId: asset.generationId,
+      ...(realism || {}),
+      passed,
+      realism,
+      dialogue,
+      lipSync,
+      issues,
+      regenerationGuidance,
+    };
+    qcHistory.push(historyEntry);
+
+    if (passed) {
       return {
-        asset: { ...asset, qc: result, qcAttempts: attempt + 1 },
+        asset: {
+          ...asset,
+          qc: historyEntry,
+          qcAttempts: attempt + 1,
+          dialogueVerification: dialogue,
+          lipSyncQc: lipSync,
+        },
         qcHistory,
+        dialogueVerification: dialogue,
+        lipSyncQc: lipSync,
         failure: null,
+        failureStatus: null,
       };
     }
 
     if (attempt < maxRegenerations) {
       regeneration = {
         attempt: attempt + 1,
-        guidance: result.regenerationGuidance,
-        issues: [...(result.issues || []), ...(result.temporalIssues || [])],
+        guidance: regenerationGuidance,
+        issues,
       };
       continue;
     }
 
+    const failureStatus = dialogue && !dialogue.passed
+      ? 'DIALOGUE_QC_FAILED'
+      : lipSync && !lipSync.passed
+        ? 'LIPSYNC_QC_FAILED'
+        : 'AUDIOVISUAL_QC_FAILED';
+
     return {
       asset: null,
       qcHistory,
-      failure: `Audiovisual act ${segment.index} failed realism QC after ${attempt + 1} attempt(s)`,
+      dialogueVerification: dialogue,
+      lipSyncQc: lipSync,
+      failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
+      failureStatus,
     };
   }
 
-  return { asset: null, qcHistory, failure: 'audiovisual generation failed' };
+  return {
+    asset: null,
+    qcHistory,
+    dialogueVerification: null,
+    lipSyncQc: null,
+    failure: 'audiovisual generation failed',
+    failureStatus: 'AUDIOVISUAL_QC_FAILED',
+  };
+}
+
+function prefixIssues(issues, stage) {
+  if (!Array.isArray(issues)) return [];
+  return issues.map((issue) => ({
+    ...issue,
+    code: `${stage}:${issue.code || 'unspecified'}`,
+    stage,
+  }));
+}
+
+function collectVerifiedWordTimings(scenes) {
+  return scenes.flatMap((scene) => {
+    const verification = scene.dialogueVerification;
+    if (!verification?.passed || !Array.isArray(verification.transcription?.words)) return [];
+
+    return verification.transcription.words.map((word) => ({
+      word: word.word,
+      start: roundTime((Number(scene.start) || 0) + (Number(word.start) || 0)),
+      end: roundTime((Number(scene.start) || 0) + (Number(word.end) || 0)),
+    }));
+  });
+}
+
+function roundTime(value) {
+  return Math.round(Number(value) * 1000) / 1000;
 }
 
 
