@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -16,6 +17,9 @@ export class RunwayAudiovisualProvider {
     assetDir = process.env.ASSET_DIR || './outputs/assets',
     pollIntervalMs = Number(process.env.RUNWAY_POLL_INTERVAL_MS || 2500),
     maxPolls = Number(process.env.RUNWAY_MAX_POLLS || 120),
+    dialogueComposer = null,
+    ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
+    ffprobeBin = process.env.FFPROBE_BIN || 'ffprobe',
     fetchImpl = globalThis.fetch,
     sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   } = {}) {
@@ -33,6 +37,11 @@ export class RunwayAudiovisualProvider {
     this.maxPolls = maxPolls;
     this.fetch = fetchImpl;
     this.sleep = sleepImpl;
+    this.dialogueComposer = dialogueComposer || new DialogueAudioComposer({
+      ffmpegBin,
+      ffprobeBin,
+      assetDir,
+    });
   }
 
   async generateSegment({
@@ -43,8 +52,15 @@ export class RunwayAudiovisualProvider {
     regeneration = null,
     projectId,
   }) {
-    const character = productionScript.characters.find((item) => item.id === segment.speakerCharacterId)
-      || productionScript.characters[0];
+    const dialogueTurns = normalizedDialogueTurns(segment, productionScript);
+    const speakerIds = [...new Set(dialogueTurns.map((turn) => turn.speakerCharacterId))];
+    const characters = (segment.characterIds || [])
+      .map((id) => productionScript.characters.find((item) => item.id === id))
+      .filter(Boolean);
+    const primaryCharacter = productionScript.characters.find(
+      (item) => item.id === dialogueTurns[0]?.speakerCharacterId,
+    ) || characters[0] || productionScript.characters[0];
+
     const references = collectImageReferences(segment, storyBible, previousAsset);
     const referenceVideos = previousAsset?.sourceUrl
       ? [{ type: 'video', uri: previousAsset.sourceUrl }]
@@ -52,18 +68,83 @@ export class RunwayAudiovisualProvider {
     const referenceAudio = [];
 
     let dialogueTrack = null;
-    if (this.dialogueMode === 'locked' && segment.dialogue) {
-      dialogueTrack = await this.generateDialogueTrack({
-        text: segment.dialogue,
-        character,
-      });
-      referenceAudio.push({ type: 'audio', uri: dialogueTrack.url });
+    if (this.dialogueMode === 'locked' && dialogueTurns.length) {
+      if (dialogueTurns.length > 1 || speakerIds.length > 1) {
+        const turnTracks = [];
+        for (const turn of dialogueTurns) {
+          const character = productionScript.characters.find(
+            (item) => item.id === turn.speakerCharacterId,
+          );
+          const track = await this.generateDialogueTrack({
+            text: turn.text,
+            character,
+            projectId,
+            segmentIndex: segment.index,
+            turnIndex: turn.turnIndex,
+            downloadLocal: true,
+          });
+          turnTracks.push({
+            ...track,
+            turnIndex: turn.turnIndex,
+            speakerCharacterId: turn.speakerCharacterId,
+            delivery: turn.delivery,
+            pauseAfterSeconds: turn.pauseAfterSeconds,
+          });
+        }
+
+        dialogueTrack = await this.dialogueComposer.compose({
+          projectId,
+          segmentIndex: segment.index,
+          tracks: turnTracks,
+        });
+        dialogueTrack.speakerMode = 'multi-speaker';
+        dialogueTrack.sourceTracks = turnTracks.map((track) => ({
+          generationId: track.generationId,
+          speakerCharacterId: track.speakerCharacterId,
+          voicePresetId: track.voicePresetId,
+          exactText: track.exactText,
+          localPath: track.localPath,
+        }));
+
+        if (dialogueTrack.durationSeconds > 15.05) {
+          throw new Error(
+            `multi-speaker dialogue master is ${dialogueTrack.durationSeconds}s; locked WAN reference audio must stay within 15 seconds`,
+          );
+        }
+        referenceAudio.push({ type: 'audio', uri: dialogueTrack.dataUri });
+      } else {
+        const character = productionScript.characters.find(
+          (item) => item.id === dialogueTurns[0].speakerCharacterId,
+        ) || primaryCharacter;
+        dialogueTrack = await this.generateDialogueTrack({
+          text: dialogueTurns[0].text,
+          character,
+          projectId,
+          segmentIndex: segment.index,
+          turnIndex: 0,
+          downloadLocal: false,
+        });
+        dialogueTrack.speakerMode = 'single-speaker';
+        dialogueTrack.turns = [{
+          turnIndex: 0,
+          speakerCharacterId: dialogueTurns[0].speakerCharacterId,
+          text: dialogueTurns[0].text,
+          start: 0,
+          end: segment.durationSeconds,
+          duration: segment.durationSeconds,
+          voicePresetId: dialogueTrack.voicePresetId,
+          delivery: dialogueTurns[0].delivery || '',
+        }];
+        referenceAudio.push({ type: 'audio', uri: dialogueTrack.url });
+      }
     }
 
     const promptText = buildAudiovisualPrompt({
       segment,
       productionScript,
-      character,
+      characters,
+      primaryCharacter,
+      dialogueTurns,
       dialogueTrack,
       regeneration,
       previousAsset,
@@ -90,11 +171,18 @@ export class RunwayAudiovisualProvider {
     );
     if (!(await fileExists(localPath))) await this.download(sourceUrl, localPath);
 
+    const multiSpeaker = speakerIds.length > 1;
     return {
       provider: 'runway',
       providerModelId: `runway-${this.model}-audiovisual`,
       type: 'ai-video',
-      audioMode: this.dialogueMode === 'locked' ? 'locked-dialogue-native-mix' : 'native',
+      audioMode: this.dialogueMode === 'locked'
+        ? multiSpeaker
+          ? 'locked-multi-speaker-native-mix'
+          : 'locked-dialogue-native-mix'
+        : multiSpeaker
+          ? 'native-multi-speaker'
+          : 'native',
       model: this.model,
       localPath,
       sourceUrl,
@@ -103,13 +191,23 @@ export class RunwayAudiovisualProvider {
       aspectRatio: '9:16',
       prompt: promptText,
       dialogueTrack,
+      dialogueTurns: dialogueTrack?.turns || dialogueTurns,
+      speakerCharacterIds: speakerIds,
       referenceImageCount: references.length,
       referenceVideoCount: referenceVideos.length,
+      referenceAudioCount: referenceAudio.length,
       previousGenerationId: previousAsset?.generationId || null,
     };
   }
 
-  async generateDialogueTrack({ text, character }) {
+  async generateDialogueTrack({
+    text,
+    character,
+    projectId = 'project',
+    segmentIndex = 0,
+    turnIndex = 0,
+    downloadLocal = false,
+  }) {
     const task = await this.createTask('/text_to_speech', {
       model: this.ttsModel,
       promptText: text,
@@ -128,11 +226,22 @@ export class RunwayAudiovisualProvider {
     const url = firstOutputUrl(completed);
     if (!url) throw new Error('Runway text-to-speech task completed without output');
 
+    let localPath = null;
+    if (downloadLocal) {
+      await mkdir(this.assetDir, { recursive: true });
+      localPath = path.join(
+        this.assetDir,
+        `dialogue-${safe(projectId)}-${segmentIndex}-${turnIndex}-${task.id}.mp3`,
+      );
+      if (!(await fileExists(localPath))) await this.download(url, localPath);
+    }
+
     return {
       provider: 'runway',
       model: this.ttsModel,
       generationId: task.id,
       url,
+      localPath,
       voicePresetId: character?.voice?.presetId || this.defaultVoice,
       exactText: text,
     };
@@ -193,16 +302,41 @@ export class RunwayAudiovisualProvider {
 function buildAudiovisualPrompt({
   segment,
   productionScript,
-  character,
+  characters,
+  primaryCharacter,
+  dialogueTurns,
   dialogueTrack,
   regeneration,
   previousAsset,
 }) {
   const location = productionScript.locations.find((item) => item.id === segment.locationId);
+  const timedTurns = Array.isArray(dialogueTrack?.turns) && dialogueTrack.turns.length
+    ? dialogueTrack.turns
+    : dialogueTurns;
+  const multiSpeaker = new Set(
+    dialogueTurns.map((turn) => turn.speakerCharacterId),
+  ).size > 1;
+  const castLines = characters.length
+    ? characters.map((character) => (
+      `${character.id.toUpperCase()} = ${character.name}. ${character.description}. Physical traits: ${character.physicalTraits}. Exact wardrobe: ${character.wardrobe}. Voice: ${character.voice?.description || ''}; delivery: ${character.voice?.delivery || ''}.`
+    ))
+    : primaryCharacter
+      ? [`${primaryCharacter.id.toUpperCase()} = ${primaryCharacter.name}. ${primaryCharacter.description}. Physical traits: ${primaryCharacter.physicalTraits}. Exact wardrobe: ${primaryCharacter.wardrobe}.`]
+      : [];
+
+  const turnPlan = timedTurns.map((turn, index) => {
+    const start = Number(turn.start);
+    const end = Number(turn.end);
+    const timing = Number.isFinite(start) && Number.isFinite(end)
+      ? `${start.toFixed(2)}-${end.toFixed(2)}s`
+      : `turn ${index + 1}`;
+    return `${timing} ${String(turn.speakerCharacterId).toUpperCase()} says exactly: "${turn.text}"`;
+  });
+
   return [
     'Create a single continuous photorealistic vertical short-form video act with synchronized audiovisual output.',
     `ACT PURPOSE: ${segment.purpose}.`,
-    character ? `CHARACTER: ${character.name}. ${character.description}. Physical traits: ${character.physicalTraits}. Exact wardrobe: ${character.wardrobe}.` : '',
+    castLines.length ? `CAST: ${castLines.join(' | ')}` : '',
     location ? `LOCATION: ${location.name}. ${location.description}. Lighting: ${location.lighting}. Fixed elements: ${location.fixedElements.join(', ')}.` : '',
     `ACTION: ${segment.action}.`,
     `CAMERA: ${segment.camera}.`,
@@ -212,10 +346,16 @@ function buildAudiovisualPrompt({
     segment.editing?.allowDissolves
       ? 'A motivated dissolve is allowed only if explicitly required by the action.'
       : 'Dissolves and crossfades are forbidden.',
-    `EXACT SPOKEN DIALOGUE: "${segment.dialogue}"`,
+    multiSpeaker ? 'MULTI-SPEAKER DIALOGUE BLOCKING:' : 'EXACT SPOKEN DIALOGUE:',
+    ...turnPlan,
+    multiSpeaker
+      ? 'Turn-taking is strict and non-overlapping. During each line, ONLY the named active speaker talks and moves their mouth as speech. Other characters listen/react silently with closed or naturally resting mouths. Never swap speakers, voices, faces, or lines.'
+      : '',
     dialogueTrack
-      ? 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
-      : 'Generate natural synchronized speech using the exact dialogue above. Do not paraphrase, omit, summarize, or add words.',
+      ? multiSpeaker
+        ? 'The supplied audio reference is the exact composed dialogue master containing the named characters in the exact turn order above. Treat it as the timing master. Preserve every word and assign each audible voice to the matching visible character.'
+        : 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
+      : 'Generate natural synchronized speech using the exact dialogue turns above. Do not paraphrase, omit, summarize, add words, swap voices, or create crosstalk.',
     `AMBIENCE: ${segment.ambience}.`,
     segment.soundEffects.length ? `SOUND EFFECTS: ${segment.soundEffects.join('; ')}.` : '',
     segment.music ? `MUSIC: ${segment.music}. Keep it below dialogue.` : '',
@@ -225,6 +365,31 @@ function buildAudiovisualPrompt({
     regeneration?.guidance ? `QC CORRECTION: ${regeneration.guidance}` : '',
     'No on-screen text, captions, logos, watermarks, CGI look, anatomy errors, face morphing, flicker, or unexplained cuts.',
   ].filter(Boolean).join(' ');
+}
+
+function normalizedDialogueTurns(segment, productionScript) {
+  if (Array.isArray(segment.dialogueTurns) && segment.dialogueTurns.length) {
+    return segment.dialogueTurns
+      .filter((turn) => (
+        productionScript.characters.some((character) => character.id === turn.speakerCharacterId)
+        && String(turn.text || '').trim()
+      ))
+      .slice(0, 5);
+  }
+
+  if (!segment.dialogue) return [];
+  const speakerCharacterId = segment.speakerCharacterId
+    || segment.characterIds?.[0]
+    || productionScript.characters[0]?.id;
+  if (!speakerCharacterId) return [];
+
+  return [{
+    turnIndex: 0,
+    speakerCharacterId,
+    text: segment.dialogue,
+    delivery: '',
+    pauseAfterSeconds: 0,
+  }];
 }
 
 function collectImageReferences(segment, storyBible, previousAsset) {
@@ -260,6 +425,10 @@ function firstOutputUrl(task) {
 
 function fingerprint(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 12);
+}
+
+function safe(value) {
+  return String(value || 'project').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 100);
 }
 
 function clamp(value, min, max) {
