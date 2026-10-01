@@ -17,10 +17,15 @@ export class ProductionScriptGenerator {
     this.llm = llm;
   }
 
-  async generate({ topic, audience, durationSeconds }) {
+  async generate({ topic, audience, durationSeconds, creativeBrief = null }) {
     const raw = this.llm?.generateProductionScript
-      ? await this.llm.generateProductionScript({ topic, audience, durationSeconds })
-      : fallbackProductionScript({ topic, audience, durationSeconds });
+      ? await this.llm.generateProductionScript({
+        topic,
+        audience,
+        durationSeconds,
+        creativeBrief,
+      })
+      : fallbackProductionScript({ topic, audience, durationSeconds, creativeBrief });
 
     return normalizeProductionScript(raw, { topic, audience, durationSeconds });
   }
@@ -266,14 +271,16 @@ function normalizeLocations(items, topic) {
   return normalized;
 }
 
-function fallbackProductionScript({ topic, audience, durationSeconds }) {
+function fallbackProductionScript({ topic, audience, durationSeconds, creativeBrief = null }) {
   const duration = Math.max(12, Number(durationSeconds) || 30);
   const segmentCount = Math.max(2, Math.min(4, Math.ceil(duration / 10)));
   const each = Math.min(12, Math.max(5, duration / segmentCount));
 
   return {
     title: topic,
-    synopsis: `A concise photorealistic explainer about ${topic} for ${audience}.`,
+    synopsis: creativeBrief?.angle
+      ? `${creativeBrief.angle} A concise photorealistic explainer about ${topic} for ${audience}.`
+      : `A concise photorealistic explainer about ${topic} for ${audience}.`,
     characters: [{
       id: 'presenter',
       name: 'Presenter',
@@ -310,7 +317,7 @@ function fallbackProductionScript({ topic, audience, durationSeconds }) {
       characterIds: ['presenter'],
       locationId: 'location-main',
       dialogue: index === 0
-        ? `Here is the most important thing to understand about ${topic}.`
+        ? (creativeBrief?.hook || `Here is the most important thing to understand about ${topic}.`)
         : index === segmentCount - 1
           ? `That is why ${topic} matters in practice, not just in theory.`
           : `The key is to connect one concrete mechanism in ${topic} to a result the viewer can recognize.`,
