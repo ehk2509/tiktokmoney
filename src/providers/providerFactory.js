@@ -12,6 +12,7 @@ import { ProviderStatsStore } from '../storage/providerStatsStore.js';
 import { RunwayAudiovisualProvider } from './runwayAudiovisualProvider.js';
 import { OpenAiTranscriptionProvider } from './openAiTranscriptionProvider.js';
 import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
+import { DeepLipSyncQcProvider } from './deepLipSyncQcProvider.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -231,6 +232,43 @@ export function createLipSyncQcProvider(env = process.env) {
     frameWidth: env.LIPSYNC_QC_FRAME_WIDTH ? Number(env.LIPSYNC_QC_FRAME_WIDTH) : undefined,
     maxRegenerations: env.LIPSYNC_QC_MAX_REGENERATIONS
       ? Number(env.LIPSYNC_QC_MAX_REGENERATIONS)
+      : undefined,
+  });
+}
+
+export function createDeepLipSyncQcProvider(env = process.env) {
+  const enabled = env.DEEP_LIPSYNC_ENABLED == null
+    ? Boolean(env.DEEP_LIPSYNC_COMMAND)
+    : isEnabled(env.DEEP_LIPSYNC_ENABLED);
+
+  if (!enabled) return null;
+  if (!env.DEEP_LIPSYNC_COMMAND) {
+    throw new Error('DEEP_LIPSYNC_COMMAND is required when DEEP_LIPSYNC_ENABLED=true');
+  }
+
+  return new DeepLipSyncQcProvider({
+    command: env.DEEP_LIPSYNC_COMMAND,
+    args: env.DEEP_LIPSYNC_ARGS ? JSON.parse(env.DEEP_LIPSYNC_ARGS) : undefined,
+    maxOffsetMs: env.DEEP_LIPSYNC_MAX_OFFSET_MS
+      ? Number(env.DEEP_LIPSYNC_MAX_OFFSET_MS)
+      : undefined,
+    minConfidence: env.DEEP_LIPSYNC_MIN_CONFIDENCE
+      ? Number(env.DEEP_LIPSYNC_MIN_CONFIDENCE)
+      : undefined,
+    minSegmentPassRate: env.DEEP_LIPSYNC_MIN_SEGMENT_PASS_RATE
+      ? Number(env.DEEP_LIPSYNC_MIN_SEGMENT_PASS_RATE)
+      : undefined,
+    minPhonemeAlignment: env.DEEP_LIPSYNC_MIN_PHONEME_ALIGNMENT
+      ? Number(env.DEEP_LIPSYNC_MIN_PHONEME_ALIGNMENT)
+      : undefined,
+    minVisemeAlignment: env.DEEP_LIPSYNC_MIN_VISEME_ALIGNMENT
+      ? Number(env.DEEP_LIPSYNC_MIN_VISEME_ALIGNMENT)
+      : undefined,
+    maxRegenerations: env.DEEP_LIPSYNC_MAX_REGENERATIONS
+      ? Number(env.DEEP_LIPSYNC_MAX_REGENERATIONS)
+      : undefined,
+    timeoutMs: env.DEEP_LIPSYNC_TIMEOUT_MS
+      ? Number(env.DEEP_LIPSYNC_TIMEOUT_MS)
       : undefined,
   });
 }

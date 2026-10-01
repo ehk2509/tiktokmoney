@@ -335,3 +335,36 @@ The current lip-sync gate is a timing-level visual proxy, not phoneme-level meas
 - broad visual timing plausibility
 
 This catches frozen-mouth speech, obvious continued talking during pauses, hidden-speaker failures and unstable facial motion. A future milestone can add a dedicated phoneme/viseme alignment model for frame-accurate lip-sync scoring.
+
+
+## Deep audiovisual synchronization
+
+The visual speech-timing proxy can be supplemented with a dedicated learned A/V synchronization model.
+
+```text
+generated audiovisual act
+  -> independent transcript / word timing
+  -> visual speech-timing QC
+  -> external deep sync evaluator
+       -> A/V offset frames
+       -> A/V offset milliseconds
+       -> synchronization confidence
+       -> per-track/segment stability
+       -> optional phoneme alignment score
+       -> optional viseme alignment score
+  -> regenerate on failure
+```
+
+The Node application executes the evaluator directly with `spawn(..., shell: false)` and expects JSON on stdout. Argument templates support `{video}`, `{transcript}` and `{expected}`, so deployments can use SyncNet or replace it with another evaluator without changing pipeline code.
+
+The repository includes `scripts/syncnet_qc.py`, an optional adapter for `syncnet-python`. The Python package and model weights are deliberately outside the default Node install.
+
+Default deep-sync acceptance:
+
+```text
+absolute A/V offset <= 80 ms
+confidence >= 5
+passing segment/track ratio >= 0.80
+```
+
+If a compatible evaluator supplies normalized `phonemeAlignmentScore` or `visemeAlignmentScore`, the same gate can enforce configured minimums. SyncNet's own result is not presented as phoneme/viseme classification; it remains a frame-level correspondence metric.

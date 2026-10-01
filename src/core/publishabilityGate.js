@@ -69,6 +69,14 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const failedDeepLipSync = scenes.filter((scene) => scene.deepLipSyncQc?.passed === false);
+  if (failedDeepLipSync.length) {
+    blockers.push({
+      code: 'deep-lip-sync',
+      message: `Deep audiovisual synchronization did not pass for scene(s): ${failedDeepLipSync.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   if (subtitles?.enabled && subtitles.layout?.passed === false) {
     blockers.push({
       code: 'subtitle-layout',
