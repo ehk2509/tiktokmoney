@@ -56,9 +56,15 @@ export class DialogueAudioComposer {
         end: round(cursor + duration),
         duration: round(duration),
         voicePresetId: track.voicePresetId,
+        delivery: track.delivery || '',
       });
       cursor += duration;
-      if (index < tracks.length - 1) cursor += this.turnGapSeconds;
+      if (index < tracks.length - 1) {
+        const requestedGap = Number(track.pauseAfterSeconds);
+        cursor += Number.isFinite(requestedGap)
+          ? clamp(requestedGap, 0, 1, this.turnGapSeconds)
+          : this.turnGapSeconds;
+      }
     });
 
     const outputPath = path.join(
