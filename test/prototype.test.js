@@ -52,6 +52,10 @@ import {
   DeepLipSyncQcProvider,
   normalizeDeepLipSyncResult,
 } from '../src/providers/deepLipSyncQcProvider.js';
+import {
+  PhonemeVisemeQcProvider,
+  normalizePhonemeVisemeResult,
+} from '../src/providers/phonemeVisemeQcProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -3009,4 +3013,309 @@ test('publishability gate blocks a scene with failed deep audiovisual sync', () 
 
   assert.equal(result.passed, false);
   assert.ok(result.blockers.some((blocker) => blocker.code === 'deep-lip-sync'));
+});
+
+
+test('phoneme-viseme normalization passes aligned visible speech', () => {
+  const result = normalizePhonemeVisemeResult({
+    phonemeAlignmentScore: 0.84,
+    visemeAlignmentScore: 0.76,
+    coverage: 0.91,
+    evaluatedPhonemes: 42,
+    totalPhonemes: 46,
+    familyAccuracy: {
+      closed: 0.9,
+      narrow: 0.73,
+      rounded: 0.8,
+      wide: 0.77,
+      open: 0.81,
+    },
+    confusion: {
+      'closed->closed': 9,
+      'wide->wide': 7,
+    },
+    evaluator: {
+      name: 'tiktokmoney-mouth-landmark-viseme-v1',
+      version: '1',
+    },
+  }, {
+    minPhonemeAlignment: 0.72,
+    minVisemeAlignment: 0.68,
+    minCoverage: 0.72,
+  });
+
+  assert.equal(result.passed, true);
+  assert.equal(result.phonemeAlignmentScore, 0.84);
+  assert.equal(result.visemeAlignmentScore, 0.76);
+  assert.equal(result.coverage, 0.91);
+  assert.equal(result.evaluator.name, 'tiktokmoney-mouth-landmark-viseme-v1');
+});
+
+test('phoneme-viseme normalization rejects wrong mouth families and low visible-face coverage', () => {
+  const result = normalizePhonemeVisemeResult({
+    phonemeAlignmentScore: 0.48,
+    visemeAlignmentScore: 0.41,
+    coverage: 0.52,
+    evaluatedPhonemes: 21,
+    totalPhonemes: 45,
+    worstMismatches: [
+      {
+        start: 1.2,
+        end: 1.34,
+        phoneme: 'P',
+        viseme: 'PP',
+        expectedFamily: 'closed',
+        observedFamily: 'open',
+        confidence: 0.11,
+      },
+      {
+        start: 2.4,
+        end: 2.61,
+        phoneme: 'OW',
+        viseme: 'oh',
+        expectedFamily: 'rounded',
+        observedFamily: 'wide',
+        confidence: 0.18,
+      },
+    ],
+  }, {
+    minPhonemeAlignment: 0.72,
+    minVisemeAlignment: 0.68,
+    minCoverage: 0.72,
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((issue) => issue.code === 'phoneme-mouth-alignment'));
+  assert.ok(result.issues.some((issue) => issue.code === 'viseme-classification-alignment'));
+  assert.ok(result.issues.some((issue) => issue.code === 'viseme-face-coverage'));
+  assert.match(result.regenerationGuidance, /P\/closed->open/);
+  assert.match(result.regenerationGuidance, /OW\/rounded->wide/);
+});
+
+test('phoneme-viseme provider passes independent word timings to the bundled classifier safely', async () => {
+  const calls = [];
+  const provider = new PhonemeVisemeQcProvider({
+    command: 'python3',
+    args: [
+      'scripts/phoneme_viseme_qc.py',
+      '--video', '{video}',
+      '--transcription-json', '{transcription_json}',
+    ],
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      return {
+        stdout: JSON.stringify({
+          phonemeAlignmentScore: 0.86,
+          visemeAlignmentScore: 0.78,
+          coverage: 0.93,
+          evaluatedPhonemes: 12,
+          totalPhonemes: 13,
+          evaluator: {
+            name: 'tiktokmoney-mouth-landmark-viseme-v1',
+            version: '1',
+          },
+        }),
+      };
+    },
+  });
+
+  const result = await provider.evaluate(
+    { localPath: '/tmp/generated act.mp4' },
+    {
+      expectedText: 'Put on your shoes.',
+      transcription: {
+        text: 'Put on your shoes.',
+        language: 'en',
+        duration: 2.2,
+        words: [
+          { word: 'Put', start: 0.1, end: 0.45 },
+          { word: 'on', start: 0.45, end: 0.72 },
+          { word: 'your', start: 0.72, end: 1.05 },
+          { word: 'shoes.', start: 1.05, end: 1.55 },
+        ],
+      },
+    },
+  );
+
+  assert.equal(result.passed, true);
+  assert.equal(calls[0].command, 'python3');
+  assert.equal(calls[0].args[0], 'scripts/phoneme_viseme_qc.py');
+  assert.equal(calls[0].args[2], '/tmp/generated act.mp4');
+  const payload = JSON.parse(calls[0].args[4]);
+  assert.equal(payload.words.length, 4);
+  assert.equal(payload.words[0].word, 'Put');
+  assert.equal(calls[0].options.timeoutMs, 120000);
+});
+
+test('audiovisual pipeline regenerates a phoneme-viseme mismatch and records the accepted score', async () => {
+  const calls = [];
+  let visemeAttempt = 0;
+
+  const audiovisual = {
+    generateSegment: async ({ segment, regeneration }) => {
+      calls.push({ segment: segment.index, regeneration });
+      return {
+        type: 'ai-video',
+        localPath: `/fake/viseme-${segment.index}-${regeneration?.attempt || 0}.mp4`,
+        generationId: `viseme-${segment.index}-${regeneration?.attempt || 0}`,
+        prompt: segment.dialogue,
+      };
+    },
+  };
+  const dialogueQc = {
+    maxRegenerations: 0,
+    evaluate: async (_asset, { expectedText }) => ({
+      passed: true,
+      issues: [],
+      regenerationGuidance: '',
+      transcription: {
+        text: expectedText,
+        duration: 2.5,
+        words: [
+          { word: 'Put', start: 0.1, end: 0.45 },
+          { word: 'on', start: 0.45, end: 0.75 },
+          { word: 'your', start: 0.75, end: 1.1 },
+          { word: 'shoes.', start: 1.1, end: 1.65 },
+        ],
+      },
+    }),
+  };
+  const phonemeVisemeQc = {
+    maxRegenerations: 1,
+    evaluate: async () => {
+      visemeAttempt += 1;
+      if (visemeAttempt === 1) {
+        return {
+          passed: false,
+          phonemeAlignmentScore: 0.48,
+          visemeAlignmentScore: 0.42,
+          coverage: 0.94,
+          issues: [{
+            code: 'viseme-classification-alignment',
+            severity: 'high',
+            evidence: 'rounded vowel was classified as wide mouth',
+          }],
+          regenerationGuidance: 'At 1.2s make the lips visibly rounded for the spoken vowel.',
+        };
+      }
+      return {
+        passed: true,
+        phonemeAlignmentScore: 0.82,
+        visemeAlignmentScore: 0.74,
+        coverage: 0.95,
+        issues: [],
+        regenerationGuidance: '',
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: null,
+    dialogueQc,
+    lipSyncQc: null,
+    deepLipSyncQc: null,
+    phonemeVisemeQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'visible articulation',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.ok(calls.some((call) => call.regeneration?.guidance?.includes('visibly rounded')));
+  assert.ok(project.scenes.every((scene) => scene.phonemeVisemeQc?.passed));
+});
+
+test('audiovisual pipeline returns PHONEME_VISEME_QC_FAILED when articulation never passes', async () => {
+  const audiovisual = {
+    generateSegment: async ({ segment }) => ({
+      type: 'ai-video',
+      localPath: `/fake/viseme-fail-${segment.index}.mp4`,
+      generationId: `viseme-fail-${segment.index}`,
+      prompt: segment.dialogue,
+    }),
+  };
+  const dialogueQc = {
+    maxRegenerations: 0,
+    evaluate: async (_asset, { expectedText }) => ({
+      passed: true,
+      issues: [],
+      regenerationGuidance: '',
+      transcription: {
+        text: expectedText,
+        duration: 2,
+        words: [
+          { word: 'Exact', start: 0.1, end: 0.6 },
+          { word: 'speech.', start: 0.6, end: 1.2 },
+        ],
+      },
+    }),
+  };
+  const phonemeVisemeQc = {
+    maxRegenerations: 0,
+    evaluate: async () => ({
+      passed: false,
+      phonemeAlignmentScore: 0.31,
+      visemeAlignmentScore: 0.29,
+      coverage: 0.88,
+      issues: [{
+        code: 'phoneme-mouth-alignment',
+        severity: 'critical',
+        evidence: 'mouth shapes do not follow expected speech units',
+      }],
+      regenerationGuidance: 'Match visible mouth shapes to the exact spoken sounds.',
+    }),
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    dialogueQc,
+    phonemeVisemeQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'phoneme viseme failure',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'PHONEME_VISEME_QC_FAILED');
+  assert.match(project.error, /failed QC/i);
+});
+
+test('publishability gate blocks a scene with failed phoneme-viseme alignment', () => {
+  const result = evaluateAudiovisualPublishability({
+    productionScript: {
+      fullDialogue: 'This is real spoken dialogue.',
+      segments: [
+        { index: 0, locationId: 'room', editing: { allowInternalCuts: false } },
+      ],
+    },
+    scenes: [{
+      index: 0,
+      asset: { localPath: '/fake/act.mp4' },
+      visualQcHistory: [],
+      phonemeVisemeQc: {
+        passed: false,
+        phonemeAlignmentScore: 0.4,
+        visemeAlignmentScore: 0.35,
+      },
+    }],
+    subtitles: {
+      enabled: true,
+      layout: { passed: true, violations: [] },
+    },
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.blockers.some((blocker) => blocker.code === 'phoneme-viseme'));
 });
