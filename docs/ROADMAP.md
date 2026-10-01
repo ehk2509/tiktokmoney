@@ -66,8 +66,10 @@
 - [ ] Pluggable trend ingestion
 - [ ] Velocity/acceleration history
 - [ ] Topic clustering and deduplication
+- [x] Creative candidate diversity + weighted ranking
+- [x] Pre-generation creative quality/spend gate
 - [ ] Research packets with claim/source provenance
-- [ ] Idea tournament and independent judge
+- [x] Idea tournament and independent judge
 
 ## M3 - Publishing + analytics
 
