@@ -19,9 +19,11 @@ export class AudiovisualPipeline {
     speakerTurnQc = null,
     subtitleConfig = null,
     creativeTournament = null,
+    trendIntelligence = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
     this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
+    this.trendIntelligence = trendIntelligence;
     this.audiovisual = audiovisual;
     this.renderer = renderer;
     this.store = store;
@@ -41,10 +43,19 @@ export class AudiovisualPipeline {
 
     const id = `vid_${crypto.randomUUID()}`;
     const normalizedTopic = topic.trim();
+    let researchPacket = null;
+    if (this.trendIntelligence?.research) {
+      try {
+        researchPacket = await this.trendIntelligence.research(normalizedTopic);
+      } catch {
+        researchPacket = null;
+      }
+    }
     const tournament = await this.creativeTournament.run({
       topic: normalizedTopic,
       audience,
       durationSeconds,
+      researchPacket,
     });
 
     const project = {
@@ -54,6 +65,7 @@ export class AudiovisualPipeline {
       topic: normalizedTopic,
       audience,
       createdAt: new Date().toISOString(),
+      researchPacket,
       creativeTournament: tournament,
       creativeBrief: tournament.winner || null,
       productionScript: null,
@@ -76,6 +88,7 @@ export class AudiovisualPipeline {
       audience,
       durationSeconds,
       creativeBrief: tournament.winner || null,
+      researchPacket,
     });
     let storyBible = productionScriptToStoryBible(productionScript);
     project.productionScript = productionScript;
