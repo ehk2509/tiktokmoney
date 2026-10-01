@@ -53,7 +53,9 @@
 - [x] Publishability gate for script, scene, subtitle and audio failures
 - [x] Audio loudness / clipping / silence QC
 - [x] Visual speech-timing / lip-sync proxy QC
-- [ ] Phoneme / viseme-level lip-sync verification
+- [x] Learned frame-level deep A/V sync gate (SyncNet-class)
+- [x] Pluggable phoneme / viseme score gates when evaluator supplies them
+- [ ] Bundled dedicated phoneme / viseme classifier
 - [ ] Multi-speaker dialogue in one act
 
 ## M2 - Trend intelligence
