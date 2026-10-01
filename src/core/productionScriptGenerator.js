@@ -1,3 +1,17 @@
+const RUNWAY_VOICE_PRESETS = [
+  'Maya', 'Arjun', 'Serene', 'Bernard', 'Billy', 'Mark', 'Clint', 'Mabel',
+  'Chad', 'Leslie', 'Eleanor', 'Elias', 'Elliot', 'Grungle', 'Brodie',
+  'Sandra', 'Kirk', 'Kylie', 'Lara', 'Lisa', 'Malachi', 'Marlene', 'Martin',
+  'Miriam', 'Monster', 'Paula', 'Pip', 'Rusty', 'Ragnar', 'Xylar', 'Maggie',
+  'Jack', 'Katie', 'Noah', 'James', 'Rina', 'Ella', 'Mariah', 'Frank',
+  'Claudia', 'Niki', 'Vincent', 'Kendrick', 'Myrna', 'Tom', 'Wanda',
+  'Benjamin', 'Kiana', 'Rachel',
+];
+const RUNWAY_VOICE_BY_LOWER = new Map(
+  RUNWAY_VOICE_PRESETS.map((preset) => [preset.toLowerCase(), preset]),
+);
+const FALLBACK_VOICES = ['Bernard', 'Maya', 'Arjun', 'Serene', 'Eleanor', 'Vincent'];
+
 export class ProductionScriptGenerator {
   constructor({ llm }) {
     this.llm = llm;
@@ -52,15 +66,27 @@ function normalizeProductionScript(value, context) {
   let cursor = 0;
   const segments = rawSegments.slice(0, 8).map((segment, index) => {
     const duration = clamp(Number(segment.durationSeconds) || 8, 4, 15);
-    const speakerCharacterId = characterIds.has(safeId(segment.speakerCharacterId))
+    const legacySpeakerId = characterIds.has(safeId(segment.speakerCharacterId))
       ? safeId(segment.speakerCharacterId)
       : null;
-    const boundCharacters = Array.isArray(segment.characterIds)
-      ? segment.characterIds.map(safeId).filter((id) => characterIds.has(id)).slice(0, 3)
-      : [];
+    const dialogueTurns = normalizeDialogueTurns(segment, {
+      characterIds,
+      fallbackSpeakerId: legacySpeakerId || characters[0]?.id || null,
+    });
+    const turnSpeakerIds = unique(
+      dialogueTurns.map((turn) => turn.speakerCharacterId).filter(Boolean),
+    );
+    const boundCharacters = unique([
+      ...turnSpeakerIds,
+      ...(Array.isArray(segment.characterIds)
+        ? segment.characterIds.map(safeId).filter((id) => characterIds.has(id))
+        : []),
+    ]).slice(0, 3);
+    const speakerCharacterId = dialogueTurns[0]?.speakerCharacterId || legacySpeakerId;
     if (speakerCharacterId && !boundCharacters.includes(speakerCharacterId)) {
       boundCharacters.unshift(speakerCharacterId);
     }
+    const dialogue = dialogueTurns.map((turn) => turn.text).filter(Boolean).join(' ').trim();
 
     const normalized = {
       index,
@@ -69,11 +95,13 @@ function normalizeProductionScript(value, context) {
       durationSeconds: round(duration),
       purpose: clean(segment.purpose || (index === 0 ? 'hook' : 'explain'), 80),
       speakerCharacterId,
+      speakerMode: turnSpeakerIds.length > 1 ? 'multi-speaker' : 'single-speaker',
+      dialogueTurns,
       characterIds: boundCharacters,
       locationId: locationIds.has(safeId(segment.locationId))
         ? safeId(segment.locationId)
         : locations[0].id,
-      dialogue: clean(segment.dialogue || '', 1400),
+      dialogue,
       action: clean(segment.action || '', 1000),
       camera: clean(segment.camera || '', 700),
       ambience: clean(segment.ambience || '', 500),
@@ -92,7 +120,7 @@ function normalizeProductionScript(value, context) {
     return normalized;
   });
 
-  if (!segments.some((segment) => segment.dialogue)) {
+  if (!segments.some((segment) => segment.dialogueTurns.length)) {
     throw new Error('production script must contain spoken dialogue');
   }
 
@@ -121,21 +149,80 @@ function normalizeProductionScript(value, context) {
   };
 }
 
+function normalizeDialogueTurns(segment, {
+  characterIds,
+  fallbackSpeakerId,
+}) {
+  const rawTurns = Array.isArray(segment.dialogueTurns)
+    ? segment.dialogueTurns
+    : [];
+
+  const normalized = rawTurns
+    .slice(0, 5)
+    .map((turn, index) => {
+      const candidate = safeId(turn?.speakerCharacterId || turn?.speakerId || '');
+      const speakerCharacterId = characterIds.has(candidate)
+        ? candidate
+        : index === 0 && fallbackSpeakerId
+          ? fallbackSpeakerId
+          : null;
+      const text = clean(turn?.text || turn?.dialogue || '', 650);
+      if (!speakerCharacterId || !text) return null;
+      return {
+        turnIndex: index,
+        speakerCharacterId,
+        text,
+        delivery: clean(turn?.delivery || '', 220),
+        pauseAfterSeconds: clamp(
+          Number(turn?.pauseAfterSeconds ?? turn?.pauseAfter ?? 0.16),
+          0,
+          0.8,
+        ),
+      };
+    })
+    .filter(Boolean);
+
+  if (normalized.length) return normalized;
+
+  const legacyText = clean(segment.dialogue || '', 1400);
+  if (!legacyText || !fallbackSpeakerId) return [];
+
+  return [{
+    turnIndex: 0,
+    speakerCharacterId: fallbackSpeakerId,
+    text: legacyText,
+    delivery: '',
+    pauseAfterSeconds: 0,
+  }];
+}
+
 function normalizeCharacters(items) {
   const list = Array.isArray(items) ? items : [];
-  const normalized = list.slice(0, 4).map((character, index) => ({
-    id: safeId(character.id || `character-${index + 1}`),
-    name: clean(character.name || `Character ${index + 1}`, 100),
-    description: clean(character.description || '', 600),
-    physicalTraits: clean(character.physicalTraits || '', 500),
-    wardrobe: clean(character.wardrobe || '', 400),
-    voice: {
-      presetId: clean(character.voice?.presetId || 'Bernard', 80),
-      description: clean(character.voice?.description || 'natural conversational voice', 250),
-      delivery: clean(character.voice?.delivery || 'clear, warm, realistic', 250),
-      languageCode: clean(character.voice?.languageCode || 'en', 12),
-    },
-  })).filter((character) => character.description);
+  const usedVoices = new Set();
+  const normalized = list.slice(0, 4).map((character, index) => {
+    const requested = clean(character.voice?.presetId || '', 80);
+    const canonical = RUNWAY_VOICE_BY_LOWER.get(requested.toLowerCase()) || null;
+    let presetId = canonical;
+    if (!presetId || usedVoices.has(presetId)) {
+      presetId = FALLBACK_VOICES.find((preset) => !usedVoices.has(preset))
+        || FALLBACK_VOICES[index % FALLBACK_VOICES.length];
+    }
+    usedVoices.add(presetId);
+
+    return {
+      id: safeId(character.id || `character-${index + 1}`),
+      name: clean(character.name || `Character ${index + 1}`, 100),
+      description: clean(character.description || '', 600),
+      physicalTraits: clean(character.physicalTraits || '', 500),
+      wardrobe: clean(character.wardrobe || '', 400),
+      voice: {
+        presetId,
+        description: clean(character.voice?.description || 'natural conversational voice', 250),
+        delivery: clean(character.voice?.delivery || 'clear, warm, realistic', 250),
+        languageCode: clean(character.voice?.languageCode || 'en', 12),
+      },
+    };
+  }).filter((character) => character.description);
 
   if (!normalized.length) {
     normalized.push({
@@ -249,6 +336,10 @@ function safeId(value) {
 
 function clean(value, max) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function unique(items) {
+  return [...new Set(items.filter(Boolean))];
 }
 
 function clamp(value, min, max) {

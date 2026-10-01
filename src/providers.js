@@ -26,6 +26,16 @@ export class TemplateLlmProvider {
       speakerCharacterId: 'presenter',
       characterIds: ['presenter'],
       locationId: 'location-main',
+      dialogueTurns: [{
+        speakerCharacterId: 'presenter',
+        text: index === 0
+          ? `Most people miss the most useful part of ${topic}. Here is the part that actually matters.`
+          : index === segmentCount - 1
+            ? `That is the practical reason ${topic} matters, and the detail worth remembering.`
+            : `One concrete mechanism behind ${topic} explains why the result is different from what the headline alone suggests.`,
+        delivery: 'confident and conversational',
+        pauseAfterSeconds: 0,
+      }],
       dialogue: index === 0
         ? `Most people miss the most useful part of ${topic}. Here is the part that actually matters.`
         : index === segmentCount - 1

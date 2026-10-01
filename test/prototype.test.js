@@ -56,6 +56,11 @@ import {
   PhonemeVisemeQcProvider,
   normalizePhonemeVisemeResult,
 } from '../src/providers/phonemeVisemeQcProvider.js';
+import { DialogueAudioComposer } from '../src/services/dialogueAudioComposer.js';
+import {
+  OpenRouterSpeakerTurnQcProvider,
+  buildSpeakerSamples,
+} from '../src/providers/openRouterSpeakerTurnQcProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -3318,4 +3323,488 @@ test('publishability gate blocks a scene with failed phoneme-viseme alignment', 
 
   assert.equal(result.passed, false);
   assert.ok(result.blockers.some((blocker) => blocker.code === 'phoneme-viseme'));
+});
+
+
+test('production screenplay normalizes multi-speaker dialogue turns and distinct valid voices', async () => {
+  const generator = new ProductionScriptGenerator({
+    llm: {
+      generateProductionScript: async () => ({
+        title: 'Two-person explanation',
+        characters: [
+          {
+            id: 'Alex',
+            name: 'Alex',
+            description: 'A 34-year-old trainer.',
+            physicalTraits: 'Short dark hair.',
+            wardrobe: 'Black training shirt.',
+            voice: { presetId: 'Bernard', languageCode: 'en' },
+          },
+          {
+            id: 'Maya',
+            name: 'Maya',
+            description: 'A 32-year-old physiotherapist.',
+            physicalTraits: 'Long dark hair.',
+            wardrobe: 'Blue athletic jacket.',
+            voice: { presetId: 'Bernard', languageCode: 'en' },
+          },
+        ],
+        locations: [{
+          id: 'gym',
+          name: 'Gym',
+          description: 'A realistic neighborhood gym.',
+          lighting: 'Soft daylight.',
+          fixedElements: ['dumbbell rack'],
+        }],
+        segments: [{
+          durationSeconds: 10,
+          purpose: 'explain',
+          characterIds: ['Alex', 'Maya'],
+          locationId: 'gym',
+          dialogueTurns: [
+            {
+              speakerCharacterId: 'Alex',
+              text: 'I thought starting in my thirties was too late.',
+              delivery: 'skeptical',
+              pauseAfterSeconds: 0.2,
+            },
+            {
+              speakerCharacterId: 'Maya',
+              text: 'It is not. Consistency matters much more than the starting age.',
+              delivery: 'calm and reassuring',
+              pauseAfterSeconds: 0,
+            },
+          ],
+          action: 'Alex and Maya face each other naturally.',
+          camera: 'Two-shot at eye level.',
+          ambience: 'Quiet gym ambience.',
+          soundEffects: [],
+          music: '',
+        }],
+      }),
+    },
+  });
+
+  const script = await generator.generate({
+    topic: 'training in your thirties',
+    audience: 'adults',
+    durationSeconds: 10,
+  });
+
+  const segment = script.segments[0];
+  assert.equal(segment.speakerMode, 'multi-speaker');
+  assert.equal(segment.dialogueTurns.length, 2);
+  assert.equal(segment.dialogueTurns[0].speakerCharacterId, 'alex');
+  assert.equal(segment.dialogueTurns[1].speakerCharacterId, 'maya');
+  assert.deepEqual(segment.characterIds, ['alex', 'maya']);
+  assert.match(segment.dialogue, /too late.*Consistency matters/s);
+  assert.equal(script.characters[0].voice.presetId, 'Bernard');
+  assert.notEqual(script.characters[1].voice.presetId, 'Bernard');
+  assert.equal(script.characters[1].voice.presetId, 'Maya');
+});
+
+test('dialogue audio composer creates a timed master with per-turn pauses', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-dialogue-master-'));
+  try {
+    const first = path.join(dir, 'first.mp3');
+    const second = path.join(dir, 'second.mp3');
+    await writeFile(first, 'first');
+    await writeFile(second, 'second');
+
+    const commands = [];
+    const composer = new DialogueAudioComposer({
+      assetDir: dir,
+      turnGapSeconds: 0.16,
+      probeDuration: async (_bin, localPath) => localPath === first ? 1.0 : 1.5,
+      runCommand: async (command, args) => {
+        commands.push({ command, args });
+        await writeFile(args.at(-1), 'master-audio');
+      },
+    });
+
+    const result = await composer.compose({
+      projectId: 'vid-dialogue',
+      segmentIndex: 2,
+      tracks: [
+        {
+          turnIndex: 0,
+          speakerCharacterId: 'alex',
+          exactText: 'First line.',
+          voicePresetId: 'Bernard',
+          localPath: first,
+          pauseAfterSeconds: 0.25,
+        },
+        {
+          turnIndex: 1,
+          speakerCharacterId: 'maya',
+          exactText: 'Second line.',
+          voicePresetId: 'Maya',
+          localPath: second,
+          pauseAfterSeconds: 0,
+        },
+      ],
+    });
+
+    assert.equal(result.turns[0].start, 0);
+    assert.equal(result.turns[0].end, 1);
+    assert.equal(result.turns[1].start, 1.25);
+    assert.equal(result.turns[1].end, 2.75);
+    assert.equal(result.durationSeconds, 2.75);
+    assert.match(result.dataUri, /^data:audio\/mpeg;base64,/);
+    assert.equal(commands.length, 1);
+    assert.match(commands[0].args.join(' '), /adelay=1250\|1250/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Runway audiovisual provider composes distinct speaker voices into one WAN dialogue master', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-multi-speaker-runway-'));
+  const requests = [];
+  let ttsIndex = 0;
+  let composedTracks = null;
+
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      dialogueComposer: {
+        compose: async ({ tracks }) => {
+          composedTracks = tracks;
+          return {
+            provider: 'local-ffmpeg',
+            type: 'dialogue-master',
+            localPath: path.join(dir, 'master.mp3'),
+            dataUri: 'data:audio/mpeg;base64,TUFTVEVS',
+            durationSeconds: 5.4,
+            turns: [
+              {
+                turnIndex: 0,
+                speakerCharacterId: 'alex',
+                text: 'Is starting now too late?',
+                start: 0,
+                end: 2.1,
+                duration: 2.1,
+                voicePresetId: 'Bernard',
+              },
+              {
+                turnIndex: 1,
+                speakerCharacterId: 'maya',
+                text: 'No. Starting consistently matters more.',
+                start: 2.3,
+                end: 5.4,
+                duration: 3.1,
+                voicePresetId: 'Maya',
+              },
+            ],
+          };
+        },
+      },
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target.endsWith('/text_to_speech') && options.method === 'POST') {
+          ttsIndex += 1;
+          return jsonResponse({ id: `tts-${ttsIndex}` });
+        }
+        if (target.endsWith('/tasks/tts-1')) {
+          return jsonResponse({ id: 'tts-1', status: 'SUCCEEDED', output: ['https://cdn.example/alex.mp3'] });
+        }
+        if (target.endsWith('/tasks/tts-2')) {
+          return jsonResponse({ id: 'tts-2', status: 'SUCCEEDED', output: ['https://cdn.example/maya.mp3'] });
+        }
+        if (target === 'https://cdn.example/alex.mp3' || target === 'https://cdn.example/maya.mp3') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('voice').buffer,
+          };
+        }
+        if (target.endsWith('/text_to_video') && options.method === 'POST') {
+          assert.equal(body.referenceAudio.length, 1);
+          assert.equal(body.referenceAudio[0].uri, 'data:audio/mpeg;base64,TUFTVEVS');
+          assert.match(body.promptText, /MULTI-SPEAKER DIALOGUE BLOCKING/);
+          assert.match(body.promptText, /ALEX says exactly/);
+          assert.match(body.promptText, /MAYA says exactly/);
+          assert.match(body.promptText, /ONLY the named active speaker talks/i);
+          return jsonResponse({ id: 'video-task' });
+        }
+        if (target.endsWith('/tasks/video-task')) {
+          return jsonResponse({ id: 'video-task', status: 'SUCCEEDED', output: ['https://cdn.example/dialogue.mp4'] });
+        }
+        if (target === 'https://cdn.example/dialogue.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const productionScript = {
+      characters: [
+        {
+          id: 'alex', name: 'Alex', description: 'adult trainer',
+          physicalTraits: 'short dark hair', wardrobe: 'black shirt',
+          voice: { presetId: 'Bernard', description: 'warm male voice', delivery: 'natural', languageCode: 'en' },
+        },
+        {
+          id: 'maya', name: 'Maya', description: 'adult physiotherapist',
+          physicalTraits: 'long dark hair', wardrobe: 'blue jacket',
+          voice: { presetId: 'Maya', description: 'clear female voice', delivery: 'calm', languageCode: 'en' },
+        },
+      ],
+      locations: [{
+        id: 'gym', name: 'Gym', description: 'real gym', lighting: 'daylight', fixedElements: ['rack'],
+      }],
+      visualStyle: { description: 'photorealistic', cameraRules: 'natural', lightingRules: 'stable' },
+      audioDirection: { mix: 'clear dialogue', musicPolicy: 'music below dialogue' },
+    };
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 8,
+      speakerCharacterId: 'alex',
+      speakerMode: 'multi-speaker',
+      characterIds: ['alex', 'maya'],
+      locationId: 'gym',
+      dialogue: 'Is starting now too late? No. Starting consistently matters more.',
+      dialogueTurns: [
+        {
+          turnIndex: 0,
+          speakerCharacterId: 'alex',
+          text: 'Is starting now too late?',
+          delivery: 'skeptical',
+          pauseAfterSeconds: 0.2,
+        },
+        {
+          turnIndex: 1,
+          speakerCharacterId: 'maya',
+          text: 'No. Starting consistently matters more.',
+          delivery: 'reassuring',
+          pauseAfterSeconds: 0,
+        },
+      ],
+      action: 'Alex asks Maya a question; Maya answers while Alex listens.',
+      camera: 'Natural two-shot.',
+      ambience: 'Quiet gym.',
+      soundEffects: [],
+      music: '',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript,
+      projectId: 'multi',
+    });
+
+    const ttsRequests = requests.filter((request) => request.target.endsWith('/text_to_speech'));
+    assert.equal(ttsRequests.length, 2);
+    assert.equal(ttsRequests[0].body.voice.presetId, 'Bernard');
+    assert.equal(ttsRequests[1].body.voice.presetId, 'Maya');
+    assert.equal(composedTracks.length, 2);
+    assert.equal(composedTracks[0].speakerCharacterId, 'alex');
+    assert.equal(composedTracks[1].speakerCharacterId, 'maya');
+    assert.equal(asset.audioMode, 'locked-multi-speaker-native-mix');
+    assert.equal(asset.dialogueTrack.turns.length, 2);
+    assert.deepEqual(asset.speakerCharacterIds, ['alex', 'maya']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('speaker-turn QC samples each active speaker and accepts clear turn taking', async () => {
+  const sampled = [];
+  let requestBody = null;
+  const provider = new OpenRouterSpeakerTurnQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    threshold: 82,
+    frameSampler: {
+      sampleAt: async (_path, timestamps) => {
+        sampled.push(...timestamps);
+        return timestamps.map((timestamp, index) => ({
+          index,
+          timestamp,
+          dataUrl: `data:image/jpeg;base64,SPEAKER${index}`,
+        }));
+      },
+    },
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              score: 93,
+              scores: {
+                speakerAttribution: 96,
+                activeSpeakerMouthMotion: 92,
+                listenerStillness: 91,
+                castIdentityStability: 94,
+                turnTakingClarity: 93,
+              },
+              issues: [],
+              summary: 'Each character speaks only during their assigned turn.',
+              regenerationGuidance: '',
+            }),
+          },
+        }],
+      });
+    },
+  });
+
+  const turns = [
+    { turnIndex: 0, speakerCharacterId: 'alex', text: 'Question?', start: 0, end: 1.4 },
+    { turnIndex: 1, speakerCharacterId: 'maya', text: 'Answer.', start: 1.6, end: 3.2 },
+  ];
+  const result = await provider.evaluate(
+    { localPath: '/fake/dialogue.mp4' },
+    {
+      dialogueTurns: turns,
+      characters: [
+        { id: 'alex', name: 'Alex', description: 'trainer', physicalTraits: 'dark hair', wardrobe: 'black shirt' },
+        { id: 'maya', name: 'Maya', description: 'physio', physicalTraits: 'long hair', wardrobe: 'blue jacket' },
+      ],
+    },
+  );
+
+  assert.equal(result.passed, true);
+  assert.equal(result.score, 93);
+  assert.ok(sampled.length >= 4);
+  const userContent = requestBody.messages[1].content;
+  assert.ok(userContent.some((part) => part.type === 'text' && /ACTIVE SPEAKER alex/.test(part.text)));
+  assert.ok(userContent.some((part) => part.type === 'text' && /ACTIVE SPEAKER maya/.test(part.text)));
+  assert.ok(buildSpeakerSamples(turns).every((sample) => ['alex', 'maya'].includes(sample.speakerCharacterId)));
+});
+
+test('audiovisual pipeline regenerates when the wrong character speaks a dialogue turn', async () => {
+  const generationCalls = [];
+  let speakerAttempt = 0;
+  const llm = {
+    generateProductionScript: async () => ({
+      title: 'Dialogue test',
+      characters: [
+        {
+          id: 'alex', name: 'Alex', description: 'trainer', physicalTraits: 'dark hair',
+          wardrobe: 'black shirt', voice: { presetId: 'Bernard', languageCode: 'en' },
+        },
+        {
+          id: 'maya', name: 'Maya', description: 'physio', physicalTraits: 'long hair',
+          wardrobe: 'blue jacket', voice: { presetId: 'Maya', languageCode: 'en' },
+        },
+      ],
+      locations: [{
+        id: 'room', name: 'Room', description: 'real room', lighting: 'daylight', fixedElements: ['table'],
+      }],
+      segments: [{
+        durationSeconds: 8,
+        purpose: 'hook',
+        characterIds: ['alex', 'maya'],
+        locationId: 'room',
+        dialogueTurns: [
+          { speakerCharacterId: 'alex', text: 'Did you know this?', pauseAfterSeconds: 0.2 },
+          { speakerCharacterId: 'maya', text: 'Yes, and here is why.', pauseAfterSeconds: 0 },
+        ],
+        action: 'Alex asks; Maya answers.',
+        camera: 'Two-shot.',
+        ambience: 'Room tone.',
+        soundEffects: [],
+        music: '',
+      }],
+    }),
+  };
+  const audiovisual = {
+    generateSegment: async ({ segment, regeneration }) => {
+      generationCalls.push(regeneration);
+      return {
+        type: 'ai-video',
+        localPath: `/fake/speaker-${regeneration?.attempt || 0}.mp4`,
+        generationId: `speaker-${regeneration?.attempt || 0}`,
+        prompt: segment.dialogue,
+        dialogueTrack: {
+          turns: [
+            { speakerCharacterId: 'alex', text: 'Did you know this?', start: 0, end: 1.2 },
+            { speakerCharacterId: 'maya', text: 'Yes, and here is why.', start: 1.4, end: 2.9 },
+          ],
+        },
+      };
+    },
+  };
+  const speakerTurnQc = {
+    maxRegenerations: 1,
+    evaluate: async () => {
+      speakerAttempt += 1;
+      if (speakerAttempt === 1) {
+        return {
+          passed: false,
+          score: 48,
+          issues: [{
+            code: 'wrong-speaker',
+            severity: 'high',
+            evidence: 'Alex visibly speaks Maya line.',
+          }],
+          regenerationGuidance: 'Maya must visibly speak the second line while Alex listens silently.',
+        };
+      }
+      return {
+        passed: true,
+        score: 93,
+        issues: [],
+        regenerationGuidance: '',
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm,
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    speakerTurnQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'dialogue test',
+    durationSeconds: 8,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(generationCalls.length, 2);
+  assert.match(generationCalls[1].guidance, /Maya must visibly speak/i);
+  assert.equal(project.scenes[0].speakerTurnQc.passed, true);
+});
+
+test('publishability gate blocks failed multi-speaker attribution', () => {
+  const result = evaluateAudiovisualPublishability({
+    productionScript: {
+      fullDialogue: 'Question. Answer.',
+      segments: [{ index: 0, locationId: 'room', editing: { allowInternalCuts: false } }],
+    },
+    scenes: [{
+      index: 0,
+      asset: { localPath: '/fake/dialogue.mp4' },
+      visualQcHistory: [],
+      speakerTurnQc: {
+        passed: false,
+        score: 45,
+      },
+    }],
+    subtitles: {
+      enabled: true,
+      layout: { passed: true, violations: [] },
+    },
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.blockers.some((blocker) => blocker.code === 'speaker-turn'));
 });

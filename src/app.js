@@ -15,6 +15,7 @@ import {
   createLipSyncQcProvider,
   createDeepLipSyncQcProvider,
   createPhonemeVisemeQcProvider,
+  createSpeakerTurnQcProvider,
 } from './providers/providerFactory.js';
 
 export function createApp(overrides = {}) {
@@ -45,6 +46,9 @@ export function createApp(overrides = {}) {
       : dialogueQc
         ? createPhonemeVisemeQcProvider()
         : null;
+    const speakerTurnQc = Object.prototype.hasOwnProperty.call(overrides, 'speakerTurnQc')
+      ? overrides.speakerTurnQc
+      : createSpeakerTurnQcProvider();
 
     pipeline = new AudiovisualPipeline({
       llm,
@@ -57,6 +61,7 @@ export function createApp(overrides = {}) {
       lipSyncQc,
       deepLipSyncQc,
       phonemeVisemeQc,
+      speakerTurnQc,
       subtitleConfig: overrides.subtitleConfig,
     });
   } else {

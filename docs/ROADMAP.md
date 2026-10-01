@@ -56,7 +56,10 @@
 - [x] Learned frame-level deep A/V sync gate (SyncNet-class)
 - [x] Pluggable phoneme / viseme score gates when evaluator supplies them
 - [x] Bundled local phoneme / viseme mouth-shape classifier
-- [ ] Multi-speaker dialogue in one act
+- [x] Multi-speaker dialogue in one act
+- [x] Stable per-character Runway voice assignment
+- [x] Timed composed dialogue master
+- [x] Speaker attribution / turn-taking QC
 
 ## M2 - Trend intelligence
 

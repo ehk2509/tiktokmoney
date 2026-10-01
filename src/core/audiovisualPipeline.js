@@ -15,6 +15,7 @@ export class AudiovisualPipeline {
     lipSyncQc = null,
     deepLipSyncQc = null,
     phonemeVisemeQc = null,
+    speakerTurnQc = null,
     subtitleConfig = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
@@ -27,6 +28,7 @@ export class AudiovisualPipeline {
     this.lipSyncQc = lipSyncQc;
     this.deepLipSyncQc = deepLipSyncQc;
     this.phonemeVisemeQc = phonemeVisemeQc;
+    this.speakerTurnQc = speakerTurnQc;
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
@@ -78,6 +80,7 @@ export class AudiovisualPipeline {
         lipSyncQc: this.lipSyncQc,
         deepLipSyncQc: this.deepLipSyncQc,
         phonemeVisemeQc: this.phonemeVisemeQc,
+        speakerTurnQc: this.speakerTurnQc,
         segment,
         productionScript,
         storyBible: project.storyBible,
@@ -102,6 +105,7 @@ export class AudiovisualPipeline {
         lipSyncQc: generated.lipSyncQc,
         deepLipSyncQc: generated.deepLipSyncQc,
         phonemeVisemeQc: generated.phonemeVisemeQc,
+        speakerTurnQc: generated.speakerTurnQc,
       });
 
       if (generated.failure) {
@@ -163,6 +167,7 @@ async function generateWithQc({
   lipSyncQc,
   deepLipSyncQc,
   phonemeVisemeQc,
+  speakerTurnQc,
   segment,
   productionScript,
   storyBible,
@@ -177,9 +182,10 @@ async function generateWithQc({
     lipSyncQc?.maxRegenerations || 0,
     deepLipSyncQc?.maxRegenerations || 0,
     phonemeVisemeQc?.maxRegenerations || 0,
+    speakerTurnQc?.maxRegenerations || 0,
   );
   const hasQc = Boolean(
-    realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc,
+    realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc,
   );
 
   for (let attempt = 0; attempt <= maxRegenerations; attempt += 1) {
@@ -200,6 +206,7 @@ async function generateWithQc({
         lipSyncQc: null,
         deepLipSyncQc: null,
         phonemeVisemeQc: null,
+        speakerTurnQc: null,
         failure: null,
         failureStatus: null,
       };
@@ -261,6 +268,18 @@ async function generateWithQc({
       })
       : null;
 
+    const speakerTurns = Array.isArray(asset.dialogueTrack?.turns)
+      ? asset.dialogueTrack.turns
+      : [];
+    const speakerTurn = speakerTurnQc && new Set(
+      speakerTurns.map((turn) => turn.speakerCharacterId),
+    ).size > 1
+      ? await speakerTurnQc.evaluate(asset, {
+        dialogueTurns: speakerTurns,
+        characters: productionScript.characters,
+      })
+      : null;
+
     const phonemeViseme = phonemeVisemeQc
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
@@ -281,7 +300,7 @@ async function generateWithQc({
         }
       : null;
 
-    const passed = [realism, dialogue, lipSync, deepLipSync, phonemeViseme]
+    const passed = [realism, dialogue, lipSync, deepLipSync, phonemeViseme, speakerTurn]
       .filter(Boolean)
       .every((result) => result.passed);
 
@@ -292,6 +311,7 @@ async function generateWithQc({
       ...prefixIssues(lipSync?.issues, 'lip-sync'),
       ...prefixIssues(deepLipSync?.issues, 'deep-lip-sync'),
       ...prefixIssues(phonemeViseme?.issues, 'phoneme-viseme'),
+      ...prefixIssues(speakerTurn?.issues, 'speaker-turn'),
     ];
     const regenerationGuidance = [
       realism && !realism.passed ? realism.regenerationGuidance : '',
@@ -299,6 +319,7 @@ async function generateWithQc({
       lipSync && !lipSync.passed ? lipSync.regenerationGuidance : '',
       deepLipSync && !deepLipSync.passed ? deepLipSync.regenerationGuidance : '',
       phonemeViseme && !phonemeViseme.passed ? phonemeViseme.regenerationGuidance : '',
+      speakerTurn && !speakerTurn.passed ? speakerTurn.regenerationGuidance : '',
     ].filter(Boolean).join(' ');
 
     const historyEntry = {
@@ -311,6 +332,7 @@ async function generateWithQc({
       lipSync,
       deepLipSync,
       phonemeViseme,
+      speakerTurn,
       issues,
       regenerationGuidance,
     };
@@ -326,12 +348,14 @@ async function generateWithQc({
           lipSyncQc: lipSync,
           deepLipSyncQc: deepLipSync,
           phonemeVisemeQc: phonemeViseme,
+          speakerTurnQc: speakerTurn,
         },
         qcHistory,
         dialogueVerification: dialogue,
         lipSyncQc: lipSync,
         deepLipSyncQc: deepLipSync,
         phonemeVisemeQc: phonemeViseme,
+        speakerTurnQc: speakerTurn,
         failure: null,
         failureStatus: null,
       };
@@ -348,8 +372,10 @@ async function generateWithQc({
 
     const failureStatus = dialogue && !dialogue.passed
       ? 'DIALOGUE_QC_FAILED'
-      : phonemeViseme && !phonemeViseme.passed
-        ? 'PHONEME_VISEME_QC_FAILED'
+      : speakerTurn && !speakerTurn.passed
+        ? 'SPEAKER_TURN_QC_FAILED'
+        : phonemeViseme && !phonemeViseme.passed
+          ? 'PHONEME_VISEME_QC_FAILED'
         : deepLipSync && !deepLipSync.passed
           ? 'DEEP_LIPSYNC_QC_FAILED'
           : lipSync && !lipSync.passed
@@ -363,6 +389,7 @@ async function generateWithQc({
       lipSyncQc: lipSync,
       deepLipSyncQc: deepLipSync,
       phonemeVisemeQc: phonemeViseme,
+      speakerTurnQc: speakerTurn,
       failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
       failureStatus,
     };
@@ -375,6 +402,7 @@ async function generateWithQc({
     lipSyncQc: null,
     deepLipSyncQc: null,
     phonemeVisemeQc: null,
+    speakerTurnQc: null,
     failure: 'audiovisual generation failed',
     failureStatus: 'AUDIOVISUAL_QC_FAILED',
   };

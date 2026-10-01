@@ -85,6 +85,14 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const failedSpeakerTurn = scenes.filter((scene) => scene.speakerTurnQc?.passed === false);
+  if (failedSpeakerTurn.length) {
+    blockers.push({
+      code: 'speaker-turn',
+      message: `Multi-speaker attribution/turn-taking did not pass for scene(s): ${failedSpeakerTurn.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   if (subtitles?.enabled && subtitles.layout?.passed === false) {
     blockers.push({
       code: 'subtitle-layout',

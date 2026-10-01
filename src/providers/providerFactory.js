@@ -14,6 +14,7 @@ import { OpenAiTranscriptionProvider } from './openAiTranscriptionProvider.js';
 import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
 import { DeepLipSyncQcProvider } from './deepLipSyncQcProvider.js';
 import { PhonemeVisemeQcProvider } from './phonemeVisemeQcProvider.js';
+import { OpenRouterSpeakerTurnQcProvider } from './openRouterSpeakerTurnQcProvider.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -298,6 +299,37 @@ export function createPhonemeVisemeQcProvider(env = process.env) {
       : undefined,
     timeoutMs: env.PHONEME_VISEME_TIMEOUT_MS
       ? Number(env.PHONEME_VISEME_TIMEOUT_MS)
+      : undefined,
+  });
+}
+
+export function createSpeakerTurnQcProvider(env = process.env) {
+  const enabled = env.SPEAKER_TURN_QC_ENABLED == null
+    ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
+      && Boolean(env.OPENROUTER_API_KEY)
+      && Boolean(env.SPEAKER_TURN_QC_MODEL || env.REALISM_QC_MODEL)
+    : isEnabled(env.SPEAKER_TURN_QC_ENABLED);
+
+  if (!enabled) return null;
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required when SPEAKER_TURN_QC_ENABLED=true');
+  }
+  if (!env.SPEAKER_TURN_QC_MODEL && !env.REALISM_QC_MODEL) {
+    throw new Error('SPEAKER_TURN_QC_MODEL or REALISM_QC_MODEL is required when SPEAKER_TURN_QC_ENABLED=true');
+  }
+
+  return new OpenRouterSpeakerTurnQcProvider({
+    apiKey: env.OPENROUTER_API_KEY,
+    baseUrl: env.OPENROUTER_BASE_URL,
+    model: env.SPEAKER_TURN_QC_MODEL || env.REALISM_QC_MODEL,
+    threshold: env.SPEAKER_TURN_QC_THRESHOLD
+      ? Number(env.SPEAKER_TURN_QC_THRESHOLD)
+      : undefined,
+    frameWidth: env.SPEAKER_TURN_QC_FRAME_WIDTH
+      ? Number(env.SPEAKER_TURN_QC_FRAME_WIDTH)
+      : undefined,
+    maxRegenerations: env.SPEAKER_TURN_QC_MAX_REGENERATIONS
+      ? Number(env.SPEAKER_TURN_QC_MAX_REGENERATIONS)
       : undefined,
   });
 }
