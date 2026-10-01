@@ -49,7 +49,23 @@ export function evaluateAudiovisualPublishability({
   if (failedQc.length) {
     blockers.push({
       code: 'scene-qc-failed',
-      message: `Visual/temporal QC did not pass for scene(s): ${failedQc.map((scene) => scene.index).join(', ')}.`,
+      message: `Audiovisual QC did not pass for scene(s): ${failedQc.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
+  const failedDialogue = scenes.filter((scene) => scene.dialogueVerification?.passed === false);
+  if (failedDialogue.length) {
+    blockers.push({
+      code: 'dialogue-fidelity',
+      message: `Generated speech did not match the screenplay for scene(s): ${failedDialogue.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
+  const failedLipSync = scenes.filter((scene) => scene.lipSyncQc?.passed === false);
+  if (failedLipSync.length) {
+    blockers.push({
+      code: 'lip-sync',
+      message: `Visual speech timing did not pass for scene(s): ${failedLipSync.map((scene) => scene.index).join(', ')}.`,
     });
   }
 
