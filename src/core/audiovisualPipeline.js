@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { ProductionScriptGenerator, productionScriptToStoryBible } from './productionScriptGenerator.js';
 import { buildSubtitles } from './subtitleBuilder.js';
+import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -18,7 +19,7 @@ export class AudiovisualPipeline {
     this.store = store;
     this.visual = visual;
     this.realismQc = realismQc;
-    this.subtitleConfig = subtitleConfig || {};
+    this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
   async generate({ topic, audience = 'curious adults', durationSeconds = 35, render = true }) {
@@ -103,12 +104,30 @@ export class AudiovisualPipeline {
       config: this.subtitleConfig,
     });
 
+    project.publishability = evaluateAudiovisualPublishability({
+      productionScript,
+      scenes: project.scenes,
+      subtitles: project.subtitles,
+    });
+
+    if (!project.publishability.passed) {
+      project.status = 'PUBLISHABILITY_FAILED';
+      await this.store?.saveProject(project);
+      return project;
+    }
+
     project.status = 'READY';
     if (render && this.renderer) {
       project.status = 'RENDERING';
       try {
         project.render = await this.renderer.render(project);
-        project.status = 'RENDERED';
+        project.publishability = evaluateAudiovisualPublishability({
+          productionScript,
+          scenes: project.scenes,
+          subtitles: project.subtitles,
+          render: project.render,
+        });
+        project.status = project.publishability.passed ? 'RENDERED' : 'PUBLISHABILITY_FAILED';
       } catch (error) {
         project.status = 'RENDER_FAILED';
         project.error = error.message;
@@ -185,4 +204,20 @@ async function generateWithQc({
   }
 
   return { asset: null, qcHistory, failure: 'audiovisual generation failed' };
+}
+
+
+function subtitleConfigFromEnv(env = process.env) {
+  return {
+    enabled: env.SUBTITLES_ENABLED == null
+      ? true
+      : ['1', 'true', 'yes', 'on'].includes(String(env.SUBTITLES_ENABLED).toLowerCase()),
+    maxWordsPerCue: env.SUBTITLES_MAX_WORDS ? Number(env.SUBTITLES_MAX_WORDS) : undefined,
+    maxCharsPerCue: env.SUBTITLES_MAX_CHARS ? Number(env.SUBTITLES_MAX_CHARS) : undefined,
+    fontName: env.SUBTITLES_FONT || undefined,
+    fontSize: env.SUBTITLES_FONT_SIZE ? Number(env.SUBTITLES_FONT_SIZE) : undefined,
+    marginV: env.SUBTITLES_MARGIN_V ? Number(env.SUBTITLES_MARGIN_V) : undefined,
+    maxWidthPx: env.SUBTITLES_MAX_WIDTH_PX ? Number(env.SUBTITLES_MAX_WIDTH_PX) : undefined,
+    maxLines: env.SUBTITLES_MAX_LINES ? Number(env.SUBTITLES_MAX_LINES) : undefined,
+  };
 }

@@ -28,6 +28,8 @@ import {
   buildSubtitles,
   renderAssDocument,
   renderSrtDocument,
+  evaluateSubtitleLayout,
+  estimateRenderedWidth,
 } from '../src/core/subtitleBuilder.js';
 import {
   ProductionScriptGenerator,
@@ -36,6 +38,8 @@ import {
 import { RunwayAudiovisualProvider } from '../src/providers/runwayAudiovisualProvider.js';
 import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
 import { AudiovisualRenderer } from '../src/renderers/audiovisualRenderer.js';
+import { parseEbur128 } from '../src/services/audioQualityInspector.js';
+import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -1780,6 +1784,9 @@ test('production screenplay normalizes exact dialogue, characters, locations and
   assert.equal(script.locations[0].id, 'gym-main');
   assert.equal(script.segments[0].durationSeconds, 15);
   assert.equal(script.segments[0].speakerCharacterId, 'coach-alex');
+  assert.equal(script.segments[0].editing.allowInternalCuts, false);
+  assert.equal(script.segments[0].editing.allowDissolves, false);
+  assert.equal(script.segments[0].editing.shotCount, 1);
   assert.match(script.fullDialogue, /not too late/i);
 
   const bible = productionScriptToStoryBible(script);
@@ -2075,9 +2082,22 @@ test('audiovisual renderer preserves native audio while composing acts and subti
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-render-'));
   const commands = [];
   try {
+    let inspections = 0;
     const renderer = new AudiovisualRenderer({
       outputDir: dir,
       runCommand: async (command, args) => commands.push({ command, args }),
+      audioInspector: {
+        inspect: async () => {
+          inspections += 1;
+          return {
+            passed: true,
+            audible: true,
+            integratedLufs: inspections === 1 ? -13.5 : -14,
+            truePeakDbtp: inspections === 1 ? -0.1 : -1,
+            issues: [],
+          };
+        },
+      },
     });
     const subtitles = buildSubtitles({
       scenes: [{ start: 0, duration: 5, narration: 'Exact audiovisual dialogue.' }],
@@ -2104,9 +2124,272 @@ test('audiovisual renderer preserves native audio while composing acts and subti
 
     const finalArgs = commands[2].args;
     assert.ok(finalArgs.includes('-c:a'));
-    assert.ok(finalArgs.includes('copy'));
+    assert.ok(finalArgs.includes('aac'));
+    const audioFilterIndex = finalArgs.indexOf('-af');
+    assert.ok(audioFilterIndex >= 0);
+    assert.match(finalArgs[audioFilterIndex + 1], /loudnorm=I=-14:LRA=7:TP=-1/);
+    assert.equal(inspections, 2);
+    assert.equal(result.audioQuality.output.passed, true);
     assert.match(await readFile(result.subtitleSrtPath, 'utf8'), /Exact audiovisual dialogue/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test('subtitle builder wraps by estimated pixel width and remains in two-line safe layout', () => {
+  const subtitles = buildSubtitles({
+    voice: {
+      wordTimings: [
+        { word: 'Start', start: 0, end: 0.2 },
+        { word: 'smaller', start: 0.2, end: 0.4 },
+        { word: 'than', start: 0.4, end: 0.6 },
+        { word: 'your', start: 0.6, end: 0.8 },
+        { word: 'excuses:', start: 0.8, end: 1.0 },
+      ],
+    },
+    config: {
+      maxWordsPerCue: 5,
+      maxCharsPerCue: 60,
+      fontSize: 64,
+      maxWidthPx: 520,
+      maxLines: 2,
+    },
+  });
+
+  assert.equal(subtitles.layout.passed, true);
+  assert.ok(subtitles.cues.some((cue) => cue.lines.length === 2));
+  assert.ok(subtitles.events.some((event) => event.assText.includes('\\N')));
+  for (const cue of subtitles.cues) {
+    for (const line of cue.lines) {
+      const width = estimateRenderedWidth(line.map((item) => item.word).join(' '), 64);
+      assert.ok(width <= 520);
+    }
+  }
+  assert.equal(evaluateSubtitleLayout(subtitles.cues, {
+    fontSize: 64,
+    maxWidthPx: 520,
+    maxLines: 2,
+  }).passed, true);
+});
+
+test('audio quality parser rejects silence and unsafe true peak while accepting social-ready audio', () => {
+  const healthy = parseEbur128(`
+    Summary:
+      I:         -14.0 LUFS
+      Peak:       -1.1 dBFS
+  `);
+  assert.equal(healthy.passed, true);
+  assert.equal(healthy.integratedLufs, -14);
+  assert.equal(healthy.truePeakDbtp, -1.1);
+
+  const silent = parseEbur128(`
+    Summary:
+      I:         -70.0 LUFS
+      Peak:      -55.0 dBFS
+  `);
+  assert.equal(silent.passed, false);
+  assert.ok(silent.issues.some((issue) => issue.code === 'audio-silent'));
+
+  const hot = parseEbur128(`
+    Summary:
+      I:         -13.5 LUFS
+      Peak:       -0.1 dBFS
+  `);
+  assert.equal(hot.passed, false);
+  assert.ok(hot.issues.some((issue) => issue.code === 'audio-true-peak'));
+});
+
+test('Runway audiovisual provider sends previous accepted act as WAN continuity video reference', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-continuity-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      dialogueMode: 'native',
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, body });
+        if (target.endsWith('/text_to_video')) return jsonResponse({ id: 'continuity-task' });
+        if (target.endsWith('/tasks/continuity-task')) {
+          return jsonResponse({ id: 'continuity-task', status: 'SUCCEEDED', output: ['https://cdn.example/current.mp4'] });
+        }
+        if (target === 'https://cdn.example/current.mp4') {
+          return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('current').buffer };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const segment = {
+      index: 1,
+      purpose: 'explain',
+      durationSeconds: 6,
+      dialogue: 'Keep moving for ten minutes.',
+      speakerCharacterId: 'alex',
+      characterIds: ['alex'],
+      locationId: 'gym',
+      action: 'Alex walks naturally through the gym.',
+      camera: 'Medium tracking shot.',
+      ambience: 'Gym ambience.',
+      soundEffects: [],
+      music: '',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+    };
+    const productionScript = {
+      characters: [{
+        id: 'alex', name: 'Alex', description: '34-year-old trainer',
+        physicalTraits: 'short dark hair and light beard', wardrobe: 'black training shirt',
+        voice: { presetId: 'Bernard', languageCode: 'en' },
+      }],
+      locations: [{
+        id: 'gym', name: 'Gym', description: 'brick gym', lighting: 'morning daylight',
+        fixedElements: ['black rack'],
+      }],
+      visualStyle: { description: 'photorealistic', cameraRules: 'natural lens', lightingRules: 'stable daylight' },
+      audioDirection: { mix: 'clear dialogue', musicPolicy: 'music low' },
+    };
+
+    await provider.generateSegment({
+      segment,
+      productionScript,
+      previousAsset: {
+        generationId: 'previous-gen',
+        sourceUrl: 'https://cdn.example/previous.mp4',
+      },
+      projectId: 'continuity',
+    });
+
+    const videoRequest = requests.find((request) => request.target.endsWith('/text_to_video'));
+    assert.deepEqual(videoRequest.body.referenceVideos, [{
+      type: 'video',
+      uri: 'https://cdn.example/previous.mp4',
+    }]);
+    assert.match(videoRequest.body.promptText, /ONE continuous shot only/i);
+    assert.match(videoRequest.body.promptText, /Dissolves and crossfades are forbidden/i);
+    assert.match(videoRequest.body.promptText, /previous accepted act is supplied as a video reference/i);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('cross-act QC rejects apparent-age or identity drift even when realism and motion pass', async () => {
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    threshold: 82,
+    temporalThreshold: 80,
+    continuityThreshold: 85,
+    temporalEnabled: true,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,CURRENT' },
+      ],
+      sampleTemporal: async () => [
+        { index: 0, timestamp: 0.2, dataUrl: 'data:image/jpeg;base64,TEMP' },
+      ],
+      sampleComparison: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,PREVIOUS' },
+      ],
+    },
+    fetchImpl: async () => jsonResponse({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            overallScore: 94,
+            temporalScore: 92,
+            scores: {
+              photorealism: 95,
+              anatomy: 94,
+              geometry: 94,
+              physics: 91,
+              motionConsistency: 92,
+              continuity: 80,
+              identityContinuity: 62,
+              locationContinuity: 93,
+              sceneRelevance: 96,
+              artifactFreedom: 93,
+            },
+            temporalScores: {
+              identityStability: 93,
+              objectPersistence: 92,
+              geometryStability: 92,
+              motionPlausibility: 90,
+              cameraContinuity: 91,
+              flickerFreedom: 94,
+              temporalArtifactFreedom: 93,
+              actionContinuity: 92,
+            },
+            issues: [{
+              code: 'apparent-age-drift',
+              severity: 'high',
+              evidence: 'the recurring character appears substantially older than in the previous act',
+            }],
+            temporalIssues: [],
+            regenerationGuidance: 'Restore the exact apparent age and face geometry from the previous accepted act.',
+          }),
+        },
+      }],
+    }),
+  });
+
+  const result = await qc.evaluateScene(
+    {
+      narration: 'Alex continues the workout.',
+      duration: 5,
+      continuity: { characterIds: ['alex'], locationId: 'gym' },
+      realism: { motionPrompt: 'Realistic gym shot.' },
+    },
+    {
+      type: 'ai-video',
+      localPath: '/fake/current.mp4',
+      generatedDuration: '5s',
+      prompt: 'Realistic gym shot.',
+    },
+    {
+      previousAsset: {
+        localPath: '/fake/previous.mp4',
+        generatedDuration: '5s',
+        generationId: 'previous',
+      },
+      storyBible: {
+        characters: [{ id: 'alex', name: 'Alex', description: '34-year-old trainer', physicalTraits: 'short dark hair', wardrobe: 'black shirt' }],
+        locations: [{ id: 'gym', name: 'Gym', description: 'brick gym', lighting: 'daylight', fixedElements: ['rack'] }],
+        visualStyle: { description: 'photorealistic', cameraRules: 'natural', lightingRules: 'daylight' },
+      },
+    },
+  );
+
+  assert.equal(result.staticPassed, true);
+  assert.equal(result.temporalPassed, true);
+  assert.equal(result.identityContinuityPassed, false);
+  assert.equal(result.continuityPassed, false);
+  assert.equal(result.passed, false);
+  assert.equal(result.previousFrames.length, 1);
+});
+
+test('publishability gate blocks meta-script leakage and unsafe subtitles', () => {
+  const result = evaluateAudiovisualPublishability({
+    productionScript: {
+      fullDialogue: 'A strong short-form explanation should give one concrete example.',
+      segments: [{ index: 0, locationId: 'gym', editing: { allowInternalCuts: false } }],
+    },
+    scenes: [{ index: 0, asset: { localPath: '/fake/act.mp4' }, visualQcHistory: [] }],
+    subtitles: {
+      enabled: true,
+      layout: {
+        passed: false,
+        violations: [{ code: 'line-overflow', widthPx: 930, maxWidthPx: 840 }],
+      },
+    },
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.blockers.some((blocker) => blocker.code === 'script-meta-language'));
+  assert.ok(result.blockers.some((blocker) => blocker.code === 'subtitle-layout'));
 });

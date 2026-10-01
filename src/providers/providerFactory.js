@@ -145,6 +145,9 @@ export function createRealismQcProvider(env = process.env) {
     temporalThreshold: env.REALISM_QC_TEMPORAL_THRESHOLD
       ? Number(env.REALISM_QC_TEMPORAL_THRESHOLD)
       : undefined,
+    continuityThreshold: env.REALISM_QC_CONTINUITY_THRESHOLD
+      ? Number(env.REALISM_QC_CONTINUITY_THRESHOLD)
+      : undefined,
     temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
       ? undefined
       : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),

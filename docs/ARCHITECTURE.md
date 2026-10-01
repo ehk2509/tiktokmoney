@@ -268,3 +268,33 @@ Locked mode is the default because generated-video models can otherwise paraphra
 ### Rendering contract
 
 The audiovisual renderer never strips scene audio. Each generated act is normalized to 1080x1920 H.264 + AAC, acts are concatenated with audio intact, then subtitles are burned in during the final video pass while audio is stream-copied.
+
+
+## Publishability gate
+
+The audiovisual path now distinguishes “generation completed” from “safe to publish”.
+
+```text
+production script
+  -> meta-language check
+  -> audiovisual generation
+  -> static + temporal QC
+  -> previous-act continuity comparison
+  -> subtitle pixel-width safe-area validation
+  -> native audio signal inspection
+  -> -14 LUFS / -1 dBTP normalization
+  -> final audio inspection
+  -> RENDERED
+```
+
+### Cross-act continuity
+
+For every act after the first, WAN receives the previous accepted act as `referenceVideos`. QC also samples the previous act and compares recurring character face geometry, apparent age, hair, body proportions, wardrobe, location geometry, fixed objects and lighting. The default cross-act continuity floor is 85/100.
+
+### Subtitle safety
+
+Captions are greedily wrapped using an estimated font-width model. A cue may use at most two lines and each rendered line must remain within the configured pixel width. The renderer refuses to burn captions when the safe-area contract fails.
+
+### Audio safety
+
+The renderer measures the joined native soundtrack with FFmpeg EBU R128 analysis. Effectively silent audio is rejected before final encode. Final audio is normalized to -14 LUFS, LRA 7 and -1 dBTP, then measured again before success is returned.

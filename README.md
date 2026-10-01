@@ -309,3 +309,31 @@ The original `scene-composer` mode is retained as a fallback:
 ```bash
 export VIDEO_PIPELINE_MODE=scene-composer
 ```
+
+
+## Publishability hardening
+
+Audiovisual mode now applies a final publishability layer before a video is considered successful:
+
+- production dialogue is rejected if authoring/meta language leaks into the spoken script
+- subtitles are laid out by estimated rendered pixel width, not character count alone
+- captions are limited to two lines inside an 840px safe width and moved higher above TikTok UI
+- audiovisual acts default to one continuous shot; unexplained cuts, dissolves, crossfades and ghosting are explicitly forbidden
+- WAN receives the previous accepted act as a video reference to improve cross-act identity/location continuity
+- realism QC compares frames from the previous accepted act and enforces recurring identity/location continuity floors
+- joined native audio is inspected for silence / unusable level before final render
+- final audio is normalized to -14 LUFS with a -1 dBTP ceiling
+- the normalized output is inspected again before the render is marked successful
+
+Default controls:
+
+```env
+REALISM_QC_CONTINUITY_THRESHOLD=85
+SUBTITLES_FONT_SIZE=64
+SUBTITLES_MARGIN_V=335
+SUBTITLES_MAX_WIDTH_PX=840
+SUBTITLES_MAX_LINES=2
+PUBLISHABILITY_AUDIO_REQUIRED=true
+AUDIO_TARGET_LUFS=-14
+AUDIO_TRUE_PEAK_DBTP=-1
+```

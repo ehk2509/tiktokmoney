@@ -2,16 +2,29 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { renderAssDocument, renderSrtDocument } from '../core/subtitleBuilder.js';
+import { AudioQualityInspector } from '../services/audioQualityInspector.js';
 
 export class AudiovisualRenderer {
   constructor({
     ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
     outputDir = process.env.OUTPUT_DIR || './outputs',
+    audioTargetLufs = Number(process.env.AUDIO_TARGET_LUFS || -14),
+    audioTruePeakDbtp = Number(process.env.AUDIO_TRUE_PEAK_DBTP || -1),
+    audioLra = Number(process.env.AUDIO_TARGET_LRA || 7),
     runCommand = run,
+    audioInspector = null,
   } = {}) {
     this.ffmpegBin = ffmpegBin;
     this.outputDir = outputDir;
+    this.audioTargetLufs = Number.isFinite(audioTargetLufs) ? audioTargetLufs : -14;
+    this.audioTruePeakDbtp = Number.isFinite(audioTruePeakDbtp) ? audioTruePeakDbtp : -1;
+    this.audioLra = Number.isFinite(audioLra) ? audioLra : 7;
     this.runCommand = runCommand;
+    this.audioInspector = audioInspector || new AudioQualityInspector({
+      ffmpegBin,
+      targetLufs: this.audioTargetLufs,
+      truePeakLimitDbtp: this.audioTruePeakDbtp,
+    });
   }
 
   async render(project) {
@@ -25,9 +38,17 @@ export class AudiovisualRenderer {
     const subtitleSrtPath = path.join(this.outputDir, `${project.id}.subtitles.srt`);
     await writeFile(manifestPath, JSON.stringify(project, null, 2));
 
+    if (project.subtitles?.layout?.passed === false) {
+      throw new Error(
+        `subtitle layout failed safe-area validation: ${JSON.stringify(project.subtitles.layout.violations)}`,
+      );
+    }
+
     const normalized = [];
     for (const scene of project.scenes) {
-      if (!scene.asset?.localPath) throw new Error(`audiovisual scene ${scene.index} is missing a generated asset`);
+      if (!scene.asset?.localPath) {
+        throw new Error(`audiovisual scene ${scene.index} is missing a generated asset`);
+      }
       const clipPath = path.join(workDir, `act-${String(scene.index).padStart(3, '0')}.mp4`);
       await this.runCommand(this.ffmpegBin, [
         '-y',
@@ -64,24 +85,49 @@ export class AudiovisualRenderer {
       joinedPath,
     ]);
 
+    const inputAudioQuality = await this.audioInspector.inspect(joinedPath);
+    if (!inputAudioQuality.passed) {
+      throw new Error(
+        `audiovisual output failed audio publishability: ${inputAudioQuality.issues.map((issue) => issue.message).join(' ')}`,
+      );
+    }
+
     const hasSubtitles = Boolean(project.subtitles?.enabled && project.subtitles.events?.length);
     if (hasSubtitles) {
       await writeFile(subtitleAssPath, renderAssDocument(project.subtitles));
       await writeFile(subtitleSrtPath, renderSrtDocument(project.subtitles));
-      await this.runCommand(this.ffmpegBin, [
-        '-y',
-        '-i', joinedPath,
+    }
+
+    const args = ['-y', '-i', joinedPath];
+    if (hasSubtitles) {
+      args.push(
         '-vf', `ass=filename='${escapeFilterPath(path.resolve(subtitleAssPath))}'`,
         '-c:v', 'libx264',
         '-preset', 'veryfast',
         '-crf', '18',
         '-pix_fmt', 'yuv420p',
-        '-c:a', 'copy',
-        '-movflags', '+faststart',
-        outputPath,
-      ]);
+      );
     } else {
-      await this.runCommand(this.ffmpegBin, ['-y', '-i', joinedPath, '-c', 'copy', outputPath]);
+      args.push('-c:v', 'copy');
+    }
+
+    args.push(
+      '-af', `loudnorm=I=${this.audioTargetLufs}:LRA=${this.audioLra}:TP=${this.audioTruePeakDbtp}`,
+      '-c:a', 'aac',
+      '-b:a', '160k',
+      '-ar', '48000',
+      '-ac', '2',
+      '-movflags', '+faststart',
+      outputPath,
+    );
+
+    await this.runCommand(this.ffmpegBin, args);
+
+    const outputAudioQuality = await this.audioInspector.inspect(outputPath);
+    if (!outputAudioQuality.passed) {
+      throw new Error(
+        `final render failed audio publishability: ${outputAudioQuality.issues.map((issue) => issue.message).join(' ')}`,
+      );
     }
 
     await rm(workDir, { recursive: true, force: true });
@@ -93,6 +139,12 @@ export class AudiovisualRenderer {
       subtitleSrtPath: hasSubtitles ? subtitleSrtPath : null,
       sceneCount: normalized.length,
       audioMode: 'native-audiovisual',
+      audioQuality: {
+        input: inputAudioQuality,
+        output: outputAudioQuality,
+        normalizedToLufs: this.audioTargetLufs,
+        truePeakCeilingDbtp: this.audioTruePeakDbtp,
+      },
       width: 1080,
       height: 1920,
     };

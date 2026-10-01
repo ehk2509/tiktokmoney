@@ -48,7 +48,10 @@
 - [x] Audio-preserving final composition
 - [x] Subtitle generation over audiovisual output
 - [ ] Dialogue-verbatim transcription QC
-- [ ] Audio loudness / clipping / silence QC
+- [x] Cross-act identity / apparent-age / location QC
+- [x] Subtitle safe-area / pixel-width QC
+- [x] Publishability gate for script, scene, subtitle and audio failures
+- [x] Audio loudness / clipping / silence QC
 - [ ] Multi-speaker dialogue in one act
 
 ## M2 - Trend intelligence

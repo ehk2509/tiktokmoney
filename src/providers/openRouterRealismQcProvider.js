@@ -9,6 +9,7 @@ export class OpenRouterRealismQcProvider {
     model = process.env.REALISM_QC_MODEL,
     threshold = Number(process.env.REALISM_QC_THRESHOLD || 82),
     temporalThreshold = Number(process.env.REALISM_QC_TEMPORAL_THRESHOLD || 80),
+    continuityThreshold = Number(process.env.REALISM_QC_CONTINUITY_THRESHOLD || 85),
     temporalEnabled = parseBoolean(process.env.REALISM_QC_TEMPORAL_ENABLED, true),
     maxRegenerations = Number(process.env.REALISM_MAX_REGENERATIONS || 1),
     failClosed = parseBoolean(process.env.REALISM_QC_FAIL_CLOSED, true),
@@ -24,6 +25,7 @@ export class OpenRouterRealismQcProvider {
     this.model = model;
     this.threshold = clampScore(threshold);
     this.temporalThreshold = clampScore(temporalThreshold);
+    this.continuityThreshold = clampScore(continuityThreshold);
     this.temporalEnabled = Boolean(temporalEnabled);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
     this.failClosed = Boolean(failClosed);
@@ -45,6 +47,12 @@ export class OpenRouterRealismQcProvider {
     const temporalFrames = this.temporalEnabled
       ? await this.frameSampler.sampleTemporal(asset.localPath, { durationSeconds })
       : [];
+    const previousDuration = parseDuration(previousAsset?.generatedDuration)
+      || Number(previousAsset?.durationSeconds)
+      || durationSeconds;
+    const previousFrames = previousAsset?.localPath && this.frameSampler.sampleComparison
+      ? await this.frameSampler.sampleComparison(previousAsset.localPath, { durationSeconds: previousDuration })
+      : [];
 
     const prompt = buildPrompt({
       scene,
@@ -53,12 +61,17 @@ export class OpenRouterRealismQcProvider {
       storyBible,
       temporalEnabled: this.temporalEnabled,
       temporalFrameCount: temporalFrames.length,
+      previousFrameCount: previousFrames.length,
     });
 
     const content = [
       { type: 'text', text: prompt },
       { type: 'text', text: 'STATIC REALISM CHECKPOINTS — judge individual visual quality:' },
       ...labelledImageParts(frames, 'Static'),
+      ...(previousFrames.length ? [
+        { type: 'text', text: 'PREVIOUS ACCEPTED ACT — compare identity, apparent age, wardrobe, location and visual language against the current act:' },
+        ...labelledImageParts(previousFrames, 'Previous'),
+      ] : []),
       ...(this.temporalEnabled ? [
         { type: 'text', text: 'TEMPORAL SEQUENCE — these frames are strictly chronological. Compare adjacent frames for motion and identity stability:' },
         ...labelledImageParts(temporalFrames, 'Temporal'),
@@ -114,17 +127,28 @@ export class OpenRouterRealismQcProvider {
     const criticalFailure = allIssues.some((issue) => issue.severity === 'critical');
     const staticPassed = overallScore >= this.threshold;
     const temporalPassed = !this.temporalEnabled || temporalScore >= this.temporalThreshold;
-    const passed = staticPassed && temporalPassed && !criticalFailure;
+    const hasRecurringCharacter = Boolean(previousAsset && scene.continuity?.characterIds?.length);
+    const hasRecurringLocation = Boolean(previousAsset && scene.continuity?.locationId);
+    const identityContinuityPassed = !hasRecurringCharacter
+      || scores.identityContinuity >= this.continuityThreshold;
+    const locationContinuityPassed = !hasRecurringLocation
+      || scores.locationContinuity >= this.continuityThreshold;
+    const continuityPassed = identityContinuityPassed && locationContinuityPassed;
+    const passed = staticPassed && temporalPassed && continuityPassed && !criticalFailure;
 
     return {
       provider: 'openrouter',
       model: this.model,
       threshold: this.threshold,
       temporalThreshold: this.temporalThreshold,
+      continuityThreshold: this.continuityThreshold,
       temporalEnabled: this.temporalEnabled,
       passed,
       staticPassed,
       temporalPassed,
+      continuityPassed,
+      identityContinuityPassed,
+      locationContinuityPassed,
       overallScore,
       temporalScore,
       scores,
@@ -137,6 +161,7 @@ export class OpenRouterRealismQcProvider {
         || buildGuidance(allIssues, scores, temporalScores),
       sampledFrames: frames.map(({ index, timestamp }) => ({ index, timestamp })),
       temporalFrames: temporalFrames.map(({ index, timestamp }) => ({ index, timestamp })),
+      previousFrames: previousFrames.map(({ index, timestamp }) => ({ index, timestamp })),
       previousGenerationId: previousAsset?.generationId || null,
       rawUsage: payload?.usage || null,
     };
@@ -163,6 +188,7 @@ function buildPrompt({
   storyBible,
   temporalEnabled,
   temporalFrameCount,
+  previousFrameCount,
 }) {
   const binding = scene.continuity || {};
   const characters = (storyBible?.characters || [])
@@ -197,6 +223,9 @@ function buildPrompt({
       ].filter(Boolean).join('. ')
       : '',
     'Treat visible drift from canonical character/location/style details as a continuity defect.',
+    previousFrameCount
+      ? `You also have ${previousFrameCount} frames from the previous accepted act. Compare the same recurring person/location directly across acts.`
+      : '',
     '',
     'STATIC scores, each from 0 to 100:',
     '- photorealism: would an ordinary viewer plausibly believe this was camera footage?',
@@ -205,6 +234,8 @@ function buildPrompt({
     '- physics: gravity, contact, reflections, perspective and physical interactions look plausible.',
     '- motionConsistency: sparse checkpoints imply stable identity and non-morphing motion.',
     '- continuity: subject/environment/style stay coherent.',
+    '- identityContinuity: recurring character face, apparent age, hair, body proportions and wardrobe match the previous accepted act.',
+    '- locationContinuity: recurring environment geometry, fixed objects and lighting match the previous accepted act.',
     '- sceneRelevance: visuals actually illustrate the narration.',
     '- artifactFreedom: no obvious AI artifacts, duplicate objects, warped text, watermarks or impossible details.',
     ...(temporalEnabled ? [
@@ -231,7 +262,8 @@ function buildPrompt({
     '  "temporalScore": 0,',
     '  "scores": {',
     '    "photorealism": 0, "anatomy": 0, "geometry": 0, "physics": 0,',
-    '    "motionConsistency": 0, "continuity": 0, "sceneRelevance": 0, "artifactFreedom": 0',
+    '    "motionConsistency": 0, "continuity": 0, "identityContinuity": 0, "locationContinuity": 0,',
+    '    "sceneRelevance": 0, "artifactFreedom": 0',
     '  },',
     '  "temporalScores": {',
     '    "identityStability": 0, "objectPersistence": 0, "geometryStability": 0, "motionPlausibility": 0,',
@@ -254,6 +286,8 @@ function normalizeScores(scores = {}) {
     'physics',
     'motionConsistency',
     'continuity',
+    'identityContinuity',
+    'locationContinuity',
     'sceneRelevance',
     'artifactFreedom',
   ];

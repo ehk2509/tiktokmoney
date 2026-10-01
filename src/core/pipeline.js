@@ -451,5 +451,11 @@ function subtitleConfigFromEnv(env = process.env) {
     marginV: env.SUBTITLES_MARGIN_V
       ? Number(env.SUBTITLES_MARGIN_V)
       : undefined,
+    maxWidthPx: env.SUBTITLES_MAX_WIDTH_PX
+      ? Number(env.SUBTITLES_MAX_WIDTH_PX)
+      : undefined,
+    maxLines: env.SUBTITLES_MAX_LINES
+      ? Number(env.SUBTITLES_MAX_LINES)
+      : undefined,
   };
 }

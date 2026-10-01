@@ -4,8 +4,10 @@ const DEFAULTS = Object.freeze({
   maxCharsPerCue: 34,
   maxGapSeconds: 0.65,
   fontName: 'DejaVu Sans',
-  fontSize: 68,
-  marginV: 285,
+  fontSize: 64,
+  marginV: 335,
+  maxWidthPx: 840,
+  maxLines: 2,
 });
 
 export function buildSubtitles({
@@ -17,14 +19,9 @@ export function buildSubtitles({
     Object.entries(config).filter(([, value]) => value !== undefined && value !== null),
   );
   const options = { ...DEFAULTS, ...cleanConfig };
+
   if (!options.enabled) {
-    return {
-      enabled: false,
-      source: 'disabled',
-      cues: [],
-      events: [],
-      style: subtitleStyle(options),
-    };
+    return emptyResult('disabled', options, false);
   }
 
   const preciseWords = normalizeWordTimings(voice?.wordTimings || []);
@@ -33,17 +30,12 @@ export function buildSubtitles({
     : approximateWordTimingsFromScenes(scenes);
 
   if (!words.length) {
-    return {
-      enabled: true,
-      source: 'none',
-      cues: [],
-      events: [],
-      style: subtitleStyle(options),
-    };
+    return emptyResult('none', options, true);
   }
 
   const cues = groupWords(words, options);
   const events = cues.flatMap((cue) => buildHighlightEvents(cue));
+  const layout = evaluateSubtitleLayout(cues, options);
 
   return {
     enabled: true,
@@ -51,7 +43,56 @@ export function buildSubtitles({
     cues,
     events,
     style: subtitleStyle(options),
+    layout,
   };
+}
+
+export function evaluateSubtitleLayout(cues = [], config = {}) {
+  const options = { ...DEFAULTS, ...config };
+  const violations = [];
+
+  for (const cue of cues) {
+    const lines = cue.lines || layoutWords(cue.words || [], options);
+    if (lines.length > options.maxLines) {
+      violations.push({
+        cueStart: cue.start,
+        code: 'too-many-lines',
+        lines: lines.length,
+      });
+    }
+
+    lines.forEach((line, lineIndex) => {
+      const widthPx = estimateRenderedWidth(line.map((item) => item.word).join(' '), options.fontSize);
+      if (widthPx > options.maxWidthPx) {
+        violations.push({
+          cueStart: cue.start,
+          code: 'line-overflow',
+          line: lineIndex,
+          widthPx: round(widthPx),
+          maxWidthPx: options.maxWidthPx,
+        });
+      }
+    });
+  }
+
+  return {
+    passed: violations.length === 0,
+    maxWidthPx: options.maxWidthPx,
+    maxLines: options.maxLines,
+    violations,
+  };
+}
+
+export function estimateRenderedWidth(text, fontSize = DEFAULTS.fontSize) {
+  let units = 0;
+  for (const char of String(text || '')) {
+    if (/\s/.test(char)) units += 0.32;
+    else if (/[MW@#%&]/.test(char)) units += 0.82;
+    else if (/[ilI1|.,'!:;]/.test(char)) units += 0.3;
+    else if (/[A-Z0-9]/.test(char)) units += 0.62;
+    else units += 0.54;
+  }
+  return units * Number(fontSize || DEFAULTS.fontSize);
 }
 
 export function renderAssDocument(subtitles) {
@@ -88,8 +129,8 @@ export function renderAssDocument(subtitles) {
       '5',
       '1',
       '2',
-      '90',
-      '90',
+      '110',
+      '110',
       style.marginV,
       '1',
     ].join(','),
@@ -119,7 +160,9 @@ export function renderSrtDocument(subtitles) {
   return cues.map((cue, index) => [
     String(index + 1),
     `${formatSrtTime(cue.start)} --> ${formatSrtTime(cue.end)}`,
-    cue.text,
+    (cue.lines || []).length
+      ? cue.lines.map((line) => line.map((item) => item.word).join(' ')).join('\n')
+      : cue.text,
     '',
   ].join('\n')).join('\n');
 }
@@ -155,6 +198,22 @@ export function approximateWordTimingsFromScenes(scenes = []) {
   return words;
 }
 
+function emptyResult(source, options, enabled) {
+  return {
+    enabled,
+    source,
+    cues: [],
+    events: [],
+    style: subtitleStyle(options),
+    layout: {
+      passed: true,
+      maxWidthPx: options.maxWidthPx,
+      maxLines: options.maxLines,
+      violations: [],
+    },
+  };
+}
+
 function normalizeWordTimings(items) {
   return items
     .filter((item) => item && String(item.word || '').trim())
@@ -173,10 +232,12 @@ function groupWords(words, options) {
 
   const flush = () => {
     if (!current.length) return;
+    const lines = layoutWords(current, options);
     cues.push({
       start: current[0].start,
       end: current.at(-1).end,
       words: current,
+      lines,
       text: current.map((item) => item.word).join(' '),
     });
     current = [];
@@ -195,6 +256,7 @@ function groupWords(words, options) {
         || text.length > options.maxCharsPerCue
         || gap > options.maxGapSeconds
         || sentenceBoundary(previous?.word)
+        || !fitsLayout(next, options)
       )
     ) {
       flush();
@@ -207,6 +269,37 @@ function groupWords(words, options) {
   return cues;
 }
 
+function fitsLayout(words, options) {
+  const lines = layoutWords(words, options);
+  return lines.length <= options.maxLines
+    && lines.every((line) => (
+      estimateRenderedWidth(line.map((item) => item.word).join(' '), options.fontSize)
+      <= options.maxWidthPx
+    ));
+}
+
+function layoutWords(words, options) {
+  const lines = [];
+  let current = [];
+
+  for (const word of words) {
+    const next = [...current, word];
+    const nextText = next.map((item) => item.word).join(' ');
+    if (
+      current.length
+      && estimateRenderedWidth(nextText, options.fontSize) > options.maxWidthPx
+    ) {
+      lines.push(current);
+      current = [word];
+    } else {
+      current = next;
+    }
+  }
+
+  if (current.length) lines.push(current);
+  return lines;
+}
+
 function buildHighlightEvents(cue) {
   return cue.words.map((activeWord, activeIndex) => ({
     start: activeWord.start,
@@ -215,22 +308,31 @@ function buildHighlightEvents(cue) {
     cueEnd: cue.end,
     activeWordIndex: activeIndex,
     text: cue.text,
-    assText: cue.words
-      .map((item, index) => {
-        const text = escapeAssText(item.word);
-        return index === activeIndex
-          ? `{\\c&H0000FFFF&\\b1}${text}{\\c&H00FFFFFF&\\b1}`
-          : text;
-      })
-      .join(' '),
+    assText: buildAssCue(cue, activeIndex),
   }));
+}
+
+function buildAssCue(cue, activeIndex) {
+  let wordIndex = 0;
+  return (cue.lines || [cue.words])
+    .map((line) => line.map((item) => {
+      const text = escapeAssText(item.word);
+      const rendered = wordIndex === activeIndex
+        ? `{\\c&H0000FFFF&\\b1}${text}{\\c&H00FFFFFF&\\b1}`
+        : text;
+      wordIndex += 1;
+      return rendered;
+    }).join(' '))
+    .join('\\N');
 }
 
 function subtitleStyle(options) {
   return {
     fontName: String(options.fontName || DEFAULTS.fontName),
     fontSize: clampInt(options.fontSize, 42, 96, DEFAULTS.fontSize),
-    marginV: clampInt(options.marginV, 160, 520, DEFAULTS.marginV),
+    marginV: clampInt(options.marginV, 200, 560, DEFAULTS.marginV),
+    maxWidthPx: clampInt(options.maxWidthPx, 620, 900, DEFAULTS.maxWidthPx),
+    maxLines: clampInt(options.maxLines, 1, 2, DEFAULTS.maxLines),
   };
 }
 

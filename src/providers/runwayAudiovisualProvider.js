@@ -46,6 +46,9 @@ export class RunwayAudiovisualProvider {
     const character = productionScript.characters.find((item) => item.id === segment.speakerCharacterId)
       || productionScript.characters[0];
     const references = collectImageReferences(segment, storyBible, previousAsset);
+    const referenceVideos = previousAsset?.sourceUrl
+      ? [{ type: 'video', uri: previousAsset.sourceUrl }]
+      : [];
     const referenceAudio = [];
 
     let dialogueTrack = null;
@@ -73,6 +76,7 @@ export class RunwayAudiovisualProvider {
       duration: clamp(Math.round(segment.durationSeconds), 4, 15),
       ratio: this.ratio,
       ...(references.length ? { references } : {}),
+      ...(referenceVideos.length ? { referenceVideos } : {}),
       ...(referenceAudio.length ? { referenceAudio } : {}),
     });
     const completed = await this.wait(task.id);
@@ -100,6 +104,7 @@ export class RunwayAudiovisualProvider {
       prompt: promptText,
       dialogueTrack,
       referenceImageCount: references.length,
+      referenceVideoCount: referenceVideos.length,
       previousGenerationId: previousAsset?.generationId || null,
     };
   }
@@ -201,6 +206,12 @@ function buildAudiovisualPrompt({
     location ? `LOCATION: ${location.name}. ${location.description}. Lighting: ${location.lighting}. Fixed elements: ${location.fixedElements.join(', ')}.` : '',
     `ACTION: ${segment.action}.`,
     `CAMERA: ${segment.camera}.`,
+    segment.editing?.allowInternalCuts
+      ? `EDITING: internal cuts allowed; maximum ${segment.editing.shotCount || 2} shots. Use only clean motivated cuts.`
+      : 'EDITING: ONE continuous shot only. No internal cuts, dissolves, crossfades, flash transitions, ghosting, double exposure or montage.',
+    segment.editing?.allowDissolves
+      ? 'A motivated dissolve is allowed only if explicitly required by the action.'
+      : 'Dissolves and crossfades are forbidden.',
     `EXACT SPOKEN DIALOGUE: "${segment.dialogue}"`,
     dialogueTrack
       ? 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
@@ -210,7 +221,7 @@ function buildAudiovisualPrompt({
     segment.music ? `MUSIC: ${segment.music}. Keep it below dialogue.` : '',
     `GLOBAL VISUAL STYLE: ${productionScript.visualStyle.description}. ${productionScript.visualStyle.cameraRules}. ${productionScript.visualStyle.lightingRules}.`,
     `AUDIO MIX: ${productionScript.audioDirection.mix}. ${productionScript.audioDirection.musicPolicy}.`,
-    previousAsset ? 'Maintain continuity with the previous accepted act: same identity, wardrobe, environment and visual language.' : '',
+    previousAsset ? 'The previous accepted act is supplied as a video reference. Match its recurring character identity, apparent age, face geometry, hair, body proportions, wardrobe, environment anchors, lighting and visual language exactly.' : '',
     regeneration?.guidance ? `QC CORRECTION: ${regeneration.guidance}` : '',
     'No on-screen text, captions, logos, watermarks, CGI look, anatomy errors, face morphing, flicker, or unexplained cuts.',
   ].filter(Boolean).join(' ');
