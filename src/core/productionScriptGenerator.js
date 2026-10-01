@@ -1,3 +1,17 @@
+const RUNWAY_VOICE_PRESETS = [
+  'Maya', 'Arjun', 'Serene', 'Bernard', 'Billy', 'Mark', 'Clint', 'Mabel',
+  'Chad', 'Leslie', 'Eleanor', 'Elias', 'Elliot', 'Grungle', 'Brodie',
+  'Sandra', 'Kirk', 'Kylie', 'Lara', 'Lisa', 'Malachi', 'Marlene', 'Martin',
+  'Miriam', 'Monster', 'Paula', 'Pip', 'Rusty', 'Ragnar', 'Xylar', 'Maggie',
+  'Jack', 'Katie', 'Noah', 'James', 'Rina', 'Ella', 'Mariah', 'Frank',
+  'Claudia', 'Niki', 'Vincent', 'Kendrick', 'Myrna', 'Tom', 'Wanda',
+  'Benjamin', 'Kiana', 'Rachel',
+];
+const RUNWAY_VOICE_BY_LOWER = new Map(
+  RUNWAY_VOICE_PRESETS.map((preset) => [preset.toLowerCase(), preset]),
+);
+const FALLBACK_VOICES = ['Bernard', 'Maya', 'Arjun', 'Serene', 'Eleanor', 'Vincent'];
+
 export class ProductionScriptGenerator {
   constructor({ llm }) {
     this.llm = llm;
@@ -184,19 +198,31 @@ function normalizeDialogueTurns(segment, {
 
 function normalizeCharacters(items) {
   const list = Array.isArray(items) ? items : [];
-  const normalized = list.slice(0, 4).map((character, index) => ({
-    id: safeId(character.id || `character-${index + 1}`),
-    name: clean(character.name || `Character ${index + 1}`, 100),
-    description: clean(character.description || '', 600),
-    physicalTraits: clean(character.physicalTraits || '', 500),
-    wardrobe: clean(character.wardrobe || '', 400),
-    voice: {
-      presetId: clean(character.voice?.presetId || 'Bernard', 80),
-      description: clean(character.voice?.description || 'natural conversational voice', 250),
-      delivery: clean(character.voice?.delivery || 'clear, warm, realistic', 250),
-      languageCode: clean(character.voice?.languageCode || 'en', 12),
-    },
-  })).filter((character) => character.description);
+  const usedVoices = new Set();
+  const normalized = list.slice(0, 4).map((character, index) => {
+    const requested = clean(character.voice?.presetId || '', 80);
+    const canonical = RUNWAY_VOICE_BY_LOWER.get(requested.toLowerCase()) || null;
+    let presetId = canonical;
+    if (!presetId || usedVoices.has(presetId)) {
+      presetId = FALLBACK_VOICES.find((preset) => !usedVoices.has(preset))
+        || FALLBACK_VOICES[index % FALLBACK_VOICES.length];
+    }
+    usedVoices.add(presetId);
+
+    return {
+      id: safeId(character.id || `character-${index + 1}`),
+      name: clean(character.name || `Character ${index + 1}`, 100),
+      description: clean(character.description || '', 600),
+      physicalTraits: clean(character.physicalTraits || '', 500),
+      wardrobe: clean(character.wardrobe || '', 400),
+      voice: {
+        presetId,
+        description: clean(character.voice?.description || 'natural conversational voice', 250),
+        delivery: clean(character.voice?.delivery || 'clear, warm, realistic', 250),
+        languageCode: clean(character.voice?.languageCode || 'en', 12),
+      },
+    };
+  }).filter((character) => character.description);
 
   if (!normalized.length) {
     normalized.push({
