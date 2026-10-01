@@ -368,3 +368,59 @@ passing segment/track ratio >= 0.80
 ```
 
 If a compatible evaluator supplies normalized `phonemeAlignmentScore` or `visemeAlignmentScore`, the same gate can enforce configured minimums. SyncNet's own result is not presented as phoneme/viseme classification; it remains a frame-level correspondence metric.
+
+
+## Bundled phoneme↔viseme classification
+
+TikTokMoney now has a local articulation verifier in addition to the global SyncNet-class offset metric.
+
+```text
+verified generated speech
+  -> word timestamps
+  -> CMUdict / fallback G2P
+  -> ARPAbet phonemes
+  -> 15-viseme labels
+  -> visually compatible macro-viseme family
+        |
+        +---------------------------+
+                                    |
+generated video                     |
+  -> MediaPipe FaceMesh             |
+  -> mouth landmark geometry        |
+  -> normalized openness/width      |
+  -> prototype mouth classifier ----+
+                                    |
+                                    v
+                         timeline alignment score
+```
+
+### Visual classes
+
+The expected 15-viseme inventory is reduced only where visual ambiguity requires it:
+
+- `closed`: silence, PP
+- `narrow`: FF, TH, DD, kk, SS, nn, RR
+- `rounded`: CH, oh, ou
+- `wide`: E, ih
+- `open`: aa
+
+This is deliberate. Several phonemes are acoustically distinct but visually indistinguishable, so forcing a 15-way visual classifier would manufacture precision the image does not contain.
+
+The classifier samples the generated video at expected phoneme midpoints, extracts mouth opening and width relative to face geometry, normalizes those values within the act, and assigns soft probabilities to the five visual families. It reports:
+
+- phoneme alignment probability
+- top-family viseme accuracy
+- usable face/mouth coverage
+- per-family accuracy
+- expected→observed confusion counts
+- timestamped worst mismatches
+
+The default gate requires:
+
+```text
+phoneme alignment >= 0.72
+viseme alignment >= 0.68
+usable face coverage >= 0.72
+```
+
+A failure feeds the worst concrete mismatches back into audiovisual regeneration and can terminate as `PHONEME_VISEME_QC_FAILED`.

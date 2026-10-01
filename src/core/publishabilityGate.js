@@ -77,6 +77,14 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const failedPhonemeViseme = scenes.filter((scene) => scene.phonemeVisemeQc?.passed === false);
+  if (failedPhonemeViseme.length) {
+    blockers.push({
+      code: 'phoneme-viseme',
+      message: `Phoneme/viseme alignment did not pass for scene(s): ${failedPhonemeViseme.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   if (subtitles?.enabled && subtitles.layout?.passed === false) {
     blockers.push({
       code: 'subtitle-layout',
