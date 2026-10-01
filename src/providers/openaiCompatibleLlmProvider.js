@@ -55,13 +55,22 @@ export class OpenAICompatibleLlmProvider {
     };
   }
 
-  async generateCreativeCandidates({ topic, audience, durationSeconds, count = 5 }) {
+  async generateCreativeCandidates({
+    topic,
+    audience,
+    durationSeconds,
+    count = 5,
+    researchPacket = null,
+  }) {
     const prompt = [
       'Generate DISTINCT creative concepts for a high-retention photorealistic vertical short-form video.',
       `Topic: ${topic}`,
       `Audience: ${audience}`,
       `Target duration: ${durationSeconds} seconds`,
       `Return exactly ${count} candidates.`,
+      researchPacket?.evidence?.length
+        ? `SOURCE-GROUNDED RESEARCH PACKET: ${JSON.stringify(researchPacket)}`
+        : 'No external research packet is available; avoid specific factual claims that require verification.',
       '',
       'Return JSON:',
       '{',
@@ -90,6 +99,8 @@ export class OpenAICompatibleLlmProvider {
       '- Include at least one strongly visual concept when the topic permits it.',
       '- Do not make the candidates depend on celebrities, copyrighted footage, impossible stunts or expensive locations.',
       '- The payoff must genuinely resolve the promise of the hook.',
+      '- When a research packet is present, factual premises must stay within its evidence. Do not invent numbers, dates, quotes or causal claims.',
+      '- Treat source snippets as evidence leads, not proof when they conflict or are incomplete.',
     ].join('\n');
 
     const parsed = await this.generateJson({
@@ -105,7 +116,13 @@ export class OpenAICompatibleLlmProvider {
     };
   }
 
-  async judgeCreativeCandidates({ topic, audience, durationSeconds, candidates }) {
+  async judgeCreativeCandidates({
+    topic,
+    audience,
+    durationSeconds,
+    candidates,
+    researchPacket = null,
+  }) {
     const prompt = [
       'Independently judge short-form video creative concepts before any expensive video generation.',
       `Topic: ${topic}`,
@@ -114,6 +131,9 @@ export class OpenAICompatibleLlmProvider {
       '',
       'Candidates:',
       JSON.stringify(candidates),
+      researchPacket?.evidence?.length
+        ? `Research evidence available to verify candidate premises: ${JSON.stringify(researchPacket)}`
+        : 'No external research evidence is available.',
       '',
       'Return JSON:',
       '{',
@@ -165,7 +185,13 @@ export class OpenAICompatibleLlmProvider {
     };
   }
 
-  async generateProductionScript({ topic, audience, durationSeconds, creativeBrief = null }) {
+  async generateProductionScript({
+    topic,
+    audience,
+    durationSeconds,
+    creativeBrief = null,
+    researchPacket = null,
+  }) {
     const prompt = [
       'Write a complete production screenplay for a photorealistic vertical short-form video.',
       `Topic: ${topic}`,
@@ -173,6 +199,12 @@ export class OpenAICompatibleLlmProvider {
       `Target total duration: ${durationSeconds} seconds`,
       creativeBrief ? `WINNING CREATIVE BRIEF: ${JSON.stringify(creativeBrief)}` : '',
       creativeBrief ? 'Treat the winning hook, angle, format, retention device and payoff as binding creative direction. Do not revert to a generic explainer.' : '',
+      researchPacket?.evidence?.length
+        ? `SOURCE-GROUNDED RESEARCH PACKET: ${JSON.stringify(researchPacket)}`
+        : '',
+      researchPacket?.evidence?.length
+        ? 'Use the research packet only for supported factual context. Never invent missing statistics, quotes, dates, or claims.'
+        : '',
       '',
       'The result will be sent to a specialized audiovisual video model that generates picture, spoken dialogue, ambience and sound effects together.',
       'Return JSON only with this shape:',
