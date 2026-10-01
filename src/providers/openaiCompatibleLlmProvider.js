@@ -163,24 +163,17 @@ export class OpenAICompatibleLlmProvider {
   }
 
   async generateJson({ system, prompt, temperature = 0 }) {
-    const response = await this.fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        temperature,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: prompt },
-        ],
-      }),
-    });
+    let response = await this.requestCompletion({ system, prompt, temperature });
+    let payload = await response.json().catch(() => null);
 
-    const payload = await readJsonResponse(response, 'LLM');
+    // Reasoning models (e.g. gpt-5.x) reject non-default temperature; retry once without it.
+    if (!response.ok && this.supportsTemperature !== false && /temperature/i.test(payload?.error?.message || '')) {
+      this.supportsTemperature = false;
+      response = await this.requestCompletion({ system, prompt, temperature });
+      payload = await response.json().catch(() => null);
+    }
+
+    assertOk(response, payload, 'LLM');
     const raw = payload?.choices?.[0]?.message?.content;
     if (!raw) throw new Error('LLM response did not contain message content');
 
@@ -190,22 +183,33 @@ export class OpenAICompatibleLlmProvider {
       throw new Error(`LLM returned invalid JSON: ${error.message}`);
     }
   }
+
+  requestCompletion({ system, prompt, temperature }) {
+    return this.fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        ...(this.supportsTemperature === false ? {} : { temperature }),
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+  }
 }
 
-async function readJsonResponse(response, label) {
-  let payload;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error(`${label} returned a non-JSON response`);
-  }
-
+function assertOk(response, payload, label) {
+  if (payload === null) throw new Error(`${label} returned a non-JSON response`);
   if (!response.ok) {
     const detail = payload?.error?.message || payload?.message || response.statusText || 'request failed';
     throw new Error(`${label} request failed (${response.status}): ${detail}`);
   }
-
-  return payload;
 }
 
 function validateScript(value) {

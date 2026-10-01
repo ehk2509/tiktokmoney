@@ -145,6 +145,35 @@ test('OpenAI-compatible provider parses structured JSON scripts', async () => {
   assert.equal(script.body.length, 3);
 });
 
+test('OpenAI-compatible provider retries without temperature when the model rejects it', async () => {
+  const bodies = [];
+  const provider = new OpenAICompatibleLlmProvider({
+    apiKey: 'test-key',
+    model: 'reasoning-model',
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      if ('temperature' in body) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: { message: "Unsupported value: 'temperature' does not support 0.7 with this model." } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }),
+      };
+    },
+  });
+
+  assert.deepEqual(await provider.generateJson({ system: 's', prompt: 'p', temperature: 0.7 }), { ok: true });
+  assert.deepEqual(await provider.generateJson({ system: 's', prompt: 'p', temperature: 0.2 }), { ok: true });
+  assert.equal(bodies.length, 3);
+  assert.ok(!('temperature' in bodies[2]));
+});
+
 test('Pexels provider downloads and records attribution metadata', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-pexels-'));
   try {
