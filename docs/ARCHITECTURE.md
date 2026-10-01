@@ -298,3 +298,40 @@ Captions are greedily wrapped using an estimated font-width model. A cue may use
 ### Audio safety
 
 The renderer measures the joined native soundtrack with FFmpeg EBU R128 analysis. Effectively silent audio is rejected before final encode. Final audio is normalized to -14 LUFS, LRA 7 and -1 dBTP, then measured again before success is returned.
+
+
+## Dialogue fidelity and speech-timing QC
+
+Native audiovisual generation is not trusted to preserve spoken copy automatically. Every accepted act can now pass through an independent audio-verification path:
+
+```text
+generated MP4
+  -> gpt-transcribe
+      -> transcript
+      -> word timestamps
+  -> screenplay/transcript alignment
+      -> WER
+      -> insertions
+      -> deletions
+      -> substitutions
+  -> speech-active/pause sample plan
+  -> sampled mouth/face frames
+  -> OpenRouter vision speech-timing QC
+  -> regenerate if either gate fails
+```
+
+The transcription provider uploads the generated MP4 directly to the current OpenAI audio-transcriptions endpoint and requests `verbose_json` with `word` and `segment` timestamps. The expected screenplay text is not supplied as a transcription prompt, avoiding circular verification.
+
+A dialogue mismatch feeds concrete missing/added/substituted words into the existing audiovisual regeneration guidance. If the independent transcript passes, those word timings are also reused for final subtitle timing.
+
+### Lip-sync scope
+
+The current lip-sync gate is a timing-level visual proxy, not phoneme-level measurement. It samples frames at independently transcribed spoken-word midpoints and true pause gaps, then checks:
+
+- speaker/mouth visibility
+- mouth activity during speech
+- mouth stillness during pauses
+- stable face/mouth geometry
+- broad visual timing plausibility
+
+This catches frozen-mouth speech, obvious continued talking during pauses, hidden-speaker failures and unstable facial motion. A future milestone can add a dedicated phoneme/viseme alignment model for frame-accurate lip-sync scoring.
