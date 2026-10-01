@@ -33,7 +33,7 @@ Added as the product direction:
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.9+
 - FFmpeg available on `PATH`
 
 No npm dependencies are currently required.
@@ -113,7 +113,7 @@ The fallback script provider is deterministic so development and tests do not sp
 
 ## Provider-backed M1 mode
 
-The default remains zero-key/local. Add environment variables when you want production media:
+The default remains zero-key/local. Add environment variables when you want production media. The `npm start`, `npm run generate` and `npm run opportunities` scripts load `.env` automatically when it exists; variables already exported in your shell take precedence. When calling `node src/cli.js` directly, pass `--env-file=.env`.
 
 ```bash
 cp .env.example .env

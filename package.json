@@ -5,12 +5,12 @@
   "description": "Prototype autonomous short-form video engine: trend scoring, creative generation, scene planning and FFmpeg rendering.",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.9"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "generate": "node src/cli.js generate",
-    "opportunities": "node src/cli.js opportunities",
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "generate": "node --env-file-if-exists=.env src/cli.js generate",
+    "opportunities": "node --env-file-if-exists=.env src/cli.js opportunities",
     "test": "node --test",
     "check": "node --check src/cli.js && node --check src/server.js && node --test"
   }
