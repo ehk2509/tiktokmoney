@@ -63,6 +63,7 @@ export function createApp(overrides = {}) {
       phonemeVisemeQc,
       speakerTurnQc,
       subtitleConfig: overrides.subtitleConfig,
+      creativeTournament: overrides.creativeTournament,
     });
   } else {
     const voice = overrides.voice || createVoiceProvider();

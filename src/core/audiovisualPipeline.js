@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { ProductionScriptGenerator, productionScriptToStoryBible } from './productionScriptGenerator.js';
 import { buildSubtitles } from './subtitleBuilder.js';
 import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
+import { CreativeTournament } from './creativeTournament.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -17,8 +18,10 @@ export class AudiovisualPipeline {
     phonemeVisemeQc = null,
     speakerTurnQc = null,
     subtitleConfig = null,
+    creativeTournament = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
+    this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
     this.audiovisual = audiovisual;
     this.renderer = renderer;
     this.store = store;
@@ -37,27 +40,47 @@ export class AudiovisualPipeline {
     if (!this.audiovisual) throw new Error('audiovisual provider is required');
 
     const id = `vid_${crypto.randomUUID()}`;
-    const productionScript = await this.productionScriptGenerator.generate({
-      topic: topic.trim(),
+    const normalizedTopic = topic.trim();
+    const tournament = await this.creativeTournament.run({
+      topic: normalizedTopic,
       audience,
       durationSeconds,
     });
 
-    let storyBible = productionScriptToStoryBible(productionScript);
     const project = {
       id,
       mode: 'audiovisual-director',
-      status: 'SCRIPTED',
-      topic: topic.trim(),
+      status: 'CREATIVE_SELECTED',
+      topic: normalizedTopic,
       audience,
       createdAt: new Date().toISOString(),
-      productionScript,
-      storyBible,
+      creativeTournament: tournament,
+      creativeBrief: tournament.winner || null,
+      productionScript: null,
+      storyBible: null,
       scenes: [],
       subtitles: null,
       warnings: [],
       render: null,
     };
+
+    if (tournament.enabled && !tournament.accepted) {
+      project.status = 'CREATIVE_REJECTED';
+      project.error = `No creative candidate met the minimum score of ${tournament.minimumWinnerScore}; best score was ${tournament.winnerScore}.`;
+      await this.store?.saveProject(project);
+      return project;
+    }
+
+    const productionScript = await this.productionScriptGenerator.generate({
+      topic: normalizedTopic,
+      audience,
+      durationSeconds,
+      creativeBrief: tournament.winner || null,
+    });
+    let storyBible = productionScriptToStoryBible(productionScript);
+    project.productionScript = productionScript;
+    project.storyBible = storyBible;
+    project.status = 'SCRIPTED';
 
     if (typeof this.visual?.prepareStoryBible === 'function') {
       project.status = 'REFERENCES_PREPARING';

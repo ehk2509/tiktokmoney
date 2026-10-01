@@ -228,10 +228,9 @@ docs/                    architecture and roadmap
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
 1. render/generation retry by failed stage
-2. independent hook variants and creative ranking
-3. live trend intelligence
-4. publishing + performance learning
-5. caption-style experiments driven by retention
+2. live trend intelligence
+3. publishing + performance learning
+4. caption-style experiments driven by retention
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
 
@@ -270,6 +269,11 @@ The production path becomes:
 
 ```text
 topic
+  -> Creative Tournament
+       -> 5 materially different concepts
+       -> independent comparative judge
+       -> hard reject unsafe / deceptive / infeasible concepts
+       -> winning creative brief
   -> AI ProductionScript
        -> exact spoken dialogue
        -> structured dialogueTurns for 1-3 speakers
@@ -557,3 +561,56 @@ SPEAKER_TURN_QC_THRESHOLD=82
 SPEAKER_TURN_QC_FRAME_WIDTH=448
 SPEAKER_TURN_QC_MAX_REGENERATIONS=1
 ```
+
+
+## Creative tournament
+
+Audiovisual generation now starts with a cheap text-only competition before any references, voices, or video are generated.
+
+```text
+topic
+  -> N diverse creative concepts
+  -> independent judge
+       -> hook strength
+       -> retention potential
+       -> clarity
+       -> novelty
+       -> production feasibility
+       -> monetization fit
+       -> factual safety
+       -> platform fit
+  -> hard-reject deceptive / unsupported / infeasible concepts
+  -> weighted ranking
+  -> winner
+  -> full ProductionScript
+  -> expensive audiovisual generation
+```
+
+Defaults:
+
+```env
+CREATIVE_TOURNAMENT_ENABLED=true
+CREATIVE_TOURNAMENT_CANDIDATES=5
+CREATIVE_TOURNAMENT_MIN_WINNER_SCORE=68
+CREATIVE_TOURNAMENT_MIN_MARGIN=2
+CREATIVE_JUDGE_MODEL=
+```
+
+`CREATIVE_JUDGE_MODEL` is optional. When omitted, the normal LLM model judges the candidates in a separate low-temperature call. A different model can be configured to reduce generator/judge self-preference.
+
+The tournament deliberately rewards executable creative quality rather than hook aggressiveness alone. Weighted dimensions are:
+
+```text
+hook strength           22%
+retention potential     20%
+clarity                 13%
+novelty                 12%
+production feasibility  10%
+monetization fit         8%
+factual safety           8%
+platform fit             7%
+```
+
+If no candidate reaches the configured quality floor, the project stops as `CREATIVE_REJECTED` before production-screenplay generation, TTS, image references, or video generation. This makes the tournament a spend gate as well as a creative selector.
+
+The complete candidate set, independent judgments, ranking, score margin, winner, strengths, weaknesses, and red flags are persisted in the project manifest. The winner is then injected into the production-screenplay prompt as binding direction, so the downstream writer cannot silently fall back to a generic explainer.

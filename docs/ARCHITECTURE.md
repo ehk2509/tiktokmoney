@@ -478,3 +478,82 @@ A dedicated vision gate samples early/late points inside each measured dialogue 
 - turn-taking clarity
 
 This gate is complementary to dialogue WER, visual speech timing, SyncNet-class A/V sync, and phoneme↔viseme QC. WER verifies the words; speaker-turn QC verifies **who visibly says them**.
+
+
+## Creative tournament
+
+The production path now separates **creative search** from **expensive execution**.
+
+```text
+topic
+  -> CreativeTournament
+      -> candidate generator
+      -> normalization / duplicate removal
+      -> independent judge
+      -> safety / feasibility hard rejects
+      -> weighted rank
+      -> winner + margin
+  -> ProductionScriptGenerator(winner)
+  -> reference generation
+  -> voice / video generation
+```
+
+The tournament asks for materially different angles and formats rather than multiple paraphrases of one hook. Candidate metadata includes:
+
+- angle
+- exact hook
+- format
+- emotional driver
+- retention device
+- payoff
+- visual opportunity
+- dialogue style
+- monetization fit
+- production constraints
+- risk notes
+
+### Independent judging
+
+The judge receives the complete candidate set and scores every candidate from 0-100 on:
+
+```text
+hookStrength
+retentionPotential
+clarity
+novelty
+productionFeasibility
+monetizationFit
+factualSafety
+platformFit
+```
+
+The default weighted score is:
+
+```text
+0.22 hook
+0.20 retention
+0.13 clarity
+0.12 novelty
+0.10 feasibility
+0.08 monetization
+0.08 factual safety
+0.07 platform fit
+```
+
+The generator and judge can use different models through `LLM_MODEL` and `CREATIVE_JUDGE_MODEL`. Even when they use the same model, candidate generation and judgment are separate calls with different instructions and temperatures.
+
+A judge can set `hardReject=true` for deceptive, fabricated, copyright-dependent, or infeasible concepts. A hard-rejected candidate receives an effective score of zero regardless of its hook score.
+
+### Spend gate
+
+The default winner floor is 68/100. If the best concept does not reach that threshold, the project terminates as `CREATIVE_REJECTED` before:
+
+- full production screenplay generation
+- continuity-reference generation
+- TTS
+- video generation
+- audiovisual QC
+
+This keeps weak ideas from consuming the expensive part of the pipeline.
+
+The full tournament provenance is retained in `project.creativeTournament`; the winning brief is copied to `project.creativeBrief` and becomes binding input to the production screenplay.
