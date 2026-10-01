@@ -10,6 +10,8 @@ export class FrameSampler {
     maxWidth = Number(process.env.REALISM_QC_FRAME_WIDTH || 512),
     temporalFrameCount = Number(process.env.REALISM_QC_TEMPORAL_FRAMES || 8),
     temporalMaxWidth = Number(process.env.REALISM_QC_TEMPORAL_FRAME_WIDTH || 384),
+    comparisonFrameCount = Number(process.env.REALISM_QC_COMPARISON_FRAMES || 2),
+    comparisonMaxWidth = Number(process.env.REALISM_QC_COMPARISON_FRAME_WIDTH || 384),
     runCommand = run,
   } = {}) {
     this.ffmpegBin = ffmpegBin;
@@ -17,6 +19,8 @@ export class FrameSampler {
     this.maxWidth = clampInt(maxWidth, 256, 1024, 512);
     this.temporalFrameCount = clampInt(temporalFrameCount, 4, 12, 8);
     this.temporalMaxWidth = clampInt(temporalMaxWidth, 256, 768, 384);
+    this.comparisonFrameCount = clampInt(comparisonFrameCount, 1, 3, 2);
+    this.comparisonMaxWidth = clampInt(comparisonMaxWidth, 256, 768, 384);
     this.runCommand = runCommand;
   }
 
@@ -35,6 +39,15 @@ export class FrameSampler {
     return this.sampleAt(localPath, timestamps, {
       maxWidth: this.temporalMaxWidth,
       prefix: 'temporal',
+    });
+  }
+
+  async sampleComparison(localPath, { durationSeconds = 5 } = {}) {
+    const duration = normalizeDuration(durationSeconds);
+    const timestamps = evenlySpacedTimestamps(duration, this.comparisonFrameCount);
+    return this.sampleAt(localPath, timestamps, {
+      maxWidth: this.comparisonMaxWidth,
+      prefix: 'comparison',
     });
   }
 
