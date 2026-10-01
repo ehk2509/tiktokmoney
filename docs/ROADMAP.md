@@ -55,7 +55,7 @@
 - [x] Visual speech-timing / lip-sync proxy QC
 - [x] Learned frame-level deep A/V sync gate (SyncNet-class)
 - [x] Pluggable phoneme / viseme score gates when evaluator supplies them
-- [ ] Bundled dedicated phoneme / viseme classifier
+- [x] Bundled local phoneme / viseme mouth-shape classifier
 - [ ] Multi-speaker dialogue in one act
 
 ## M2 - Trend intelligence
