@@ -272,6 +272,7 @@ The production path becomes:
 topic
   -> AI ProductionScript
        -> exact spoken dialogue
+       -> structured dialogueTurns for 1-3 speakers
        -> character descriptions
        -> apparent age / face / hair / body traits
        -> wardrobe
@@ -478,3 +479,81 @@ Failures produce targeted regeneration guidance with timestamped examples, for e
 A terminal failure returns `PHONEME_VISEME_QC_FAILED`.
 
 The stronger SyncNet-class global A/V offset gate remains complementary: SyncNet measures learned audio/video synchronization, while this verifier checks whether the visible mouth-shape family is compatible with the spoken phoneme sequence.
+
+
+## Multi-speaker dialogue scenes
+
+Audiovisual acts can now contain a real conversation instead of one narrator per scene.
+
+The production screenplay uses structured turns:
+
+```json
+{
+  "characterIds": ["alex", "maya"],
+  "dialogueTurns": [
+    {
+      "speakerCharacterId": "alex",
+      "text": "Is starting in your thirties too late?",
+      "delivery": "skeptical but curious",
+      "pauseAfterSeconds": 0.2
+    },
+    {
+      "speakerCharacterId": "maya",
+      "text": "No. Consistency matters much more than the age you start.",
+      "delivery": "calm and reassuring",
+      "pauseAfterSeconds": 0
+    }
+  ]
+}
+```
+
+Single-speaker scripts remain backward-compatible: the old `dialogue` + `speakerCharacterId` form is normalized into one dialogue turn.
+
+### Locked multi-speaker audio
+
+With `AUDIOVISUAL_DIALOGUE_MODE=locked`:
+
+```text
+dialogue turn 1
+  -> Alex's stable Runway voice
+dialogue turn 2
+  -> Maya's stable Runway voice
+        ↓
+measure each generated voice clip
+        ↓
+FFmpeg timed dialogue master
+        ↓
+data:audio/mpeg reference
+        ↓
+WAN 3
+```
+
+Each recurring character is normalized to a valid, distinct Runway Eleven v3 preset voice. The dialogue master preserves exact speaker order and per-turn pauses. TikTokMoney refuses a master that exceeds the act duration or WAN's reference-audio budget, preventing final-render truncation.
+
+Runway's current media input contract accepts data URIs wherever a URL media input is accepted, so the locally composed dialogue master does not need to be hosted publicly.
+
+### Speaker attribution QC
+
+For multi-speaker acts, TikTokMoney samples frames during each measured dialogue turn and checks:
+
+- the intended named character is the active speaker
+- the active speaker visibly articulates
+- listeners react without speaking over the line
+- character identities are not swapped between turns
+- turn-taking remains visually unambiguous
+
+A failure feeds targeted blocking guidance back into regeneration. A terminal failure becomes:
+
+```text
+SPEAKER_TURN_QC_FAILED
+```
+
+Defaults:
+
+```env
+MULTISPEAKER_TURN_GAP_SECONDS=0.16
+SPEAKER_TURN_QC_ENABLED=true
+SPEAKER_TURN_QC_THRESHOLD=82
+SPEAKER_TURN_QC_FRAME_WIDTH=448
+SPEAKER_TURN_QC_MAX_REGENERATIONS=1
+```
