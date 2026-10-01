@@ -52,15 +52,27 @@ function normalizeProductionScript(value, context) {
   let cursor = 0;
   const segments = rawSegments.slice(0, 8).map((segment, index) => {
     const duration = clamp(Number(segment.durationSeconds) || 8, 4, 15);
-    const speakerCharacterId = characterIds.has(safeId(segment.speakerCharacterId))
+    const legacySpeakerId = characterIds.has(safeId(segment.speakerCharacterId))
       ? safeId(segment.speakerCharacterId)
       : null;
-    const boundCharacters = Array.isArray(segment.characterIds)
-      ? segment.characterIds.map(safeId).filter((id) => characterIds.has(id)).slice(0, 3)
-      : [];
+    const dialogueTurns = normalizeDialogueTurns(segment, {
+      characterIds,
+      fallbackSpeakerId: legacySpeakerId || characters[0]?.id || null,
+    });
+    const turnSpeakerIds = unique(
+      dialogueTurns.map((turn) => turn.speakerCharacterId).filter(Boolean),
+    );
+    const boundCharacters = unique([
+      ...turnSpeakerIds,
+      ...(Array.isArray(segment.characterIds)
+        ? segment.characterIds.map(safeId).filter((id) => characterIds.has(id))
+        : []),
+    ]).slice(0, 3);
+    const speakerCharacterId = dialogueTurns[0]?.speakerCharacterId || legacySpeakerId;
     if (speakerCharacterId && !boundCharacters.includes(speakerCharacterId)) {
       boundCharacters.unshift(speakerCharacterId);
     }
+    const dialogue = dialogueTurns.map((turn) => turn.text).filter(Boolean).join(' ').trim();
 
     const normalized = {
       index,
@@ -69,11 +81,13 @@ function normalizeProductionScript(value, context) {
       durationSeconds: round(duration),
       purpose: clean(segment.purpose || (index === 0 ? 'hook' : 'explain'), 80),
       speakerCharacterId,
+      speakerMode: turnSpeakerIds.length > 1 ? 'multi-speaker' : 'single-speaker',
+      dialogueTurns,
       characterIds: boundCharacters,
       locationId: locationIds.has(safeId(segment.locationId))
         ? safeId(segment.locationId)
         : locations[0].id,
-      dialogue: clean(segment.dialogue || '', 1400),
+      dialogue,
       action: clean(segment.action || '', 1000),
       camera: clean(segment.camera || '', 700),
       ambience: clean(segment.ambience || '', 500),
@@ -92,7 +106,7 @@ function normalizeProductionScript(value, context) {
     return normalized;
   });
 
-  if (!segments.some((segment) => segment.dialogue)) {
+  if (!segments.some((segment) => segment.dialogueTurns.length)) {
     throw new Error('production script must contain spoken dialogue');
   }
 
@@ -119,6 +133,53 @@ function normalizeProductionScript(value, context) {
     source: clean(value.source || 'llm', 80),
     model: clean(value.model || '', 120),
   };
+}
+
+function normalizeDialogueTurns(segment, {
+  characterIds,
+  fallbackSpeakerId,
+}) {
+  const rawTurns = Array.isArray(segment.dialogueTurns)
+    ? segment.dialogueTurns
+    : [];
+
+  const normalized = rawTurns
+    .slice(0, 5)
+    .map((turn, index) => {
+      const candidate = safeId(turn?.speakerCharacterId || turn?.speakerId || '');
+      const speakerCharacterId = characterIds.has(candidate)
+        ? candidate
+        : index === 0 && fallbackSpeakerId
+          ? fallbackSpeakerId
+          : null;
+      const text = clean(turn?.text || turn?.dialogue || '', 650);
+      if (!speakerCharacterId || !text) return null;
+      return {
+        turnIndex: index,
+        speakerCharacterId,
+        text,
+        delivery: clean(turn?.delivery || '', 220),
+        pauseAfterSeconds: clamp(
+          Number(turn?.pauseAfterSeconds ?? turn?.pauseAfter ?? 0.16),
+          0,
+          0.8,
+        ),
+      };
+    })
+    .filter(Boolean);
+
+  if (normalized.length) return normalized;
+
+  const legacyText = clean(segment.dialogue || '', 1400);
+  if (!legacyText || !fallbackSpeakerId) return [];
+
+  return [{
+    turnIndex: 0,
+    speakerCharacterId: fallbackSpeakerId,
+    text: legacyText,
+    delivery: '',
+    pauseAfterSeconds: 0,
+  }];
 }
 
 function normalizeCharacters(items) {
@@ -249,6 +310,10 @@ function safeId(value) {
 
 function clean(value, max) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function unique(items) {
+  return [...new Set(items.filter(Boolean))];
 }
 
 function clamp(value, min, max) {
