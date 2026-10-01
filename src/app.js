@@ -1,33 +1,55 @@
 import { SampleTrendProvider } from './providers.js';
 import { rankOpportunities } from './core/opportunityScorer.js';
 import { FfmpegRenderer } from './renderers/ffmpegRenderer.js';
+import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
 import { VideoPipeline } from './core/pipeline.js';
+import { AudiovisualPipeline } from './core/audiovisualPipeline.js';
 import {
   createLlmProvider,
   createVisualProvider,
   createVoiceProvider,
   createRealismQcProvider,
+  createAudiovisualProvider,
 } from './providers/providerFactory.js';
 
 export function createApp(overrides = {}) {
   const llm = overrides.llm || createLlmProvider();
   const trends = overrides.trends || new SampleTrendProvider();
   const visual = overrides.visual || createVisualProvider();
-  const voice = overrides.voice || createVoiceProvider();
   const realismQc = overrides.realismQc || createRealismQcProvider();
-  const renderer = overrides.renderer || new FfmpegRenderer();
   const store = overrides.store || new JsonStore(process.env.DATA_DIR || './data');
-  const pipeline = new VideoPipeline({
-    llm,
-    renderer,
-    store,
-    visual,
-    voice,
-    realismQc,
-  });
+  const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
+
+  let pipeline;
+  if (mode === 'audiovisual') {
+    const audiovisual = overrides.audiovisual || createAudiovisualProvider();
+    const renderer = overrides.renderer || new AudiovisualRenderer();
+    pipeline = new AudiovisualPipeline({
+      llm,
+      audiovisual,
+      renderer,
+      store,
+      visual,
+      realismQc,
+      subtitleConfig: overrides.subtitleConfig,
+    });
+  } else {
+    const voice = overrides.voice || createVoiceProvider();
+    const renderer = overrides.renderer || new FfmpegRenderer();
+    pipeline = new VideoPipeline({
+      llm,
+      renderer,
+      store,
+      visual,
+      voice,
+      realismQc,
+      subtitleConfig: overrides.subtitleConfig,
+    });
+  }
 
   return {
+    mode,
     pipeline,
     async opportunities() {
       return rankOpportunities(await trends.list());
