@@ -9,6 +9,7 @@ import { VideoModelRouter } from './videoModelRouter.js';
 import { AiFirstVisualProvider } from './visualRouter.js';
 import { OpenRouterRealismQcProvider } from './openRouterRealismQcProvider.js';
 import { ProviderStatsStore } from '../storage/providerStatsStore.js';
+import { RunwayAudiovisualProvider } from './runwayAudiovisualProvider.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -153,6 +154,23 @@ export function createRealismQcProvider(env = process.env) {
     failClosed: env.REALISM_QC_FAIL_CLOSED == null
       ? undefined
       : isEnabled(env.REALISM_QC_FAIL_CLOSED),
+  });
+}
+
+export function createAudiovisualProvider(env = process.env) {
+  if (!env.RUNWAYML_API_SECRET) return null;
+
+  return new RunwayAudiovisualProvider({
+    apiKey: env.RUNWAYML_API_SECRET,
+    baseUrl: env.RUNWAY_BASE_URL,
+    model: env.AUDIOVISUAL_VIDEO_MODEL || 'wan3',
+    ratio: env.AUDIOVISUAL_VIDEO_RATIO || '720:1280',
+    dialogueMode: env.AUDIOVISUAL_DIALOGUE_MODE || 'locked',
+    ttsModel: env.AUDIOVISUAL_TTS_MODEL || 'eleven_v3',
+    defaultVoice: env.AUDIOVISUAL_DEFAULT_VOICE || 'Bernard',
+    assetDir: env.ASSET_DIR,
+    pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
+    maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,
   });
 }
 
