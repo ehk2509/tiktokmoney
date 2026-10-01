@@ -29,6 +29,13 @@ import {
   renderAssDocument,
   renderSrtDocument,
 } from '../src/core/subtitleBuilder.js';
+import {
+  ProductionScriptGenerator,
+  productionScriptToStoryBible,
+} from '../src/core/productionScriptGenerator.js';
+import { RunwayAudiovisualProvider } from '../src/providers/runwayAudiovisualProvider.js';
+import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
+import { AudiovisualRenderer } from '../src/renderers/audiovisualRenderer.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -1679,4 +1686,398 @@ test('pipeline always prepares subtitle metadata before render', async () => {
   assert.equal(project.subtitles.source, 'voice-word-timings');
   assert.ok(project.subtitles.cues.length > 0);
   assert.ok(project.subtitles.events.length > 0);
+});
+
+
+test('production screenplay normalizes exact dialogue, characters, locations and <=15s acts', async () => {
+  const generator = new ProductionScriptGenerator({
+    llm: {
+      generateProductionScript: async () => ({
+        title: 'Training in your thirties',
+        synopsis: 'A trainer explains why starting now matters.',
+        characters: [{
+          id: 'Coach Alex',
+          name: 'Alex',
+          description: 'A realistic 34-year-old trainer.',
+          physicalTraits: 'Short dark hair, athletic build, light beard.',
+          wardrobe: 'White training shirt and black shorts.',
+          voice: {
+            presetId: 'Bernard',
+            description: 'warm male voice',
+            delivery: 'confident and conversational',
+            languageCode: 'en',
+          },
+        }],
+        locations: [{
+          id: 'Gym Main',
+          name: 'Neighborhood gym',
+          description: 'Brick-walled neighborhood gym.',
+          lighting: 'Soft morning window light.',
+          fixedElements: ['black dumbbell rack', 'large windows'],
+        }],
+        visualStyle: {
+          description: 'Photorealistic documentary.',
+          cameraRules: '50mm lens feel.',
+          lightingRules: 'Natural light.',
+        },
+        audioDirection: {
+          mix: 'Dialogue clear over realistic gym ambience.',
+          musicPolicy: 'Music low under speech.',
+        },
+        segments: [{
+          durationSeconds: 18,
+          purpose: 'hook',
+          speakerCharacterId: 'Coach Alex',
+          characterIds: ['Coach Alex'],
+          locationId: 'Gym Main',
+          dialogue: 'Your thirties are not too late to start training.',
+          action: 'Alex picks up a dumbbell and looks to camera.',
+          camera: 'Medium close-up, subtle push-in.',
+          ambience: 'Quiet working gym.',
+          soundEffects: ['soft dumbbell rack contact'],
+          music: 'restrained energetic pulse',
+        }],
+      }),
+    },
+  });
+
+  const script = await generator.generate({
+    topic: 'why your 30s are a great time to start training',
+    audience: 'busy adults',
+    durationSeconds: 30,
+  });
+
+  assert.equal(script.characters[0].id, 'coach-alex');
+  assert.equal(script.locations[0].id, 'gym-main');
+  assert.equal(script.segments[0].durationSeconds, 15);
+  assert.equal(script.segments[0].speakerCharacterId, 'coach-alex');
+  assert.match(script.fullDialogue, /not too late/i);
+
+  const bible = productionScriptToStoryBible(script);
+  assert.deepEqual(bible.sceneBindings[0].characterIds, ['coach-alex']);
+  assert.equal(bible.sceneBindings[0].locationId, 'gym-main');
+});
+
+test('Runway audiovisual provider creates exact dialogue audio then WAN 3 native-audio video', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-provider-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target.endsWith('/text_to_speech') && options.method === 'POST') {
+          assert.equal(body.model, 'eleven_v3');
+          assert.equal(body.promptText, 'Your thirties are a powerful time to start training.');
+          assert.equal(body.voice.presetId, 'Bernard');
+          return jsonResponse({ id: 'tts-task' }, 200);
+        }
+        if (target.endsWith('/tasks/tts-task')) {
+          return jsonResponse({
+            id: 'tts-task',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/dialogue.mp3'],
+          });
+        }
+        if (target.endsWith('/text_to_video') && options.method === 'POST') {
+          assert.equal(body.model, 'wan3');
+          assert.equal(body.audio, true);
+          assert.equal(body.duration, 8);
+          assert.equal(body.ratio, '720:1280');
+          assert.equal(body.referenceAudio[0].type, 'audio');
+          assert.equal(body.referenceAudio[0].uri, 'https://cdn.example/dialogue.mp3');
+          assert.match(body.promptText, /EXACT SPOKEN DIALOGUE/);
+          assert.match(body.promptText, /Preserve those words verbatim/i);
+          return jsonResponse({ id: 'wan-task' }, 200);
+        }
+        if (target.endsWith('/tasks/wan-task')) {
+          return jsonResponse({
+            id: 'wan-task',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/av.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/av.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('native-av').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const productionScript = {
+      characters: [{
+        id: 'alex',
+        name: 'Alex',
+        description: '34-year-old trainer',
+        physicalTraits: 'short dark hair',
+        wardrobe: 'white shirt and black shorts',
+        voice: {
+          presetId: 'Bernard',
+          description: 'warm',
+          delivery: 'natural',
+          languageCode: 'en',
+        },
+      }],
+      locations: [{
+        id: 'gym',
+        name: 'Gym',
+        description: 'real neighborhood gym',
+        lighting: 'morning light',
+        fixedElements: ['dumbbell rack'],
+      }],
+      visualStyle: {
+        description: 'Photorealistic documentary.',
+        cameraRules: '50mm lens feel.',
+        lightingRules: 'Natural daylight.',
+      },
+      audioDirection: {
+        mix: 'Dialogue clear over ambience.',
+        musicPolicy: 'Music below speech.',
+      },
+    };
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 8,
+      dialogue: 'Your thirties are a powerful time to start training.',
+      speakerCharacterId: 'alex',
+      characterIds: ['alex'],
+      locationId: 'gym',
+      action: 'Alex picks up a dumbbell.',
+      camera: 'Medium close-up.',
+      ambience: 'Quiet gym ambience.',
+      soundEffects: ['dumbbell contact'],
+      music: 'subtle pulse',
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript,
+      projectId: 'vid-av',
+    });
+
+    assert.equal(asset.audioMode, 'locked-dialogue-native-mix');
+    assert.equal(asset.model, 'wan3');
+    assert.equal(asset.dialogueTrack.exactText, segment.dialogue);
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'native-av');
+    assert.equal(requests.filter((request) => request.target.endsWith('/text_to_speech')).length, 1);
+    assert.equal(requests.filter((request) => request.target.endsWith('/text_to_video')).length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Runway audiovisual provider can use pure native speech mode without separate TTS', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-native-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueMode: 'native',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, body });
+        if (target.endsWith('/text_to_video')) return jsonResponse({ id: 'native-task' });
+        if (target.endsWith('/tasks/native-task')) {
+          return jsonResponse({ id: 'native-task', status: 'SUCCEEDED', output: ['https://cdn.example/native.mp4'] });
+        }
+        if (target === 'https://cdn.example/native.mp4') {
+          return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('native').buffer };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 6,
+      dialogue: 'Say this exact sentence.',
+      speakerCharacterId: 'person',
+      characterIds: ['person'],
+      locationId: 'room',
+      action: 'Person speaks to camera.',
+      camera: 'Medium close-up.',
+      ambience: 'Room tone.',
+      soundEffects: [],
+      music: '',
+    };
+    const script = {
+      characters: [{
+        id: 'person', name: 'Person', description: 'adult presenter',
+        physicalTraits: 'natural appearance', wardrobe: 'neutral clothes',
+        voice: { presetId: 'Bernard', languageCode: 'en' },
+      }],
+      locations: [{
+        id: 'room', name: 'Room', description: 'real room', lighting: 'daylight', fixedElements: [],
+      }],
+      visualStyle: { description: 'real', cameraRules: 'stable', lightingRules: 'natural' },
+      audioDirection: { mix: 'clear speech', musicPolicy: 'low music' },
+    };
+
+    const asset = await provider.generateSegment({ segment, productionScript: script, projectId: 'native' });
+    assert.equal(asset.audioMode, 'native');
+    assert.equal(asset.dialogueTrack, null);
+    assert.equal(requests.some((request) => request.target.endsWith('/text_to_speech')), false);
+    const videoRequest = requests.find((request) => request.target.endsWith('/text_to_video'));
+    assert.equal(videoRequest.body.audio, true);
+    assert.equal(videoRequest.body.referenceAudio, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('audiovisual pipeline generates complete native-audio acts and subtitle timeline', async () => {
+  const audiovisual = {
+    generateSegment: async ({ segment, regeneration }) => ({
+      provider: 'fake-av',
+      providerModelId: 'fake-wan',
+      type: 'ai-video',
+      audioMode: 'locked-dialogue-native-mix',
+      localPath: `/fake/act-${segment.index}-${regeneration?.attempt || 0}.mp4`,
+      generationId: `act-${segment.index}-${regeneration?.attempt || 0}`,
+      prompt: segment.dialogue,
+    }),
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    visual: null,
+    realismQc: null,
+    subtitleConfig: { maxWordsPerCue: 4 },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'why training in your thirties matters',
+    audience: 'busy adults',
+    durationSeconds: 24,
+    render: false,
+  });
+
+  assert.equal(project.mode, 'audiovisual-director');
+  assert.equal(project.status, 'READY');
+  assert.ok(project.productionScript.fullDialogue.length > 20);
+  assert.ok(project.scenes.length >= 2);
+  assert.ok(project.scenes.every((scene) => scene.asset.audioMode === 'locked-dialogue-native-mix'));
+  assert.equal(project.subtitles.source, 'scene-estimate');
+  assert.ok(project.subtitles.cues.length > 0);
+});
+
+test('audiovisual pipeline re-generates an act from realism QC feedback', async () => {
+  const calls = [];
+  const audiovisual = {
+    generateSegment: async ({ segment, regeneration }) => {
+      calls.push({ segment: segment.index, regeneration });
+      return {
+        type: 'ai-video',
+        localPath: `/fake/${segment.index}-${regeneration?.attempt || 0}.mp4`,
+        generationId: `g-${segment.index}-${regeneration?.attempt || 0}`,
+        prompt: segment.dialogue,
+      };
+    },
+  };
+  const seen = new Map();
+  const qc = {
+    maxRegenerations: 1,
+    evaluateScene: async (scene) => {
+      const count = seen.get(scene.index) || 0;
+      seen.set(scene.index, count + 1);
+      if (scene.index === 0 && count === 0) {
+        return {
+          passed: false,
+          overallScore: 70,
+          temporalScore: 50,
+          issues: [{ code: 'face', severity: 'high', evidence: 'face changed' }],
+          temporalIssues: [{ code: 'lip-sync', severity: 'high', evidence: 'mouth motion unstable' }],
+          regenerationGuidance: 'Preserve the same face and stabilize mouth motion.',
+        };
+      }
+      return {
+        passed: true,
+        overallScore: 94,
+        temporalScore: 92,
+        issues: [],
+        temporalIssues: [],
+        regenerationGuidance: '',
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: qc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'realistic training advice',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  const first = calls.filter((call) => call.segment === 0);
+  assert.equal(first.length, 2);
+  assert.match(first[1].regeneration.guidance, /same face/i);
+});
+
+test('audiovisual renderer preserves native audio while composing acts and subtitles', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-render-'));
+  const commands = [];
+  try {
+    const renderer = new AudiovisualRenderer({
+      outputDir: dir,
+      runCommand: async (command, args) => commands.push({ command, args }),
+    });
+    const subtitles = buildSubtitles({
+      scenes: [{ start: 0, duration: 5, narration: 'Exact audiovisual dialogue.' }],
+    });
+
+    const result = await renderer.render({
+      id: 'av-render',
+      scenes: [{
+        index: 0,
+        start: 0,
+        duration: 5,
+        narration: 'Exact audiovisual dialogue.',
+        asset: { localPath: '/fake/native-audio.mp4' },
+      }],
+      subtitles,
+    });
+
+    assert.equal(result.audioMode, 'native-audiovisual');
+    assert.equal(commands.length, 3);
+    const normalizeArgs = commands[0].args;
+    assert.ok(normalizeArgs.includes('-c:a'));
+    assert.ok(normalizeArgs.includes('aac'));
+    assert.doesNotMatch(normalizeArgs.join(' '), /-an/);
+
+    const finalArgs = commands[2].args;
+    assert.ok(finalArgs.includes('-c:a'));
+    assert.ok(finalArgs.includes('copy'));
+    assert.match(await readFile(result.subtitleSrtPath, 'utf8'), /Exact audiovisual dialogue/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

@@ -36,6 +36,21 @@
 - [x] Temporal motion / morphing / flicker QC
 - [x] Additional AI video providers / adaptive cost-quality router
 
+## M1.8 - Audiovisual Director
+
+- [x] Full AI production screenplay
+- [x] Character, wardrobe, location, camera and audio direction
+- [x] WAN 3 native-audio generation
+- [x] Locked exact-dialogue mode via Runway TTS reference audio
+- [x] Native-speech mode
+- [x] Reuse canonical character/location references
+- [x] Static + temporal QC for audiovisual acts
+- [x] Audio-preserving final composition
+- [x] Subtitle generation over audiovisual output
+- [ ] Dialogue-verbatim transcription QC
+- [ ] Audio loudness / clipping / silence QC
+- [ ] Multi-speaker dialogue in one act
+
 ## M2 - Trend intelligence
 
 - [ ] Pluggable trend ingestion
