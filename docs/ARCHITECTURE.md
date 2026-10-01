@@ -213,3 +213,58 @@ narration
 Subtitles are intentionally not rendered into individual generated scenes. This keeps realism and temporal QC focused on the underlying footage and lets subtitle styling evolve independently.
 
 The default vertical-safe style uses DejaVu Sans, a large font, strong outline, bottom-center alignment and a word-level active highlight. Docker installs `fonts-dejavu-core` so output is deterministic across development and container environments.
+
+
+## Audiovisual Director
+
+The scene-composer architecture is no longer the only production path. `VIDEO_PIPELINE_MODE=audiovisual` uses a screenplay-first audiovisual architecture.
+
+```text
+Topic
+  -> ProductionScriptGenerator
+  -> ProductionScript
+      -> exact dialogue
+      -> characters + voice direction
+      -> locations
+      -> visual/camera direction
+      -> ambience/SFX/music direction
+      -> 4-15s acts
+  -> reference bible
+  -> RunwayAudiovisualProvider
+      -> optional exact TTS per act
+      -> WAN 3 with native audio
+      -> audio reference + visual references
+  -> existing realism + temporal QC
+  -> AudiovisualRenderer
+      -> preserve model-generated audio
+      -> concatenate acts
+      -> burn subtitles
+```
+
+### Why acts are capped at 15 seconds
+
+WAN 3 supports 2–30 second native-audio output, but its audio-reference budget is currently 15 seconds. TikTokMoney therefore uses acts of 4–15 seconds when exact dialogue locking is enabled. This lets the system provide a generated speech track as `referenceAudio` while still allowing WAN to create synchronized visuals, ambience and effects.
+
+### Locked vs native dialogue
+
+Locked mode:
+
+```text
+exact screenplay dialogue
+  -> Runway Eleven v3 speech
+  -> audio reference
+  -> WAN 3 audiovisual generation
+```
+
+Native mode:
+
+```text
+exact screenplay dialogue in prompt
+  -> WAN 3 generates speech + sound + video directly
+```
+
+Locked mode is the default because generated-video models can otherwise paraphrase or omit dialogue.
+
+### Rendering contract
+
+The audiovisual renderer never strips scene audio. Each generated act is normalized to 1080x1920 H.264 + AAC, acts are concatenated with audio intact, then subtitles are burned in during the final video pass while audio is stream-copied.
