@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { ProductionScriptGenerator, productionScriptToStoryBible } from './productionScriptGenerator.js';
 import { buildSubtitles } from './subtitleBuilder.js';
+import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -103,12 +104,30 @@ export class AudiovisualPipeline {
       config: this.subtitleConfig,
     });
 
+    project.publishability = evaluateAudiovisualPublishability({
+      productionScript,
+      scenes: project.scenes,
+      subtitles: project.subtitles,
+    });
+
+    if (!project.publishability.passed) {
+      project.status = 'PUBLISHABILITY_FAILED';
+      await this.store?.saveProject(project);
+      return project;
+    }
+
     project.status = 'READY';
     if (render && this.renderer) {
       project.status = 'RENDERING';
       try {
         project.render = await this.renderer.render(project);
-        project.status = 'RENDERED';
+        project.publishability = evaluateAudiovisualPublishability({
+          productionScript,
+          scenes: project.scenes,
+          subtitles: project.subtitles,
+          render: project.render,
+        });
+        project.status = project.publishability.passed ? 'RENDERED' : 'PUBLISHABILITY_FAILED';
       } catch (error) {
         project.status = 'RENDER_FAILED';
         project.error = error.message;
