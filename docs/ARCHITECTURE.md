@@ -557,3 +557,61 @@ The default winner floor is 68/100. If the best concept does not reach that thre
 This keeps weak ideas from consuming the expensive part of the pipeline.
 
 The full tournament provenance is retained in `project.creativeTournament`; the winning brief is copied to `project.creativeBrief` and becomes binding input to the production screenplay.
+
+
+## Live trend intelligence
+
+The M2 trend layer normalizes changing public signals before they reach creative generation.
+
+```text
+source adapters
+  -> normalized TrendSignal[]
+  -> lexical topic clustering
+  -> cross-source cluster strength
+  -> TrendHistoryStore
+  -> velocity / acceleration
+  -> OpportunityScorer
+  -> ResearchPacket
+  -> CreativeTournament
+```
+
+### Signal contract
+
+Every adapter emits a common shape containing:
+
+- stable source id
+- source name
+- topic/title
+- snippet
+- canonical URL
+- published/observed timestamps
+- normalized 0-100 strength
+- raw engagement/source metrics
+
+The adapters keep provider-specific measurements in `sourceMetrics` instead of forcing raw view counts, Reddit scores, and RSS positions into the same unit.
+
+### Clustering
+
+Signals are ordered by strength, normalized into language-agnostic alphanumeric tokens, stripped of common stop words, then clustered by Jaccard/containment similarity. Each cluster preserves all evidence and reports source diversity.
+
+No embedding API is required, keeping the trend loop cheap and deterministic. A later semantic-clustering implementation can replace the similarity function without changing the provider contract.
+
+### Historical momentum
+
+`TrendHistoryStore` persists up to 64 observations / seven days per cluster. Current strength and the delta against the previous snapshot produce bounded 0-100 velocity and acceleration features consumed by the existing opportunity scorer.
+
+This means `acceleration` is based on observed change rather than being guessed from a single request.
+
+### Research before creative
+
+The selected topic is searched across configured providers before the audiovisual Creative Tournament. The resulting ResearchPacket is retained in project provenance and sent to:
+
+1. creative candidate generation
+2. independent candidate judging
+3. production screenplay generation
+
+The LLM contract explicitly prohibits inventing facts not supported by the packet and asks the judge to penalize creative premises that outrun available evidence.
+
+### Failure isolation
+
+Trend sources are independent. Collection uses settled provider calls; an unavailable YouTube/Reddit/RSS source does not suppress healthy sources. This keeps trend discovery usable under API quota, token expiry, or feed outages.
