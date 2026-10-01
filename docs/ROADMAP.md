@@ -47,11 +47,13 @@
 - [x] Static + temporal QC for audiovisual acts
 - [x] Audio-preserving final composition
 - [x] Subtitle generation over audiovisual output
-- [ ] Dialogue-verbatim transcription QC
+- [x] Dialogue-verbatim transcription QC
 - [x] Cross-act identity / apparent-age / location QC
 - [x] Subtitle safe-area / pixel-width QC
 - [x] Publishability gate for script, scene, subtitle and audio failures
 - [x] Audio loudness / clipping / silence QC
+- [x] Visual speech-timing / lip-sync proxy QC
+- [ ] Phoneme / viseme-level lip-sync verification
 - [ ] Multi-speaker dialogue in one act
 
 ## M2 - Trend intelligence

@@ -337,3 +337,40 @@ PUBLISHABILITY_AUDIO_REQUIRED=true
 AUDIO_TARGET_LUFS=-14
 AUDIO_TRUE_PEAK_DBTP=-1
 ```
+
+
+## Dialogue fidelity + lip-sync QC
+
+Audiovisual mode can now independently verify that generated speech matches the screenplay before an act is accepted.
+
+```text
+generated audiovisual act
+  -> independent speech transcription
+  -> expected dialogue vs transcript
+       -> word error rate
+       -> missing / added / substituted words
+       -> word-count drift
+  -> transcript word timestamps
+  -> speech-active + pause frame sampling
+  -> visual speech-timing QC
+  -> targeted regeneration on failure
+```
+
+The default transcription model is `gpt-transcribe`. TikTokMoney requests verbose JSON with word and segment timestamps and does **not** feed the expected sentence back as a transcription prompt, keeping the verification pass independent.
+
+Defaults:
+
+```env
+DIALOGUE_QC_ENABLED=true
+TRANSCRIPTION_MODEL=gpt-transcribe
+DIALOGUE_QC_MAX_WER=0.12
+DIALOGUE_QC_MAX_WORD_COUNT_DELTA=0.12
+
+LIPSYNC_QC_ENABLED=true
+LIPSYNC_QC_THRESHOLD=80
+LIPSYNC_QC_FRAMES=10
+```
+
+When dialogue verification passes, its actual word timestamps become the subtitle timing source. Captions therefore follow the generated speech rather than an estimated scene clock.
+
+The current lip-sync check is deliberately described as a **visual speech-timing proxy**: it verifies speaker visibility, mouth activity during speech, relative stillness during pauses, face stability and broad timing plausibility. It does not claim phoneme/viseme-level alignment.

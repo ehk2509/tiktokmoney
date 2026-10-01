@@ -11,6 +11,8 @@ import {
   createVoiceProvider,
   createRealismQcProvider,
   createAudiovisualProvider,
+  createDialogueQcProvider,
+  createLipSyncQcProvider,
 } from './providers/providerFactory.js';
 
 export function createApp(overrides = {}) {
@@ -25,6 +27,15 @@ export function createApp(overrides = {}) {
   if (mode === 'audiovisual') {
     const audiovisual = overrides.audiovisual || createAudiovisualProvider();
     const renderer = overrides.renderer || new AudiovisualRenderer();
+    const dialogueQc = Object.prototype.hasOwnProperty.call(overrides, 'dialogueQc')
+      ? overrides.dialogueQc
+      : createDialogueQcProvider();
+    const lipSyncQc = Object.prototype.hasOwnProperty.call(overrides, 'lipSyncQc')
+      ? overrides.lipSyncQc
+      : dialogueQc
+        ? createLipSyncQcProvider()
+        : null;
+
     pipeline = new AudiovisualPipeline({
       llm,
       audiovisual,
@@ -32,6 +43,8 @@ export function createApp(overrides = {}) {
       store,
       visual,
       realismQc,
+      dialogueQc,
+      lipSyncQc,
       subtitleConfig: overrides.subtitleConfig,
     });
   } else {
