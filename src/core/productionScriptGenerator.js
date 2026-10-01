@@ -17,13 +17,20 @@ export class ProductionScriptGenerator {
     this.llm = llm;
   }
 
-  async generate({ topic, audience, durationSeconds, creativeBrief = null }) {
+  async generate({
+    topic,
+    audience,
+    durationSeconds,
+    creativeBrief = null,
+    researchPacket = null,
+  }) {
     const raw = this.llm?.generateProductionScript
       ? await this.llm.generateProductionScript({
         topic,
         audience,
         durationSeconds,
         creativeBrief,
+        researchPacket,
       })
       : fallbackProductionScript({ topic, audience, durationSeconds, creativeBrief });
 

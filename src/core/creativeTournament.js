@@ -26,7 +26,7 @@ export class CreativeTournament {
     this.weights = normalizeWeights(weights);
   }
 
-  async run({ topic, audience, durationSeconds }) {
+  async run({ topic, audience, durationSeconds, researchPacket = null }) {
     if (!this.enabled) {
       return {
         enabled: false,
@@ -46,6 +46,7 @@ export class CreativeTournament {
         audience,
         durationSeconds,
         count: this.candidateCount,
+        researchPacket,
       })
       : fallbackCandidates({ topic, count: this.candidateCount });
 
@@ -63,6 +64,7 @@ export class CreativeTournament {
         audience,
         durationSeconds,
         candidates: candidates.map(stripInternal),
+        researchPacket,
       })
       : deterministicJudge(candidates);
 
@@ -101,6 +103,7 @@ export class CreativeTournament {
       accepted,
       minimumWinnerScore: this.minWinnerScore,
       minimumMargin: this.minMargin,
+      researchEvidenceCount: researchPacket?.evidence?.length || 0,
       judge: {
         source: judged?.source || 'deterministic',
         model: judged?.model || null,

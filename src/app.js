@@ -16,11 +16,15 @@ import {
   createDeepLipSyncQcProvider,
   createPhonemeVisemeQcProvider,
   createSpeakerTurnQcProvider,
+  createTrendIntelligence,
 } from './providers/providerFactory.js';
 
 export function createApp(overrides = {}) {
   const llm = overrides.llm || createLlmProvider();
-  const trends = overrides.trends || new SampleTrendProvider();
+  const trendIntelligence = Object.prototype.hasOwnProperty.call(overrides, 'trendIntelligence')
+    ? overrides.trendIntelligence
+    : createTrendIntelligence();
+  const trends = overrides.trends || trendIntelligence || new SampleTrendProvider();
   const visual = overrides.visual || createVisualProvider();
   const realismQc = overrides.realismQc || createRealismQcProvider();
   const store = overrides.store || new JsonStore(process.env.DATA_DIR || './data');
@@ -64,6 +68,7 @@ export function createApp(overrides = {}) {
       speakerTurnQc,
       subtitleConfig: overrides.subtitleConfig,
       creativeTournament: overrides.creativeTournament,
+      trendIntelligence,
     });
   } else {
     const voice = overrides.voice || createVoiceProvider();
@@ -83,7 +88,12 @@ export function createApp(overrides = {}) {
     mode,
     pipeline,
     async opportunities() {
-      return rankOpportunities(await trends.list());
+      const items = await trends.list();
+      return trendIntelligence ? items : rankOpportunities(items);
+    },
+    async research(topic) {
+      if (!trendIntelligence) return null;
+      return trendIntelligence.research(topic);
     },
   };
 }

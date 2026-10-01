@@ -14,6 +14,15 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { items: await app.opportunities() });
     }
 
+    if (req.method === 'GET' && req.url?.startsWith('/api/research')) {
+      const url = new URL(req.url, 'http://localhost');
+      const topic = url.searchParams.get('topic');
+      if (!topic) return json(res, 400, { error: 'topic is required' });
+      const packet = await app.research(topic);
+      if (!packet) return json(res, 503, { error: 'trend_intelligence_not_configured' });
+      return json(res, 200, packet);
+    }
+
     if (req.method === 'POST' && req.url === '/api/videos') {
       const body = await readJson(req);
       const project = await app.pipeline.generate({

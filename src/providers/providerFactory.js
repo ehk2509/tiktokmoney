@@ -15,6 +15,11 @@ import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
 import { DeepLipSyncQcProvider } from './deepLipSyncQcProvider.js';
 import { PhonemeVisemeQcProvider } from './phonemeVisemeQcProvider.js';
 import { OpenRouterSpeakerTurnQcProvider } from './openRouterSpeakerTurnQcProvider.js';
+import { YouTubeTrendProvider } from './youtubeTrendProvider.js';
+import { RedditTrendProvider } from './redditTrendProvider.js';
+import { RssTrendProvider, parseFeeds } from './rssTrendProvider.js';
+import { TrendIntelligence } from '../core/trendIntelligence.js';
+import { TrendHistoryStore } from '../storage/trendHistoryStore.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -25,10 +30,64 @@ export function createLlmProvider(env = process.env) {
       apiKey: env.OPENAI_API_KEY,
       baseUrl: env.LLM_BASE_URL,
       model: env.LLM_MODEL,
+      judgeModel: env.CREATIVE_JUDGE_MODEL,
     });
   }
 
   throw new Error(`Unsupported LLM_PROVIDER: ${provider}`);
+}
+
+export function createTrendIntelligence(env = process.env) {
+  const providers = [];
+
+  if (env.YOUTUBE_API_KEY) {
+    providers.push(new YouTubeTrendProvider({
+      apiKey: env.YOUTUBE_API_KEY,
+      baseUrl: env.YOUTUBE_API_BASE_URL,
+      regionCode: env.TREND_REGION,
+      maxResults: env.YOUTUBE_TREND_MAX_RESULTS
+        ? Number(env.YOUTUBE_TREND_MAX_RESULTS)
+        : undefined,
+      lookbackHours: env.TREND_LOOKBACK_HOURS
+        ? Number(env.TREND_LOOKBACK_HOURS)
+        : undefined,
+    }));
+  }
+
+  if (env.REDDIT_ACCESS_TOKEN) {
+    providers.push(new RedditTrendProvider({
+      accessToken: env.REDDIT_ACCESS_TOKEN,
+      baseUrl: env.REDDIT_API_BASE_URL,
+      userAgent: env.REDDIT_USER_AGENT,
+      subreddit: env.REDDIT_TREND_SUBREDDIT,
+      maxResults: env.REDDIT_TREND_MAX_RESULTS
+        ? Number(env.REDDIT_TREND_MAX_RESULTS)
+        : undefined,
+    }));
+  }
+
+  const feeds = parseFeeds(env.TREND_RSS_FEEDS);
+  if (feeds.length) {
+    providers.push(new RssTrendProvider({
+      feeds,
+      maxItemsPerFeed: env.RSS_TREND_MAX_ITEMS
+        ? Number(env.RSS_TREND_MAX_ITEMS)
+        : undefined,
+    }));
+  }
+
+  if (!providers.length) return null;
+
+  return new TrendIntelligence({
+    providers,
+    historyStore: new TrendHistoryStore(env.TREND_HISTORY_PATH),
+    clusterThreshold: env.TREND_CLUSTER_THRESHOLD
+      ? Number(env.TREND_CLUSTER_THRESHOLD)
+      : undefined,
+    maxSignals: env.TREND_MAX_SIGNALS
+      ? Number(env.TREND_MAX_SIGNALS)
+      : undefined,
+  });
 }
 
 export function createStockProvider(env = process.env) {
