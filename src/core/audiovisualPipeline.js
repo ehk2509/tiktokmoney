@@ -37,14 +37,22 @@ export class AudiovisualPipeline {
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
-  async generate({ topic, audience = 'curious adults', durationSeconds = 35, render = true }) {
+  async generate({
+    topic,
+    audience = 'curious adults',
+    durationSeconds = 35,
+    render = true,
+    researchPacket: providedResearchPacket = null,
+    creativeCandidateCount = null,
+    productionVariantIndex = 0,
+  }) {
     if (!topic?.trim()) throw new Error('topic is required');
     if (!this.audiovisual) throw new Error('audiovisual provider is required');
 
     const id = `vid_${crypto.randomUUID()}`;
     const normalizedTopic = topic.trim();
-    let researchPacket = null;
-    if (this.trendIntelligence?.research) {
+    let researchPacket = providedResearchPacket;
+    if (!researchPacket && this.trendIntelligence?.research) {
       try {
         researchPacket = await this.trendIntelligence.research(normalizedTopic);
       } catch {
@@ -56,6 +64,8 @@ export class AudiovisualPipeline {
       audience,
       durationSeconds,
       researchPacket,
+      candidateCount: creativeCandidateCount,
+      variantIndex: productionVariantIndex,
     });
 
     const project = {
@@ -66,6 +76,12 @@ export class AudiovisualPipeline {
       audience,
       createdAt: new Date().toISOString(),
       researchPacket,
+      planning: {
+        productionVariantIndex: Number(productionVariantIndex) || 0,
+        creativeCandidateCount: creativeCandidateCount == null
+          ? null
+          : Number(creativeCandidateCount),
+      },
       creativeTournament: tournament,
       creativeBrief: tournament.winner || null,
       productionScript: null,

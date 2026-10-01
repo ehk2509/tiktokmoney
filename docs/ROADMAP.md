@@ -79,10 +79,20 @@
 - [ ] Creative feature extraction
 - [ ] A/B experiment model
 
+## M3.5 - Autonomous production planning
+
+- [x] Daily opportunity selection
+- [x] Per-day estimated production budget
+- [x] Max-video allocation
+- [x] High-conviction multi-variant allocation
+- [x] Recent-topic similarity cooldown
+- [x] Persisted production queue + execution state
+- [x] Frozen research packet per planned job
+
 ## M4 - Learning + monetization
 
 - [ ] Revenue attribution
-- [ ] Cost-per-video ledger
+- [ ] Cost-per-video ledger + estimated-vs-actual daily budget reconciliation
 - [ ] Strategy analytics by hook/duration/style
 - [ ] Contextual exploration/exploitation policy
-- [ ] Campaign budgets and autonomous daily planning
+- [x] Campaign budgets and autonomous daily planning

@@ -26,7 +26,14 @@ export class CreativeTournament {
     this.weights = normalizeWeights(weights);
   }
 
-  async run({ topic, audience, durationSeconds, researchPacket = null }) {
+  async run({
+    topic,
+    audience,
+    durationSeconds,
+    researchPacket = null,
+    candidateCount = null,
+    variantIndex = 0,
+  }) {
     if (!this.enabled) {
       return {
         enabled: false,
@@ -40,19 +47,27 @@ export class CreativeTournament {
       };
     }
 
+    const effectiveCandidateCount = clampInt(
+      candidateCount,
+      2,
+      8,
+      this.candidateCount,
+    );
+
     const generated = typeof this.llm?.generateCreativeCandidates === 'function'
       ? await this.llm.generateCreativeCandidates({
         topic,
         audience,
         durationSeconds,
-        count: this.candidateCount,
+        count: effectiveCandidateCount,
         researchPacket,
+        variantIndex,
       })
-      : fallbackCandidates({ topic, count: this.candidateCount });
+      : fallbackCandidates({ topic, count: effectiveCandidateCount });
 
     const candidates = normalizeCandidates(generated?.candidates ?? generated, {
       topic,
-      count: this.candidateCount,
+      count: effectiveCandidateCount,
     });
     if (candidates.length < 2) {
       throw new Error('creative tournament requires at least two valid candidates');
@@ -65,6 +80,7 @@ export class CreativeTournament {
         durationSeconds,
         candidates: candidates.map(stripInternal),
         researchPacket,
+        variantIndex,
       })
       : deterministicJudge(candidates);
 
@@ -85,6 +101,8 @@ export class CreativeTournament {
       enabled: true,
       skipped: false,
       candidateCount: candidates.length,
+      requestedCandidateCount: effectiveCandidateCount,
+      variantIndex,
       candidates,
       ranking,
       winner: {

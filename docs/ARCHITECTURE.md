@@ -615,3 +615,69 @@ The LLM contract explicitly prohibits inventing facts not supported by the packe
 ### Failure isolation
 
 Trend sources are independent. Collection uses settled provider calls; an unavailable YouTube/Reddit/RSS source does not suppress healthy sources. This keeps trend discovery usable under API quota, token expiry, or feed outages.
+
+
+## Autonomous daily planner
+
+The planner sits between opportunity ranking and the production pipeline.
+
+```text
+TrendIntelligence.list()
+  -> DailyContentPlanner
+       -> quality/evidence filters
+       -> recent-topic similarity filter
+       -> budget allocator
+       -> variant allocator
+       -> creative-search-depth allocator
+  -> DailyPlanStore
+  -> executePlan()
+       -> AudiovisualPipeline.generate()
+       -> persisted job result
+```
+
+### DailyPlanStore
+
+`daily-plans.json` retains up to 180 plans. A job is also short-term topic memory: queued, completed, failed, and rejected jobs remain visible to the cooldown policy, while explicitly skipped jobs do not count as production history.
+
+### Allocation policy
+
+The planner consumes opportunities in existing opportunity-score order. For each eligible opportunity it calculates an estimated per-video cost and the maximum affordable slots.
+
+Normal opportunities receive one slot. High-conviction opportunities may receive multiple slots only when they combine:
+
+- strong opportunity score
+- positive/rising acceleration
+- multiple independent sources
+
+This avoids spending multiple generations on a single-source viral spike.
+
+### Reproducible execution
+
+A queued job freezes:
+- the source-grounded research packet
+- audience
+- duration
+- render policy
+- creative candidate count
+- opportunity metrics
+- production variant number
+
+During execution, that frozen research packet is passed directly into the audiovisual pipeline. The pipeline does not re-run trend research when a packet is supplied.
+
+The creative tournament accepts per-job `candidateCount` and `variantIndex`. Variant index is propagated to the LLM so repeated high-conviction slots are instructed to explore distinct creative batches.
+
+### State machine
+
+```text
+PLAN: EMPTY | PLANNED -> RUNNING -> COMPLETED | PARTIAL | FAILED
+
+JOB: QUEUED -> RUNNING -> COMPLETED
+                      -> REJECTED
+                      -> FAILED
+```
+
+A project ending in `CREATIVE_REJECTED`, QC failure, publishability failure, or render failure is never counted as a completed production job.
+
+### Budget limitation
+
+The current planner enforces a budget against estimated slot cost. It does not yet aggregate actual provider invoices/tokens/credits. The future cost ledger should record actual spend per LLM, TTS, video generation, regeneration and QC call, then reconcile plan estimate versus realized daily spend.
