@@ -1,4 +1,5 @@
 import { SampleTrendProvider } from './providers.js';
+import { rankOpportunities } from './core/opportunityScorer.js';
 import { FfmpegRenderer } from './renderers/ffmpegRenderer.js';
 import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
@@ -88,8 +89,7 @@ export function createApp(overrides = {}) {
     pipeline,
     async opportunities() {
       const items = await trends.list();
-      return trendIntelligence ? items : (await import('./core/opportunityScorer.js'))
-        .then(({ rankOpportunities }) => rankOpportunities(items));
+      return trendIntelligence ? items : rankOpportunities(items);
     },
     async research(topic) {
       if (!trendIntelligence) return null;
