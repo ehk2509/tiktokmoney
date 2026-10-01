@@ -1,0 +1,3 @@
+# Optional deep audiovisual synchronization evaluator.
+# Not installed by the default Node application or CI.
+syncnet-python==0.2.2
