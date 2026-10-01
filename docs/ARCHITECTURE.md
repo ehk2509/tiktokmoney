@@ -424,3 +424,57 @@ usable face coverage >= 0.72
 ```
 
 A failure feeds the worst concrete mismatches back into audiovisual regeneration and can terminate as `PHONEME_VISEME_QC_FAILED`.
+
+
+## Multi-speaker audiovisual dialogue
+
+The audiovisual screenplay supports ordered non-overlapping dialogue turns for up to three characters in one act.
+
+```text
+ProductionScript.dialogueTurns
+  -> one TTS request per turn using the recurring character voice
+  -> download each voice clip
+  -> ffprobe duration
+  -> place clips on a non-overlapping timeline
+  -> FFmpeg amix into one mono 48 kHz dialogue master
+  -> encode MP3
+  -> base64 data URI
+  -> WAN referenceAudio
+```
+
+The combined master is preferred over unrelated audio references because it makes exact turn order and pause timing deterministic before video generation.
+
+Each normalized character is assigned a valid Runway Eleven v3 preset. Duplicate or invalid generated presets are replaced with unused known presets so two recurring speakers do not accidentally share the same voice.
+
+### Speaker blocking
+
+The WAN prompt receives:
+
+- all visible cast identity/wardrobe descriptions
+- each measured turn start/end time
+- exact words for each named speaker
+- strict non-overlap instructions
+- listener-silent behavior
+- previous-act continuity references
+
+Example:
+
+```text
+0.00-2.10s ALEX says exactly: "Is starting now too late?"
+2.30-5.40s MAYA says exactly: "No. Consistency matters more."
+
+Only the named active speaker talks and moves their mouth.
+The listener reacts silently.
+```
+
+### Speaker-turn QC
+
+A dedicated vision gate samples early/late points inside each measured dialogue turn and scores:
+
+- speaker attribution
+- active-speaker mouth motion
+- listener stillness
+- cast identity stability
+- turn-taking clarity
+
+This gate is complementary to dialogue WER, visual speech timing, SyncNet-class A/V sync, and phoneme↔viseme QC. WER verifies the words; speaker-turn QC verifies **who visibly says them**.
