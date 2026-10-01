@@ -82,6 +82,11 @@ function normalizeProductionScript(value, context) {
         : [],
       music: clean(segment.music || '', 350),
       transition: clean(segment.transition || (index === 0 ? 'none' : 'hard cut'), 120),
+      editing: {
+        allowInternalCuts: Boolean(segment.editing?.allowInternalCuts),
+        allowDissolves: Boolean(segment.editing?.allowDissolves),
+        shotCount: clamp(Math.round(Number(segment.editing?.shotCount) || 1), 1, 3),
+      },
     };
     cursor += duration;
     return normalized;
@@ -228,6 +233,11 @@ function fallbackProductionScript({ topic, audience, durationSeconds }) {
       soundEffects: [],
       music: 'Subtle low-volume documentary music bed.',
       transition: index === 0 ? 'none' : 'clean hard cut',
+      editing: {
+        allowInternalCuts: false,
+        allowDissolves: false,
+        shotCount: 1,
+      },
     })),
     source: 'template-provider',
   };
