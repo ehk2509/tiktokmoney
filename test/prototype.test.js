@@ -40,6 +40,14 @@ import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
 import { AudiovisualRenderer } from '../src/renderers/audiovisualRenderer.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
+import {
+  OpenAiTranscriptionProvider,
+  compareDialogue,
+} from '../src/providers/openAiTranscriptionProvider.js';
+import {
+  OpenRouterLipSyncQcProvider,
+  buildLipSyncSamples,
+} from '../src/providers/openRouterLipSyncQcProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -2392,4 +2400,352 @@ test('publishability gate blocks meta-script leakage and unsafe subtitles', () =
   assert.equal(result.passed, false);
   assert.ok(result.blockers.some((blocker) => blocker.code === 'script-meta-language'));
   assert.ok(result.blockers.some((blocker) => blocker.code === 'subtitle-layout'));
+});
+
+
+test('dialogue comparison measures word-level fidelity and edit types', () => {
+  const exact = compareDialogue(
+    "Your thirties are a powerful time to start training.",
+    "Your thirties are a powerful time to start training.",
+  );
+  assert.equal(exact.wer, 0);
+  assert.deepEqual(exact.edits, []);
+
+  const drifted = compareDialogue(
+    "Your thirties are a powerful time to start training.",
+    "Your thirties are a good time to train today.",
+  );
+  assert.ok(drifted.wer > 0.2);
+  assert.ok(drifted.edits.some((edit) => ['substitute', 'delete', 'insert'].includes(edit.type)));
+});
+
+test('OpenAI transcription provider requests verbose word timestamps and passes exact dialogue', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-transcription-'));
+  try {
+    const filePath = path.join(dir, 'act.mp4');
+    await writeFile(filePath, 'fake-video');
+    let capturedForm = null;
+
+    const provider = new OpenAiTranscriptionProvider({
+      apiKey: 'openai-key',
+      model: 'gpt-transcribe',
+      maxWer: 0.12,
+      fetchImpl: async (url, options) => {
+        assert.equal(String(url), 'https://api.openai.com/v1/audio/transcriptions');
+        assert.equal(options.method, 'POST');
+        assert.equal(options.headers.authorization, 'Bearer openai-key');
+        capturedForm = options.body;
+        return jsonResponse({
+          text: 'Your thirties are a powerful time to start training.',
+          language: 'en',
+          duration: 4.2,
+          words: [
+            { word: 'Your', start: 0.1, end: 0.3 },
+            { word: 'thirties', start: 0.3, end: 0.7 },
+            { word: 'are', start: 0.7, end: 0.85 },
+            { word: 'a', start: 0.85, end: 0.95 },
+            { word: 'powerful', start: 0.95, end: 1.35 },
+            { word: 'time', start: 1.35, end: 1.6 },
+            { word: 'to', start: 1.6, end: 1.75 },
+            { word: 'start', start: 1.75, end: 2.0 },
+            { word: 'training.', start: 2.0, end: 2.45 },
+          ],
+          segments: [{
+            text: 'Your thirties are a powerful time to start training.',
+            start: 0.1,
+            end: 2.45,
+          }],
+        });
+      },
+    });
+
+    const result = await provider.evaluate(
+      { localPath: filePath },
+      {
+        expectedText: 'Your thirties are a powerful time to start training.',
+        language: 'en',
+      },
+    );
+
+    assert.equal(capturedForm.get('model'), 'gpt-transcribe');
+    assert.equal(capturedForm.get('response_format'), 'verbose_json');
+    assert.deepEqual(
+      capturedForm.getAll('timestamp_granularities[]'),
+      ['word', 'segment'],
+    );
+    assert.equal(capturedForm.get('language'), 'en');
+    assert.equal(result.passed, true);
+    assert.equal(result.wer, 0);
+    assert.equal(result.transcription.words.length, 9);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('dialogue QC rejects paraphrased generated speech and returns targeted guidance', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-transcription-drift-'));
+  try {
+    const filePath = path.join(dir, 'act.mp4');
+    await writeFile(filePath, 'fake-video');
+
+    const provider = new OpenAiTranscriptionProvider({
+      apiKey: 'openai-key',
+      maxWer: 0.1,
+      maxWordCountDelta: 0.1,
+      fetchImpl: async () => jsonResponse({
+        text: 'Starting exercise now is probably a pretty good idea.',
+        language: 'en',
+        duration: 4,
+        words: [
+          { word: 'Starting', start: 0.1, end: 0.4 },
+          { word: 'exercise', start: 0.4, end: 0.8 },
+          { word: 'now', start: 0.8, end: 1.0 },
+          { word: 'is', start: 1.0, end: 1.1 },
+          { word: 'probably', start: 1.1, end: 1.5 },
+          { word: 'a', start: 1.5, end: 1.6 },
+          { word: 'pretty', start: 1.6, end: 1.9 },
+          { word: 'good', start: 1.9, end: 2.1 },
+          { word: 'idea.', start: 2.1, end: 2.4 },
+        ],
+      }),
+    });
+
+    const result = await provider.evaluate(
+      { localPath: filePath },
+      { expectedText: 'Your thirties are a powerful time to start training.' },
+    );
+
+    assert.equal(result.passed, false);
+    assert.ok(result.wer > 0.1);
+    assert.ok(result.issues.some((issue) => issue.code === 'dialogue-word-error-rate'));
+    assert.match(result.regenerationGuidance, /verbatim/i);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('lip-sync sample plan combines speech-active word timestamps and true pauses', () => {
+  const samples = buildLipSyncSamples([
+    { word: 'Hello', start: 0.4, end: 0.8 },
+    { word: 'there', start: 0.8, end: 1.1 },
+    { word: 'this', start: 1.6, end: 1.9 },
+    { word: 'works', start: 1.9, end: 2.3 },
+  ], {
+    durationSeconds: 3,
+    maxFrames: 8,
+  });
+
+  assert.ok(samples.some((sample) => sample.kind === 'speech' && sample.word === 'Hello'));
+  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp < 0.4));
+  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp > 1.1 && sample.timestamp < 1.6));
+  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp > 2.3));
+  assert.ok(samples.every((sample, index) => index === 0 || sample.timestamp >= samples[index - 1].timestamp));
+});
+
+test('lip-sync QC judges visual mouth activity using independent word timestamps', async () => {
+  const requestedTimestamps = [];
+  let requestBody = null;
+
+  const provider = new OpenRouterLipSyncQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    threshold: 80,
+    frameSampler: {
+      sampleAt: async (_localPath, timestamps) => {
+        requestedTimestamps.push(...timestamps);
+        return timestamps.map((timestamp, index) => ({
+          index,
+          timestamp,
+          dataUrl: `data:image/jpeg;base64,LIP${index}`,
+        }));
+      },
+    },
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              score: 91,
+              scores: {
+                speakerVisibility: 95,
+                mouthActivityDuringSpeech: 91,
+                mouthStillnessDuringPauses: 88,
+                faceStability: 94,
+                timingPlausibility: 89,
+              },
+              issues: [],
+              summary: 'Visible speaking activity broadly follows the speech timing.',
+              regenerationGuidance: '',
+            }),
+          },
+        }],
+      });
+    },
+  });
+
+  const result = await provider.evaluate(
+    { localPath: '/fake/act.mp4' },
+    {
+      expectedText: 'Hello there this works.',
+      transcription: {
+        text: 'Hello there this works.',
+        duration: 3,
+        words: [
+          { word: 'Hello', start: 0.4, end: 0.8 },
+          { word: 'there', start: 0.8, end: 1.1 },
+          { word: 'this', start: 1.6, end: 1.9 },
+          { word: 'works', start: 1.9, end: 2.3 },
+        ],
+      },
+      speakerDescription: 'Alex, adult presenter.',
+    },
+  );
+
+  assert.equal(result.passed, true);
+  assert.equal(result.score, 91);
+  assert.ok(requestedTimestamps.length >= 4);
+  const userContent = requestBody.messages[1].content;
+  assert.ok(userContent.some((part) => part.type === 'text' && /SPEECH ACTIVE/.test(part.text)));
+  assert.ok(userContent.some((part) => part.type === 'text' && /EXPECTED PAUSE/.test(part.text)));
+  assert.match(result.limitation, /not phoneme-level/i);
+});
+
+test('audiovisual pipeline regenerates paraphrased dialogue and uses verified timestamps for subtitles', async () => {
+  const calls = [];
+  let dialogueAttempt = 0;
+  const audiovisual = {
+    generateSegment: async ({ segment, regeneration }) => {
+      calls.push({ segment: segment.index, regeneration });
+      return {
+        type: 'ai-video',
+        localPath: `/fake/dialogue-${segment.index}-${regeneration?.attempt || 0}.mp4`,
+        generationId: `dialogue-${segment.index}-${regeneration?.attempt || 0}`,
+        prompt: segment.dialogue,
+      };
+    },
+  };
+  const dialogueQc = {
+    maxRegenerations: 1,
+    evaluate: async (_asset, { expectedText }) => {
+      dialogueAttempt += 1;
+      if (dialogueAttempt === 1) {
+        return {
+          passed: false,
+          wer: 0.4,
+          issues: [{
+            code: 'dialogue-word-error-rate',
+            severity: 'high',
+            evidence: 'paraphrased wording',
+          }],
+          regenerationGuidance: 'Speak the screenplay dialogue verbatim.',
+          transcription: {
+            text: 'Paraphrased wording.',
+            duration: 2,
+            words: [
+              { word: 'Paraphrased', start: 0.1, end: 0.7 },
+              { word: 'wording.', start: 0.7, end: 1.2 },
+            ],
+          },
+        };
+      }
+
+      const words = String(expectedText).split(/\s+/).slice(0, 4).map((word, index) => ({
+        word,
+        start: 0.1 + (index * 0.25),
+        end: 0.3 + (index * 0.25),
+      }));
+      return {
+        passed: true,
+        wer: 0,
+        issues: [],
+        regenerationGuidance: '',
+        transcription: {
+          text: expectedText,
+          duration: 2,
+          words,
+        },
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: null,
+    dialogueQc,
+    lipSyncQc: null,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'why consistency matters',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.ok(calls.some((call) => call.regeneration?.guidance?.includes('verbatim')));
+  assert.ok(project.scenes.every((scene) => scene.dialogueVerification?.passed));
+  assert.equal(project.subtitles.source, 'voice-word-timings');
+});
+
+test('audiovisual pipeline blocks an act that fails lip-sync timing after retry budget', async () => {
+  const audiovisual = {
+    generateSegment: async ({ segment }) => ({
+      type: 'ai-video',
+      localPath: `/fake/lipsync-${segment.index}.mp4`,
+      generationId: `lipsync-${segment.index}`,
+      prompt: segment.dialogue,
+    }),
+  };
+  const dialogueQc = {
+    maxRegenerations: 0,
+    evaluate: async (_asset, { expectedText }) => ({
+      passed: true,
+      wer: 0,
+      issues: [],
+      regenerationGuidance: '',
+      transcription: {
+        text: expectedText,
+        duration: 2,
+        words: [
+          { word: 'Exact', start: 0.1, end: 0.5 },
+          { word: 'dialogue.', start: 0.5, end: 1.1 },
+        ],
+      },
+    }),
+  };
+  const lipSyncQc = {
+    maxRegenerations: 0,
+    evaluate: async () => ({
+      passed: false,
+      score: 44,
+      issues: [{
+        code: 'frozen-mouth',
+        severity: 'high',
+        evidence: 'mouth remains closed during speech-active samples',
+      }],
+      regenerationGuidance: 'Synchronize visible mouth activity with the supplied dialogue audio.',
+    }),
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    dialogueQc,
+    lipSyncQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'exact dialogue',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'LIPSYNC_QC_FAILED');
+  assert.match(project.error, /failed QC/i);
 });
