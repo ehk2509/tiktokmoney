@@ -48,6 +48,10 @@ import {
   OpenRouterLipSyncQcProvider,
   buildLipSyncSamples,
 } from '../src/providers/openRouterLipSyncQcProvider.js';
+import {
+  DeepLipSyncQcProvider,
+  normalizeDeepLipSyncResult,
+} from '../src/providers/deepLipSyncQcProvider.js';
 
 test('high-value low-risk opportunity scores above saturated risky content', () => {
   const strong = scoreOpportunity({
@@ -2748,4 +2752,261 @@ test('audiovisual pipeline blocks an act that fails lip-sync timing after retry 
 
   assert.equal(project.status, 'LIPSYNC_QC_FAILED');
   assert.match(project.error, /failed QC/i);
+});
+
+
+test('deep lip-sync normalization converts frame offset to milliseconds and passes stable sync', () => {
+  const result = normalizeDeepLipSyncResult({
+    offsetFrames: 1,
+    frameRate: 25,
+    confidence: 8.5,
+    segments: [
+      { offsetFrames: 1, confidence: 8.1 },
+      { offsetFrames: 0, confidence: 7.8 },
+      { offsetFrames: -1, confidence: 8.4 },
+    ],
+    evaluator: {
+      name: 'syncnet-python',
+      version: '0.2.2',
+      mode: 'frame-level-av-sync',
+    },
+  }, {
+    maxOffsetMs: 80,
+    minConfidence: 5,
+    minSegmentPassRate: 0.8,
+  });
+
+  assert.equal(result.passed, true);
+  assert.equal(result.offsetMs, 40);
+  assert.equal(result.segmentPassRate, 1);
+  assert.equal(result.evaluator.name, 'syncnet-python');
+});
+
+test('deep lip-sync normalization rejects large offset, weak confidence and unstable segments', () => {
+  const result = normalizeDeepLipSyncResult({
+    offsetFrames: 4,
+    frameRate: 25,
+    confidence: 3.2,
+    segments: [
+      { offsetFrames: 4, confidence: 3.2 },
+      { offsetFrames: 3, confidence: 4.0 },
+      { offsetFrames: 0, confidence: 7.5 },
+    ],
+  }, {
+    maxOffsetMs: 80,
+    minConfidence: 5,
+    minSegmentPassRate: 0.8,
+  });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.offsetMs, 160);
+  assert.ok(result.issues.some((issue) => issue.code === 'deep-sync-offset'));
+  assert.ok(result.issues.some((issue) => issue.code === 'deep-sync-confidence'));
+  assert.ok(result.issues.some((issue) => issue.code === 'deep-sync-segment-instability'));
+  assert.match(result.regenerationGuidance, /160ms/i);
+});
+
+test('deep lip-sync normalization consumes optional phoneme and viseme alignment metrics', () => {
+  const result = normalizeDeepLipSyncResult({
+    offsetFrames: 0,
+    frameRate: 25,
+    confidence: 8.2,
+    phonemeAlignmentScore: 0.91,
+    visemeAlignmentScore: 0.72,
+  }, {
+    maxOffsetMs: 80,
+    minConfidence: 5,
+    minSegmentPassRate: 0.8,
+    minPhonemeAlignment: 0.85,
+    minVisemeAlignment: 0.8,
+  });
+
+  assert.equal(result.passed, false);
+  assert.equal(result.phonemeAlignment, 0.91);
+  assert.equal(result.visemeAlignment, 0.72);
+  assert.ok(result.issues.some((issue) => issue.code === 'viseme-alignment'));
+});
+
+test('deep lip-sync provider executes a configured evaluator without a shell and replaces placeholders', async () => {
+  const calls = [];
+  const provider = new DeepLipSyncQcProvider({
+    command: 'python3',
+    args: [
+      'scripts/syncnet_qc.py',
+      '--video', '{video}',
+      '--expected', '{expected}',
+      '--transcript', '{transcript}',
+    ],
+    maxOffsetMs: 80,
+    minConfidence: 5,
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      return {
+        stdout: JSON.stringify({
+          offsetFrames: 1,
+          frameRate: 25,
+          confidence: 8.8,
+          segments: [
+            { offsetFrames: 1, confidence: 8.8 },
+          ],
+          evaluator: { name: 'syncnet-test', mode: 'frame-level-av-sync' },
+        }),
+      };
+    },
+  });
+
+  const result = await provider.evaluate(
+    { localPath: '/tmp/generated act.mp4' },
+    {
+      expectedText: 'Say this exactly.',
+      transcription: { text: 'Say this exactly.' },
+    },
+  );
+
+  assert.equal(result.passed, true);
+  assert.equal(calls[0].command, 'python3');
+  assert.deepEqual(calls[0].args, [
+    'scripts/syncnet_qc.py',
+    '--video', '/tmp/generated act.mp4',
+    '--expected', 'Say this exactly.',
+    '--transcript', 'Say this exactly.',
+  ]);
+  assert.equal(calls[0].options.timeoutMs, 120000);
+});
+
+test('audiovisual pipeline regenerates a deeply out-of-sync act and records the final deep score', async () => {
+  const calls = [];
+  let deepAttempt = 0;
+
+  const audiovisual = {
+    generateSegment: async ({ segment, regeneration }) => {
+      calls.push({ segment: segment.index, regeneration });
+      return {
+        type: 'ai-video',
+        localPath: `/fake/deep-${segment.index}-${regeneration?.attempt || 0}.mp4`,
+        generationId: `deep-${segment.index}-${regeneration?.attempt || 0}`,
+        prompt: segment.dialogue,
+      };
+    },
+  };
+
+  const deepLipSyncQc = {
+    maxRegenerations: 1,
+    evaluate: async () => {
+      deepAttempt += 1;
+      if (deepAttempt === 1) {
+        return {
+          passed: false,
+          offsetMs: 160,
+          confidence: 3.5,
+          issues: [{
+            code: 'deep-sync-offset',
+            severity: 'high',
+            evidence: 'visual mouth motion lags audio by 160ms',
+          }],
+          regenerationGuidance: 'Correct the measured 160ms lag and follow the dialogue audio as the timing master.',
+        };
+      }
+
+      return {
+        passed: true,
+        offsetMs: 40,
+        confidence: 8.4,
+        issues: [],
+        regenerationGuidance: '',
+      };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: null,
+    dialogueQc: null,
+    lipSyncQc: null,
+    deepLipSyncQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'synchronized dialogue',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.ok(calls.some((call) => call.regeneration?.guidance?.includes('160ms')));
+  assert.ok(project.scenes.every((scene) => scene.deepLipSyncQc?.passed));
+});
+
+test('audiovisual pipeline returns DEEP_LIPSYNC_QC_FAILED when deep sync never passes', async () => {
+  const audiovisual = {
+    generateSegment: async ({ segment }) => ({
+      type: 'ai-video',
+      localPath: `/fake/deep-fail-${segment.index}.mp4`,
+      generationId: `deep-fail-${segment.index}`,
+      prompt: segment.dialogue,
+    }),
+  };
+
+  const deepLipSyncQc = {
+    maxRegenerations: 0,
+    evaluate: async () => ({
+      passed: false,
+      offsetMs: 200,
+      confidence: 2.5,
+      issues: [{
+        code: 'deep-sync-offset',
+        severity: 'critical',
+        evidence: 'A/V offset 200ms',
+      }],
+      regenerationGuidance: 'Correct audiovisual synchronization.',
+    }),
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    deepLipSyncQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'deep sync failure',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'DEEP_LIPSYNC_QC_FAILED');
+  assert.match(project.error, /failed QC/i);
+});
+
+test('publishability gate blocks a scene with failed deep audiovisual sync', () => {
+  const result = evaluateAudiovisualPublishability({
+    productionScript: {
+      fullDialogue: 'This is the actual spoken script.',
+      segments: [
+        { index: 0, locationId: 'room', editing: { allowInternalCuts: false } },
+      ],
+    },
+    scenes: [{
+      index: 0,
+      asset: { localPath: '/fake/act.mp4' },
+      visualQcHistory: [],
+      deepLipSyncQc: {
+        passed: false,
+        offsetMs: 160,
+        confidence: 3.2,
+      },
+    }],
+    subtitles: {
+      enabled: true,
+      layout: { passed: true, violations: [] },
+    },
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.blockers.some((blocker) => blocker.code === 'deep-lip-sync'));
 });
