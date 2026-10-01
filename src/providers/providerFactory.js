@@ -13,6 +13,7 @@ import { RunwayAudiovisualProvider } from './runwayAudiovisualProvider.js';
 import { OpenAiTranscriptionProvider } from './openAiTranscriptionProvider.js';
 import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
 import { DeepLipSyncQcProvider } from './deepLipSyncQcProvider.js';
+import { PhonemeVisemeQcProvider } from './phonemeVisemeQcProvider.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -269,6 +270,34 @@ export function createDeepLipSyncQcProvider(env = process.env) {
       : undefined,
     timeoutMs: env.DEEP_LIPSYNC_TIMEOUT_MS
       ? Number(env.DEEP_LIPSYNC_TIMEOUT_MS)
+      : undefined,
+  });
+}
+
+export function createPhonemeVisemeQcProvider(env = process.env) {
+  const enabled = env.PHONEME_VISEME_ENABLED == null
+    ? false
+    : isEnabled(env.PHONEME_VISEME_ENABLED);
+
+  if (!enabled) return null;
+
+  return new PhonemeVisemeQcProvider({
+    command: env.PHONEME_VISEME_COMMAND || 'python3',
+    args: env.PHONEME_VISEME_ARGS ? JSON.parse(env.PHONEME_VISEME_ARGS) : undefined,
+    minPhonemeAlignment: env.PHONEME_VISEME_MIN_PHONEME_ALIGNMENT
+      ? Number(env.PHONEME_VISEME_MIN_PHONEME_ALIGNMENT)
+      : undefined,
+    minVisemeAlignment: env.PHONEME_VISEME_MIN_VISEME_ALIGNMENT
+      ? Number(env.PHONEME_VISEME_MIN_VISEME_ALIGNMENT)
+      : undefined,
+    minCoverage: env.PHONEME_VISEME_MIN_COVERAGE
+      ? Number(env.PHONEME_VISEME_MIN_COVERAGE)
+      : undefined,
+    maxRegenerations: env.PHONEME_VISEME_MAX_REGENERATIONS
+      ? Number(env.PHONEME_VISEME_MAX_REGENERATIONS)
+      : undefined,
+    timeoutMs: env.PHONEME_VISEME_TIMEOUT_MS
+      ? Number(env.PHONEME_VISEME_TIMEOUT_MS)
       : undefined,
   });
 }
