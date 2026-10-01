@@ -10,6 +10,8 @@ import { AiFirstVisualProvider } from './visualRouter.js';
 import { OpenRouterRealismQcProvider } from './openRouterRealismQcProvider.js';
 import { ProviderStatsStore } from '../storage/providerStatsStore.js';
 import { RunwayAudiovisualProvider } from './runwayAudiovisualProvider.js';
+import { OpenAiTranscriptionProvider } from './openAiTranscriptionProvider.js';
+import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
 
 export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
@@ -174,6 +176,62 @@ export function createAudiovisualProvider(env = process.env) {
     assetDir: env.ASSET_DIR,
     pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
     maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,
+  });
+}
+
+export function createDialogueQcProvider(env = process.env) {
+  const enabled = env.DIALOGUE_QC_ENABLED == null
+    ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
+      && Boolean(env.TRANSCRIPTION_API_KEY || env.OPENAI_API_KEY)
+    : isEnabled(env.DIALOGUE_QC_ENABLED);
+
+  if (!enabled) return null;
+
+  const apiKey = env.TRANSCRIPTION_API_KEY || env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('TRANSCRIPTION_API_KEY or OPENAI_API_KEY is required when DIALOGUE_QC_ENABLED=true');
+  }
+
+  return new OpenAiTranscriptionProvider({
+    apiKey,
+    baseUrl: env.TRANSCRIPTION_BASE_URL,
+    model: env.TRANSCRIPTION_MODEL,
+    maxWer: env.DIALOGUE_QC_MAX_WER ? Number(env.DIALOGUE_QC_MAX_WER) : undefined,
+    maxWordCountDelta: env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA
+      ? Number(env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA)
+      : undefined,
+    maxRegenerations: env.DIALOGUE_QC_MAX_REGENERATIONS
+      ? Number(env.DIALOGUE_QC_MAX_REGENERATIONS)
+      : undefined,
+  });
+}
+
+export function createLipSyncQcProvider(env = process.env) {
+  const enabled = env.LIPSYNC_QC_ENABLED == null
+    ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
+      && Boolean(env.OPENROUTER_API_KEY)
+      && Boolean(env.LIPSYNC_QC_MODEL || env.REALISM_QC_MODEL)
+    : isEnabled(env.LIPSYNC_QC_ENABLED);
+
+  if (!enabled) return null;
+
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required when LIPSYNC_QC_ENABLED=true');
+  }
+  if (!env.LIPSYNC_QC_MODEL && !env.REALISM_QC_MODEL) {
+    throw new Error('LIPSYNC_QC_MODEL or REALISM_QC_MODEL is required when LIPSYNC_QC_ENABLED=true');
+  }
+
+  return new OpenRouterLipSyncQcProvider({
+    apiKey: env.OPENROUTER_API_KEY,
+    baseUrl: env.OPENROUTER_BASE_URL,
+    model: env.LIPSYNC_QC_MODEL || env.REALISM_QC_MODEL,
+    threshold: env.LIPSYNC_QC_THRESHOLD ? Number(env.LIPSYNC_QC_THRESHOLD) : undefined,
+    maxFrames: env.LIPSYNC_QC_FRAMES ? Number(env.LIPSYNC_QC_FRAMES) : undefined,
+    frameWidth: env.LIPSYNC_QC_FRAME_WIDTH ? Number(env.LIPSYNC_QC_FRAME_WIDTH) : undefined,
+    maxRegenerations: env.LIPSYNC_QC_MAX_REGENERATIONS
+      ? Number(env.LIPSYNC_QC_MAX_REGENERATIONS)
+      : undefined,
   });
 }
 
