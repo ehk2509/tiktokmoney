@@ -108,6 +108,8 @@ export class OpenAICompatibleLlmProvider {
       '- dialogue is only the combined backward-compatible text; dialogueTurns are authoritative for speaker ownership.',
       '- Do not overlap speakers in this version. Use pauseAfterSeconds (usually 0.08-0.30) for natural turn-taking.',
       '- Give recurring speakers stable, distinct voice presets and delivery descriptions.',
+      '- Use valid Runway preset voice IDs such as Bernard, Maya, Arjun, Serene, Eleanor, Vincent, Sandra, Kylie, James, Rina, Rachel, or Mark. Do not invent voice IDs.',
+      '- Keep the combined spoken duration of all dialogueTurns comfortably inside the segment duration; leave room for natural pauses.',
       '- Prefer multi-speaker dialogue only when it improves the creative: debate, interviewer/expert, customer/expert, skeptic/explainer, friend/friend, or reaction format.',
       '- For dialogue acts, blocking must make the active speaker visually unambiguous while listeners react silently.',
       '- Character descriptions must be stable enough for visual continuity: apparent age, face, hair, body type and wardrobe.',
