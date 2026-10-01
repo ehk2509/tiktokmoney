@@ -24,8 +24,30 @@ try {
     const packet = await app.research(topic);
     if (!packet) throw new Error('Live trend intelligence is not configured');
     console.log(JSON.stringify(packet, null, 2));
+  } else if (command === 'plan') {
+    const plan = await app.planDay({
+      date: options.date,
+      budgetUsd: options.budget ? Number(options.budget) : undefined,
+      maxVideos: options['max-videos'] ? Number(options['max-videos']) : undefined,
+      audience: options.audience || 'curious adults',
+      durationSeconds: Number(options.duration || 35),
+      render: options['no-render'] !== true,
+    });
+    console.log(JSON.stringify(plan, null, 2));
+  } else if (command === 'run-plan') {
+    const planId = options.id || options.plan;
+    if (!planId) throw new Error('Usage: node src/cli.js run-plan --id "plan_..."');
+    const plan = await app.runPlan(planId, {
+      render: options['no-render'] ? false : null,
+      stopOnFailure: options['stop-on-failure'] === true,
+    });
+    console.log(JSON.stringify(plan, null, 2));
+  } else if (command === 'plans') {
+    console.log(JSON.stringify(await app.listPlans({
+      limit: options.limit ? Number(options.limit) : undefined,
+    }), null, 2));
   } else {
-    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities\n  research --topic "..."');
+    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities\n  research --topic "..."\n  plan [--budget 6] [--max-videos 3]\n  run-plan --id "plan_..."\n  plans');
   }
 } catch (error) {
   console.error(error.message);
