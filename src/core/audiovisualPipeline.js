@@ -19,7 +19,7 @@ export class AudiovisualPipeline {
     this.store = store;
     this.visual = visual;
     this.realismQc = realismQc;
-    this.subtitleConfig = subtitleConfig || {};
+    this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
   async generate({ topic, audience = 'curious adults', durationSeconds = 35, render = true }) {
@@ -204,4 +204,20 @@ async function generateWithQc({
   }
 
   return { asset: null, qcHistory, failure: 'audiovisual generation failed' };
+}
+
+
+function subtitleConfigFromEnv(env = process.env) {
+  return {
+    enabled: env.SUBTITLES_ENABLED == null
+      ? true
+      : ['1', 'true', 'yes', 'on'].includes(String(env.SUBTITLES_ENABLED).toLowerCase()),
+    maxWordsPerCue: env.SUBTITLES_MAX_WORDS ? Number(env.SUBTITLES_MAX_WORDS) : undefined,
+    maxCharsPerCue: env.SUBTITLES_MAX_CHARS ? Number(env.SUBTITLES_MAX_CHARS) : undefined,
+    fontName: env.SUBTITLES_FONT || undefined,
+    fontSize: env.SUBTITLES_FONT_SIZE ? Number(env.SUBTITLES_FONT_SIZE) : undefined,
+    marginV: env.SUBTITLES_MARGIN_V ? Number(env.SUBTITLES_MARGIN_V) : undefined,
+    maxWidthPx: env.SUBTITLES_MAX_WIDTH_PX ? Number(env.SUBTITLES_MAX_WIDTH_PX) : undefined,
+    maxLines: env.SUBTITLES_MAX_LINES ? Number(env.SUBTITLES_MAX_LINES) : undefined,
+  };
 }
