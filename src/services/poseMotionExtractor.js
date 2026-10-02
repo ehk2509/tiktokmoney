@@ -140,7 +140,7 @@ export class PoseMotionExtractor {
     if (!this.cacheDir || !cacheKey) return null;
     try {
       return JSON.parse(await readFile(
-        path.join(this.cacheDir, \`\${cacheKey}.json\`),
+        path.join(this.cacheDir, `${cacheKey}.json`),
         'utf8',
       ));
     } catch (error) {
@@ -152,8 +152,8 @@ export class PoseMotionExtractor {
   async writeCache(cacheKey, payload) {
     if (!this.cacheDir || !cacheKey) return;
     await mkdir(this.cacheDir, { recursive: true });
-    const target = path.join(this.cacheDir, \`\${cacheKey}.json\`);
-    const temporary = \`\${target}.\${process.pid}.tmp\`;
+    const target = path.join(this.cacheDir, `${cacheKey}.json`);
+    const temporary = `${target}.${process.pid}.tmp`;
     await writeFile(temporary, JSON.stringify(payload));
     await rename(temporary, target);
   }
@@ -275,7 +275,7 @@ function run(command, args, { timeoutMs, cwd }) {
       if (settled) return;
       settled = true;
       child.kill('SIGKILL');
-      reject(new Error(\`pose extractor timed out after \${timeoutMs}ms\`));
+      reject(new Error(`pose extractor timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     child.stderr.on('data', (chunk) => {
@@ -293,7 +293,7 @@ function run(command, args, { timeoutMs, cwd }) {
       clearTimeout(timer);
       if (code === 0) return resolve();
       reject(new Error(
-        \`\${command} exited with code \${code}: \${stderr.slice(-2500)}\`,
+        `${command} exited with code ${code}: ${stderr.slice(-2500)}`,
       ));
     });
   });
