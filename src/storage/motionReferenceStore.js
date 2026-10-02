@@ -49,6 +49,7 @@ export function normalizeReference(input) {
     license: String(input.license || '').slice(0, 180),
     notes: String(input.notes || '').slice(0, 500),
     verifiedHumanMotion: input.verifiedHumanMotion !== false,
+    rightsConfirmed: input.rightsConfirmed === true,
   };
 }
 
