@@ -112,6 +112,7 @@ export class RunwayAudiovisualProvider {
     const referenceAudio = [];
 
     let dialogueTrack = null;
+    let actDurationSeconds = Number(segment.durationSeconds);
     if (this.dialogueMode === 'locked' && dialogueTurns.length) {
       if (dialogueTurns.length > 1 || speakerIds.length > 1) {
         const turnTracks = [];
@@ -155,10 +156,9 @@ export class RunwayAudiovisualProvider {
             `multi-speaker dialogue master is ${dialogueTrack.durationSeconds}s; locked WAN reference audio must stay within 15 seconds`,
           );
         }
-        if (dialogueTrack.durationSeconds > Number(segment.durationSeconds) + 0.25) {
-          throw new Error(
-            `multi-speaker dialogue master is ${dialogueTrack.durationSeconds}s but act budget is ${segment.durationSeconds}s; shorten dialogue turns or increase act duration`,
-          );
+        // Speech length is only known after TTS; stretch the act to fit rather than cut dialogue.
+        if (dialogueTrack.durationSeconds > actDurationSeconds + 0.25) {
+          actDurationSeconds = Math.ceil(dialogueTrack.durationSeconds + 0.25);
         }
         referenceAudio.push({ type: 'audio', uri: dialogueTrack.dataUri });
       } else {
@@ -174,13 +174,20 @@ export class RunwayAudiovisualProvider {
           downloadLocal: false,
         });
         dialogueTrack.speakerMode = 'single-speaker';
+        const spokenSeconds = await this.measureDialogueTrack(dialogueTrack, {
+          projectId,
+          segmentIndex: segment.index,
+        });
+        if (spokenSeconds > actDurationSeconds + 0.25) {
+          actDurationSeconds = Math.ceil(spokenSeconds + 0.25);
+        }
         dialogueTrack.turns = [{
           turnIndex: 0,
           speakerCharacterId: dialogueTurns[0].speakerCharacterId,
           text: dialogueTurns[0].text,
           start: 0,
-          end: segment.durationSeconds,
-          duration: segment.durationSeconds,
+          end: actDurationSeconds,
+          duration: actDurationSeconds,
           voicePresetId: dialogueTrack.voicePresetId,
           delivery: dialogueTurns[0].delivery || '',
         }];
@@ -236,7 +243,7 @@ export class RunwayAudiovisualProvider {
       keyframeError = `keyframe mode is not enabled for audiovisual model ${this.model}`;
     }
 
-    const duration = clamp(Math.round(segment.durationSeconds), 4, 15);
+    const duration = clamp(Math.round(actDurationSeconds), 4, 15);
     const keyframePromptImages = [];
     if (keyframes?.first?.url) {
       keyframePromptImages.push({
@@ -299,7 +306,8 @@ export class RunwayAudiovisualProvider {
       localPath,
       sourceUrl,
       generationId: task.id,
-      generatedDuration: `${segment.durationSeconds}s`,
+      generatedDuration: `${duration}s`,
+      durationSeconds: duration,
       aspectRatio: '9:16',
       prompt: promptText,
       dialogueTrack,
@@ -471,6 +479,31 @@ export class RunwayAudiovisualProvider {
       projectId,
       segmentIndex,
     };
+  }
+
+  // Best effort: an unmeasured track keeps the planned act duration.
+  async measureDialogueTrack(track, { projectId, segmentIndex }) {
+    try {
+      if (!track.localPath) {
+        await mkdir(this.assetDir, { recursive: true });
+        const localPath = path.join(
+          this.assetDir,
+          `dialogue-${safe(projectId)}-${segmentIndex}-0-${track.generationId}.mp3`,
+        );
+        if (!(await fileExists(localPath))) await this.download(track.url, localPath);
+        track.localPath = localPath;
+      }
+      const seconds = Number(await this.dialogueComposer.probeDuration(
+        this.dialogueComposer.ffprobeBin,
+        track.localPath,
+      ));
+      if (!Number.isFinite(seconds) || seconds <= 0) return null;
+      track.durationSeconds = seconds;
+      return seconds;
+    } catch (error) {
+      track.durationError = error.message;
+      return null;
+    }
   }
 
   async generateDialogueTrack({

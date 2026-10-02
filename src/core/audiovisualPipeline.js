@@ -150,6 +150,7 @@ export class AudiovisualPipeline {
 
     project.status = 'AUDIOVISUAL_GENERATING';
     let previousAsset = null;
+    let timelineCursor = 0;
     for (const segment of productionScript.segments) {
       const generated = await generateWithQc({
         provider: this.audiovisual,
@@ -167,10 +168,12 @@ export class AudiovisualPipeline {
         projectId: id,
       });
 
+      // Acts may run longer than planned when their dialogue needs more time.
+      const sceneDuration = Number(generated.asset?.durationSeconds) || segment.durationSeconds;
       project.scenes.push({
         index: segment.index,
-        start: segment.start,
-        duration: segment.durationSeconds,
+        start: timelineCursor,
+        duration: sceneDuration,
         narration: segment.dialogue,
         purpose: segment.purpose,
         continuity: {
@@ -197,6 +200,7 @@ export class AudiovisualPipeline {
       }
 
       previousAsset = generated.asset;
+      timelineCursor += sceneDuration;
     }
 
     const verifiedWordTimings = collectVerifiedWordTimings(project.scenes);

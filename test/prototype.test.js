@@ -2004,6 +2004,127 @@ test('Runway audiovisual provider creates exact dialogue audio then WAN 3 native
   }
 });
 
+test('Runway audiovisual provider stretches a single-speaker act to fit measured dialogue audio', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-stretch-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueComposer: { ffprobeBin: 'ffprobe', probeDuration: async () => 9.4 },
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target.endsWith('/text_to_speech') && options.method === 'POST') {
+          assert.equal(body.model, 'eleven_v3');
+          assert.equal(body.promptText, 'Your thirties are a powerful time to start training.');
+          assert.equal(body.voice.presetId, 'Bernard');
+          return jsonResponse({ id: 'tts-task' }, 200);
+        }
+        if (target.endsWith('/tasks/tts-task')) {
+          return jsonResponse({
+            id: 'tts-task',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/dialogue.mp3'],
+          });
+        }
+        if (target.endsWith('/text_to_video') && options.method === 'POST') {
+          assert.equal(body.model, 'wan3');
+          assert.equal(body.audio, true);
+          assert.equal(body.duration, 10);
+          assert.equal(body.ratio, '720:1280');
+          assert.equal(body.referenceAudio[0].type, 'audio');
+          assert.equal(body.referenceAudio[0].uri, 'https://cdn.example/dialogue.mp3');
+          assert.match(body.promptText, /EXACT SPOKEN DIALOGUE/);
+          assert.match(body.promptText, /Preserve those words verbatim/i);
+          return jsonResponse({ id: 'wan-task' }, 200);
+        }
+        if (target.endsWith('/tasks/wan-task')) {
+          return jsonResponse({
+            id: 'wan-task',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/av.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/dialogue.mp3') {
+          return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('voice').buffer };
+        }
+        if (target === 'https://cdn.example/av.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('native-av').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const productionScript = {
+      characters: [{
+        id: 'alex',
+        name: 'Alex',
+        description: '34-year-old trainer',
+        physicalTraits: 'short dark hair',
+        wardrobe: 'white shirt and black shorts',
+        voice: {
+          presetId: 'Bernard',
+          description: 'warm',
+          delivery: 'natural',
+          languageCode: 'en',
+        },
+      }],
+      locations: [{
+        id: 'gym',
+        name: 'Gym',
+        description: 'real neighborhood gym',
+        lighting: 'morning light',
+        fixedElements: ['dumbbell rack'],
+      }],
+      visualStyle: {
+        description: 'Photorealistic documentary.',
+        cameraRules: '50mm lens feel.',
+        lightingRules: 'Natural daylight.',
+      },
+      audioDirection: {
+        mix: 'Dialogue clear over ambience.',
+        musicPolicy: 'Music below speech.',
+      },
+    };
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 8,
+      dialogue: 'Your thirties are a powerful time to start training.',
+      speakerCharacterId: 'alex',
+      characterIds: ['alex'],
+      locationId: 'gym',
+      action: 'Alex picks up a dumbbell.',
+      camera: 'Medium close-up.',
+      ambience: 'Quiet gym ambience.',
+      soundEffects: ['dumbbell contact'],
+      music: 'subtle pulse',
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript,
+      projectId: 'vid-av',
+    });
+
+    assert.equal(asset.durationSeconds, 10);
+    assert.equal(asset.dialogueTrack.durationSeconds, 9.4);
+    assert.equal(asset.dialogueTrack.turns[0].end, 10);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('Runway audiovisual provider can use pure native speech mode without separate TTS', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-native-'));
   const requests = [];
@@ -3801,6 +3922,171 @@ test('Runway audiovisual provider composes distinct speaker voices into one WAN 
     assert.equal(asset.audioMode, 'locked-multi-speaker-native-mix');
     assert.equal(asset.dialogueTrack.turns.length, 2);
     assert.deepEqual(asset.speakerCharacterIds, ['alex', 'maya']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Runway audiovisual provider stretches an act to fit a longer multi-speaker dialogue master', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-multi-speaker-stretch-'));
+  const requests = [];
+  let ttsIndex = 0;
+  let composedTracks = null;
+  let videoDuration = null;
+
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      dialogueComposer: {
+        compose: async ({ tracks }) => {
+          composedTracks = tracks;
+          return {
+            provider: 'local-ffmpeg',
+            type: 'dialogue-master',
+            localPath: path.join(dir, 'master.mp3'),
+            dataUri: 'data:audio/mpeg;base64,TUFTVEVS',
+            durationSeconds: 5.4,
+            turns: [
+              {
+                turnIndex: 0,
+                speakerCharacterId: 'alex',
+                text: 'Is starting now too late?',
+                start: 0,
+                end: 2.1,
+                duration: 2.1,
+                voicePresetId: 'Bernard',
+              },
+              {
+                turnIndex: 1,
+                speakerCharacterId: 'maya',
+                text: 'No. Starting consistently matters more.',
+                start: 2.3,
+                end: 5.4,
+                duration: 3.1,
+                voicePresetId: 'Maya',
+              },
+            ],
+          };
+        },
+      },
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target.endsWith('/text_to_speech') && options.method === 'POST') {
+          ttsIndex += 1;
+          return jsonResponse({ id: `tts-${ttsIndex}` });
+        }
+        if (target.endsWith('/tasks/tts-1')) {
+          return jsonResponse({ id: 'tts-1', status: 'SUCCEEDED', output: ['https://cdn.example/alex.mp3'] });
+        }
+        if (target.endsWith('/tasks/tts-2')) {
+          return jsonResponse({ id: 'tts-2', status: 'SUCCEEDED', output: ['https://cdn.example/maya.mp3'] });
+        }
+        if (target === 'https://cdn.example/alex.mp3' || target === 'https://cdn.example/maya.mp3') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('voice').buffer,
+          };
+        }
+        if (target.endsWith('/text_to_video') && options.method === 'POST') {
+          videoDuration = body.duration;
+          assert.equal(body.referenceAudio.length, 1);
+          assert.equal(body.referenceAudio[0].uri, 'data:audio/mpeg;base64,TUFTVEVS');
+          assert.match(body.promptText, /MULTI-SPEAKER DIALOGUE BLOCKING/);
+          assert.match(body.promptText, /ALEX says exactly/);
+          assert.match(body.promptText, /MAYA says exactly/);
+          assert.match(body.promptText, /ONLY the named active speaker talks/i);
+          return jsonResponse({ id: 'video-task' });
+        }
+        if (target.endsWith('/tasks/video-task')) {
+          return jsonResponse({ id: 'video-task', status: 'SUCCEEDED', output: ['https://cdn.example/dialogue.mp4'] });
+        }
+        if (target === 'https://cdn.example/dialogue.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const productionScript = {
+      characters: [
+        {
+          id: 'alex', name: 'Alex', description: 'adult trainer',
+          physicalTraits: 'short dark hair', wardrobe: 'black shirt',
+          voice: { presetId: 'Bernard', description: 'warm male voice', delivery: 'natural', languageCode: 'en' },
+        },
+        {
+          id: 'maya', name: 'Maya', description: 'adult physiotherapist',
+          physicalTraits: 'long dark hair', wardrobe: 'blue jacket',
+          voice: { presetId: 'Maya', description: 'clear female voice', delivery: 'calm', languageCode: 'en' },
+        },
+      ],
+      locations: [{
+        id: 'gym', name: 'Gym', description: 'real gym', lighting: 'daylight', fixedElements: ['rack'],
+      }],
+      visualStyle: { description: 'photorealistic', cameraRules: 'natural', lightingRules: 'stable' },
+      audioDirection: { mix: 'clear dialogue', musicPolicy: 'music below dialogue' },
+    };
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 4,
+      speakerCharacterId: 'alex',
+      speakerMode: 'multi-speaker',
+      characterIds: ['alex', 'maya'],
+      locationId: 'gym',
+      dialogue: 'Is starting now too late? No. Starting consistently matters more.',
+      dialogueTurns: [
+        {
+          turnIndex: 0,
+          speakerCharacterId: 'alex',
+          text: 'Is starting now too late?',
+          delivery: 'skeptical',
+          pauseAfterSeconds: 0.2,
+        },
+        {
+          turnIndex: 1,
+          speakerCharacterId: 'maya',
+          text: 'No. Starting consistently matters more.',
+          delivery: 'reassuring',
+          pauseAfterSeconds: 0,
+        },
+      ],
+      action: 'Alex asks Maya a question; Maya answers while Alex listens.',
+      camera: 'Natural two-shot.',
+      ambience: 'Quiet gym.',
+      soundEffects: [],
+      music: '',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript,
+      projectId: 'multi',
+    });
+
+    const ttsRequests = requests.filter((request) => request.target.endsWith('/text_to_speech'));
+    assert.equal(ttsRequests.length, 2);
+    assert.equal(ttsRequests[0].body.voice.presetId, 'Bernard');
+    assert.equal(ttsRequests[1].body.voice.presetId, 'Maya');
+    assert.equal(composedTracks.length, 2);
+    assert.equal(composedTracks[0].speakerCharacterId, 'alex');
+    assert.equal(composedTracks[1].speakerCharacterId, 'maya');
+    assert.equal(videoDuration, 6);
+    assert.equal(asset.durationSeconds, 6);
+    assert.equal(asset.generatedDuration, '6s');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
