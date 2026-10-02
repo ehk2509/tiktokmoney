@@ -1492,3 +1492,188 @@ The service health response now reports the effective state:
   }
 }
 ```
+
+
+## Automatic Motion Library Builder
+
+v0.24 removes the need to hand-author `motion-references.json`.
+
+Start with the bundled pose sidecar:
+
+```bash
+npm run setup:pose
+```
+
+Then ingest footage you own or are licensed to reuse:
+
+```bash
+npm run motion-library:build -- \
+  --input ./captures/squat-session.mp4 \
+  --license "owned internal capture" \
+  --source "Paris studio session 2026-10-02" \
+  --rights-confirmed
+```
+
+Or process every video in one directory:
+
+```bash
+npm run motion-library:build -- \
+  --dir ./captures/motion-library \
+  --license "owned internal captures" \
+  --rights-confirmed
+```
+
+An optional action hint can override conservative automatic classification:
+
+```bash
+npm run motion-library:build -- \
+  --input ./captures/squat.mp4 \
+  --action squat \
+  --camera locked \
+  --license "owned" \
+  --rights-confirmed
+```
+
+List the resulting references:
+
+```bash
+npm run motion-library:list
+```
+
+or:
+
+```text
+GET /api/motion-library
+```
+
+### Build pipeline
+
+```text
+owned/licensed raw video
+      ↓
+MediaPipe pose extraction
+      ↓
+motion-energy segmentation
+      ↓
+2.5-12 s useful windows
+      ↓
+pose-based action classification
+      ↓
+foot-contact detection
+      ↓
+reference quality score
+      ↓
+skeleton deduplication
+      ↓
+FFmpeg lightweight reference clip
+      ↓
+motion-references.json
+```
+
+Automatic classification currently recognizes the high-value reusable motion families:
+
+```text
+squat
+lifting
+walking
+running
+reaching
+jumping
+```
+
+Ambiguous `general` movement is rejected by default rather than polluting the library.
+
+Use `--action` when the capture is intentionally labeled or the heuristic is too conservative.
+
+### Rights gate
+
+The builder refuses to run unless both are present:
+
+```text
+--rights-confirmed
+--license "..."
+```
+
+Every generated reference retains:
+- source provenance
+- rights/license note
+- source clip
+- original segment timestamps
+- quality score
+- classification confidence
+- creation time
+- normalized pose sequence
+
+### Automatic segmentation
+
+Long capture sessions do not need to be manually pre-cut.
+
+The builder analyzes normalized joint motion, detects active regions, pads the useful movement and creates bounded reference clips.
+
+Defaults:
+
+```env
+MOTION_LIBRARY_MIN_SEGMENT_SECONDS=2.5
+MOTION_LIBRARY_MAX_SEGMENT_SECONDS=12
+MOTION_LIBRARY_MAX_SEGMENTS_PER_CLIP=4
+MOTION_LIBRARY_MIN_QUALITY_SCORE=62
+MOTION_LIBRARY_DEDUPE_THRESHOLD=0.90
+MOTION_LIBRARY_ALLOW_GENERAL=false
+```
+
+The 12-second default leaves headroom below WAN's 15-second combined video-reference budget.
+
+### Local references without hosting
+
+Auto-built reference media stays under:
+
+```text
+./data/motion-library/
+```
+
+TikTokMoney does **not** embed base64 blobs in the JSON library.
+
+When Runway selects a local reference, the provider converts that single clip to a bounded `data:video/mp4;base64,...` input at request time. Current Runway video inputs accept HTTPS URLs, Runway upload URIs, or base64 video data URIs up to 5 MB. 
+
+The builder transcodes local motion clips conservatively and defaults to:
+
+```env
+MOTION_GUIDE_MAX_DATA_URI_BYTES=3600000
+```
+
+so base64 overhead remains below the provider input ceiling.
+
+### Quality + deduplication
+
+Every candidate receives a deterministic quality score based on:
+- visible core-joint coverage
+- useful duration
+- meaningful motion energy
+- classification confidence
+
+Before insertion, TikTokMoney compares its normalized pose trajectory with existing references of the same action class.
+
+At the default:
+
+```env
+MOTION_LIBRARY_DEDUPE_THRESHOLD=0.90
+```
+
+a biomechanically near-duplicate is discarded when the existing reference is equal/better quality, or replaced when the new clip is better.
+
+`MotionGuideDirector` also uses `qualityScore` as a tie-break when two references have the same task-match score.
+
+### Operational status
+
+`GET /health` now also reports:
+
+```json
+{
+  "motionLibrary": {
+    "builderAvailable": true,
+    "libraryPath": "./data/motion-references.json"
+  }
+}
+```
+
+The mutation path intentionally remains CLI-only until an authenticated/admin API exists.
