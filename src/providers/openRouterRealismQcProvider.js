@@ -208,6 +208,8 @@ function buildPrompt({
     style.description ? `Canonical style: ${style.description}` : '',
     style.cameraRules ? `Canonical camera rules: ${style.cameraRules}` : '',
     style.lightingRules ? `Canonical lighting rules: ${style.lightingRules}` : '',
+    realismDirection.profile ? `Capture realism profile: ${realismDirection.profile}; risk level: ${realismDirection.riskLevel}; stable-shot target: ${realismDirection.stableShotSeconds}s.` : '',
+    realismDirection.microMotion?.length ? `Expected physically motivated micro-motion: ${realismDirection.microMotion.join('; ')}.` : '',
     ...characters.map((character) => [
       `Canonical character ${character.name}: ${character.description}`,
       character.physicalTraits ? `Physical traits: ${character.physicalTraits}` : '',
@@ -238,6 +240,9 @@ function buildPrompt({
     '- locationContinuity: recurring environment geometry, fixed objects and lighting match the previous accepted act.',
     '- sceneRelevance: visuals actually illustrate the narration.',
     '- artifactFreedom: no obvious AI artifacts, duplicate objects, warped text, watermarks or impossible details.',
+    '- materialRealism: skin, fabric, hair, metal, glass and surfaces have believable non-waxy texture and specular response.',
+    '- cameraPhysics: lens perspective, handheld inertia, focus behavior and camera path feel physically operated rather than floating or impossible.',
+    '- lightingNaturalism: illumination has believable source direction/falloff, natural exposure behavior and no uniform glossy AI sheen.',
     ...(temporalEnabled ? [
       '',
       `TEMPORAL sequence contains ${temporalFrameCount} ordered frames. Score each from 0 to 100:`,
@@ -263,7 +268,8 @@ function buildPrompt({
     '  "scores": {',
     '    "photorealism": 0, "anatomy": 0, "geometry": 0, "physics": 0,',
     '    "motionConsistency": 0, "continuity": 0, "identityContinuity": 0, "locationContinuity": 0,',
-    '    "sceneRelevance": 0, "artifactFreedom": 0',
+    '    "sceneRelevance": 0, "artifactFreedom": 0,',
+    '    "materialRealism": 0, "cameraPhysics": 0, "lightingNaturalism": 0'
     '  },',
     '  "temporalScores": {',
     '    "identityStability": 0, "objectPersistence": 0, "geometryStability": 0, "motionPlausibility": 0,',
@@ -290,6 +296,9 @@ function normalizeScores(scores = {}) {
     'locationContinuity',
     'sceneRelevance',
     'artifactFreedom',
+    'materialRealism',
+    'cameraPhysics',
+    'lightingNaturalism',
   ];
 
   return Object.fromEntries(keys.map((key) => [key, clampScore(scores?.[key] ?? 0)]));
