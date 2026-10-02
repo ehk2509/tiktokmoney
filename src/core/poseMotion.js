@@ -18,6 +18,30 @@ const ANGLE_TRIPLETS = [
 ];
 
 export function normalizePoseSequence(input) {
+  if (
+    input?.coordinateSpace === 'body-normalized-2d'
+    && Array.isArray(input?.frames)
+  ) {
+    return {
+      schemaVersion: 1,
+      coordinateSpace: 'body-normalized-2d',
+      durationSeconds: round(
+        Number(input.durationSeconds)
+        || Number(input.frames.at(-1)?.time)
+        || 0,
+      ),
+      frames: input.frames.map((frame, index) => ({
+        time: round(Number(frame.time ?? frame.timestamp ?? index / 10)),
+        joints: Object.fromEntries(
+          Object.entries(frame.joints || {})
+            .map(([name, value]) => [normalizeJointName(name), normalizeJoint(value)])
+            .filter(([, value]) => Boolean(value)),
+        ),
+      })),
+      contacts: normalizeContacts(input.contacts, input.durationSeconds),
+    };
+  }
+
   const rawFrames = Array.isArray(input)
     ? input
     : Array.isArray(input?.frames)
