@@ -269,7 +269,7 @@ function buildPrompt({
     '    "photorealism": 0, "anatomy": 0, "geometry": 0, "physics": 0,',
     '    "motionConsistency": 0, "continuity": 0, "identityContinuity": 0, "locationContinuity": 0,',
     '    "sceneRelevance": 0, "artifactFreedom": 0,',
-    '    "materialRealism": 0, "cameraPhysics": 0, "lightingNaturalism": 0'
+    '    "materialRealism": 0, "cameraPhysics": 0, "lightingNaturalism": 0',
     '  },',
     '  "temporalScores": {',
     '    "identityStability": 0, "objectPersistence": 0, "geometryStability": 0, "motionPlausibility": 0,',
@@ -301,7 +301,16 @@ function normalizeScores(scores = {}) {
     'lightingNaturalism',
   ];
 
-  return Object.fromEntries(keys.map((key) => [key, clampScore(scores?.[key] ?? 0)]));
+  const realismFallback = scores?.photorealism ?? 0;
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    clampScore(
+      scores?.[key]
+      ?? (['materialRealism', 'cameraPhysics', 'lightingNaturalism'].includes(key)
+        ? realismFallback
+        : 0),
+    ),
+  ]));
 }
 
 function normalizeTemporalScores(scores = {}) {
