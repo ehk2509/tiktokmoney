@@ -17,7 +17,7 @@ export class AudioQualityInspector {
     this.runCapture = runCapture;
   }
 
-  async inspect(filePath) {
+  async inspect(filePath, { checkTruePeak = true } = {}) {
     const output = await this.runCapture(this.ffmpegBin, [
       '-hide_banner',
       '-nostats',
@@ -29,7 +29,7 @@ export class AudioQualityInspector {
 
     return parseEbur128(output, {
       minIntegratedLufs: this.minIntegratedLufs,
-      truePeakLimitDbtp: this.truePeakLimitDbtp,
+      truePeakLimitDbtp: checkTruePeak ? this.truePeakLimitDbtp : Infinity,
       required: this.required,
     });
   }

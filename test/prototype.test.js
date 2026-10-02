@@ -88,7 +88,7 @@ import {
   bundledPythonCandidates,
 } from '../src/services/poseMotionExtractor.js';
 import { PoseMotionQcProvider } from '../src/providers/poseMotionQcProvider.js';
-import { parseEbur128 } from '../src/services/audioQualityInspector.js';
+import { AudioQualityInspector, parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 import {
   OpenAiTranscriptionProvider,
@@ -2382,6 +2382,19 @@ test('subtitle builder wraps by estimated pixel width and remains in two-line sa
     maxWidthPx: 520,
     maxLines: 2,
   }).passed, true);
+});
+
+test('audio inspector can skip the true-peak ceiling for pre-normalization input', async () => {
+  const inspector = new AudioQualityInspector({
+    runCapture: async () => `
+      Summary:
+        I:         -16.0 LUFS
+        Peak:       -0.4 dBFS
+    `,
+  });
+
+  assert.equal((await inspector.inspect('raw.mp4')).passed, false);
+  assert.equal((await inspector.inspect('raw.mp4', { checkTruePeak: false })).passed, true);
 });
 
 test('audio quality parser rejects silence and unsafe true peak while accepting social-ready audio', () => {

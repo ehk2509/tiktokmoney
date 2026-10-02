@@ -99,7 +99,9 @@ export class AudiovisualRenderer {
       joinedPath,
     ]);
 
-    const inputAudioQuality = await this.audioInspector.inspect(joinedPath);
+    // Raw clips only need audible speech here; loudnorm below enforces the true-peak ceiling,
+    // which the final output check verifies.
+    const inputAudioQuality = await this.audioInspector.inspect(joinedPath, { checkTruePeak: false });
     if (!inputAudioQuality.passed) {
       throw new Error(
         `audiovisual output failed audio publishability: ${inputAudioQuality.issues.map((issue) => issue.message).join(' ')}`,
