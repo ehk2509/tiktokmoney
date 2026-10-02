@@ -79,7 +79,11 @@
 - [ ] Native provider spatial-mask transport when an API exposes it
 - [x] Risk-adaptive first-only vs first+last keyframe policy
 - [x] Keyframe adherence QC and targeted regeneration
-- [ ] Video-to-video motion guidance
+- [x] Real-motion reference-video guidance for body mechanics/timing
+- [x] Motion-reference selection + rights gate
+- [x] Combined reference-video duration budgeting
+- [x] Motion-guide adherence QC + targeted regeneration
+- [ ] Native pose skeleton / mocap transport when providers expose it
 
 ## M2 - Trend intelligence
 
