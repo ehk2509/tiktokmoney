@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "name": "real-generation-v1",
+  "version": "1.0.0",
+  "description": "Frozen paid-provider benchmark: 30 paired baseline-vs-full-stack short audiovisual generation cases across ten realism and production classes.",
+  "cases": [
+    {
+      "id": "talking-head-01",
+      "category": "talking-head",
+      "topic": "Why your phone battery feels worse after two years",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical TikTok-style talking-head video. One adult presenter in a normal apartment explains why phone batteries degrade over time. Natural speech, subtle hand gestures, realistic skin texture, practical window light, static eye-level camera, ordinary room ambience. No captions, logos, watermarks, beauty-filter look, CGI sheen or exaggerated motion."
+    },
+    {
+      "id": "talking-head-02",
+      "category": "talking-head",
+      "topic": "The simplest way to remember someone's name",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical talking-head video. One adult presenter calmly gives one practical memory tip for remembering a person's name. Natural conversational delivery, tiny head and shoulder motion, realistic mouth movement, imperfect indoor lighting, handheld phone feel without excessive shake. No text or logos."
+    },
+    {
+      "id": "talking-head-03",
+      "category": "talking-head",
+      "topic": "Why airplane windows have a tiny hole",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical explainer video. A single presenter beside an airplane-window mockup explains the tiny pressure-equalization hole. Natural facial motion and speech, realistic skin and fabric, simple studio practical lighting, restrained camera movement, no on-screen text, no CGI look."
+    },
+    {
+      "id": "dialogue-01",
+      "category": "two-person-dialogue",
+      "topic": "Two friends disagree about whether cold water boils faster",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical video of two adult friends in a kitchen having a short natural conversation about whether cold water boils faster than warm water. Strict turn-taking, one speaker at a time, realistic eye contact and listening reactions, accurate mouth motion, no overlapping dialogue, no captions or logos."
+    },
+    {
+      "id": "dialogue-02",
+      "category": "two-person-dialogue",
+      "topic": "A customer asks a barista why espresso tastes sour",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical cafe scene with an adult customer asking an adult barista why espresso can taste sour. Two-person dialogue with clear speaker turns, believable facial reactions, hands mostly relaxed, natural cafe ambience, realistic lighting and camera exposure. No text, logos or synthetic gloss."
+    },
+    {
+      "id": "dialogue-03",
+      "category": "two-person-dialogue",
+      "topic": "Two coworkers compare standing and sitting desks",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical office conversation between two adult coworkers briefly comparing standing and sitting desks. Natural turn-taking and listening, accurate lip motion, subtle posture shifts, realistic office light, fixed medium two-shot with slight handheld imperfections. No captions or logos."
+    },
+    {
+      "id": "walking-01",
+      "category": "walking",
+      "topic": "Three cues for more natural walking posture",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical full-body video of an adult walking naturally along a quiet sidewalk while explaining three simple walking-posture cues. Biomechanically plausible gait, heel-to-toe contacts, natural arm swing, stable body proportions, realistic clothing physics, gentle tracking camera. No slow motion, text, logos or morphing."
+    },
+    {
+      "id": "walking-02",
+      "category": "walking",
+      "topic": "Why people swing their arms while walking",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical outdoor video of one adult walking at a normal pace while narrating why humans swing their arms. Natural gait rhythm, alternating foot contacts, subtle torso rotation, physically realistic tracking camera and daylight. No captions, logos, foot sliding or limb warping."
+    },
+    {
+      "id": "walking-03",
+      "category": "walking",
+      "topic": "A short commuting tip while walking to a train",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical video of an adult walking toward a train station and sharing one commuting tip. Natural stride and body mechanics, backpack movement with inertia, real pavement contact, slight handheld tracking, ordinary overcast light. No text, logos, teleporting or anatomy errors."
+    },
+    {
+      "id": "lifting-01",
+      "category": "gym-lifting",
+      "topic": "How to brace before a light squat",
+      "audience": "fitness beginners",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical gym video of an adult demonstrating a light controlled squat while explaining how to brace. Plausible joint angles, feet planted, knees tracking naturally, bar movement physically consistent, realistic gym lighting, mostly static camera. No impossible strength, morphing, captions or logos."
+    },
+    {
+      "id": "lifting-02",
+      "category": "gym-lifting",
+      "topic": "Why a neutral wrist matters during dumbbell curls",
+      "audience": "fitness beginners",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical gym close-to-medium shot of an adult performing slow dumbbell curls while explaining neutral wrist position. Anatomically plausible elbow and wrist motion, realistic weight inertia, natural grip and breathing, practical gym lighting. No text, logos or rubbery limbs."
+    },
+    {
+      "id": "lifting-03",
+      "category": "gym-lifting",
+      "topic": "One safe cue for picking up a box from the floor",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical instructional video of an adult lifting a medium cardboard box from the floor using a controlled hip-and-knee bend. Realistic hand contact, box weight and inertia, planted feet, natural spine posture, indoor practical light. No captions, logos, object penetration or anatomy distortion."
+    },
+    {
+      "id": "object-01",
+      "category": "object-interaction",
+      "topic": "How to pour coffee without splashing",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical kitchen close-up of an adult pouring coffee from a carafe into a ceramic mug while explaining one anti-splash tip. Correct hand-object contact, continuous liquid flow, consistent mug geometry, realistic reflections and gravity, stable camera. No text, logos or object morphing."
+    },
+    {
+      "id": "object-02",
+      "category": "object-interaction",
+      "topic": "Why a chef pinches a knife blade near the handle",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical kitchen video of an adult safely demonstrating a chef-knife pinch grip on a cutting board without cutting food. Correct finger placement, rigid knife geometry, believable contact and shadows, calm explanatory speech, static camera. No text, logos, warped fingers or unsafe flourish."
+    },
+    {
+      "id": "object-03",
+      "category": "object-interaction",
+      "topic": "How to fold a T-shirt quickly",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical tabletop video of an adult folding a plain T-shirt while explaining a simple method. Hands maintain realistic contact with fabric, cloth bends and settles naturally, no extra fingers, stable table geometry, soft indoor light, overhead-to-oblique camera. No text or logos."
+    },
+    {
+      "id": "indoor-01",
+      "category": "indoor",
+      "topic": "Why rooms sound different when they are empty",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical indoor explainer in a sparsely furnished room. One adult demonstrates how an empty room sounds more echoey. Real room acoustics, natural speech, subtle body movement, realistic walls and furniture, practical mixed lighting, slow pan. No captions or logos."
+    },
+    {
+      "id": "indoor-02",
+      "category": "indoor",
+      "topic": "A quick desk-lighting tip for video calls",
+      "audience": "remote workers",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical home-office video where an adult demonstrates one simple desk-lighting tip for video calls. Real lamp behavior, believable skin tones and shadow falloff, subtle exposure adaptation, natural speech, static tripod shot. No text, logos or plastic skin."
+    },
+    {
+      "id": "indoor-03",
+      "category": "indoor",
+      "topic": "Why bathroom mirrors fog after a shower",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical bathroom explainer with an adult pointing to a lightly fogged mirror and explaining condensation. Realistic steam and reflections, consistent mirror geometry, natural hand motion, practical bathroom lighting, stationary camera. No text, logos or surreal reflections."
+    },
+    {
+      "id": "outdoor-01",
+      "category": "outdoor",
+      "topic": "Why shadows look softer on cloudy days",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical outdoor explainer on an overcast day. One adult points out soft-edged shadows while explaining cloud diffusion. Natural wind in hair and clothing, realistic sky exposure, stable ground contact, gentle handheld camera. No captions or logos."
+    },
+    {
+      "id": "outdoor-02",
+      "category": "outdoor",
+      "topic": "How to notice wind direction without an app",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical park video of an adult explaining simple visual signs of wind direction using leaves and grass. Physically consistent wind across foliage, natural speech and gestures, realistic daylight, slow handheld pan. No text, logos or synchronized artificial motion."
+    },
+    {
+      "id": "outdoor-03",
+      "category": "outdoor",
+      "topic": "Why wet pavement looks darker",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical street-side explainer after light rain. One adult explains why wet pavement looks darker. Realistic reflections, puddles and material response, believable ambient movement, cautious static framing from sidewalk. No captions or logos."
+    },
+    {
+      "id": "low-light-01",
+      "category": "low-light",
+      "topic": "Why your eyes need time to adjust in the dark",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical low-light indoor talking-head video. An adult explains dark adaptation beside a dim warm lamp. Realistic sensor noise, restrained highlights, natural skin texture, slight focus breathing, clear speech, no crushed-black CGI look, captions or logos."
+    },
+    {
+      "id": "low-light-02",
+      "category": "low-light",
+      "topic": "A simple night-photography stability tip",
+      "audience": "beginner photographers",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical night street video where an adult demonstrates bracing a phone against a solid surface for a steadier photo. Realistic low-light exposure, practical streetlights, subtle motion blur only from real movement, natural speech. No text, logos or neon fantasy look."
+    },
+    {
+      "id": "low-light-03",
+      "category": "low-light",
+      "topic": "Why candles flicker in a draft",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical dim-room explainer with an adult safely observing a candle on a table and explaining why a draft makes the flame flicker. Physically plausible flame response and shadows, stable object geometry, warm low light, static camera. No captions or logos."
+    },
+    {
+      "id": "tracking-01",
+      "category": "tracking-camera",
+      "topic": "A museum visitor explains perspective while walking",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical tracking shot following an adult walking slowly through a quiet gallery while explaining visual perspective. One continuous forward tracking movement, plausible parallax, stable body proportions, natural foot contacts, subtle handheld imperfections. No cuts, captions or logos."
+    },
+    {
+      "id": "tracking-02",
+      "category": "tracking-camera",
+      "topic": "A cook carries ingredients from fridge to counter",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical kitchen tracking shot following an adult carrying a bowl of vegetables from refrigerator to counter while giving one meal-prep tip. Correct object contact, believable bowl inertia, natural walking, coherent kitchen geometry, one continuous lateral tracking move. No text or logos."
+    },
+    {
+      "id": "tracking-03",
+      "category": "tracking-camera",
+      "topic": "A cyclist walks a bicycle while explaining tire pressure",
+      "audience": "casual cyclists",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical outdoor tracking shot beside an adult walking a bicycle and briefly explaining tire pressure. Hands stay attached to handlebars, wheels rotate consistently with movement, realistic walking gait, one smooth but imperfect tracking axis. No riding, captions or logos."
+    },
+    {
+      "id": "static-01",
+      "category": "static-camera",
+      "topic": "Why ice floats in water",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical static-camera tabletop explainer. An adult hand places an ice cube in a clear glass of water while a presenter explains why ice floats. Correct buoyancy, transparent materials, realistic condensation, locked camera, no text or logos."
+    },
+    {
+      "id": "static-02",
+      "category": "static-camera",
+      "topic": "How paper absorbs a drop of water",
+      "audience": "curious adults",
+      "durationSeconds": 9,
+      "baselinePrompt": "Photorealistic vertical locked-off macro-to-medium shot of an adult placing one drop of water on paper and explaining absorption. Consistent paper texture, physically plausible spreading liquid, realistic hand motion, fixed focus with tiny natural breathing. No text or logos."
+    },
+    {
+      "id": "static-03",
+      "category": "static-camera",
+      "topic": "Why a metal spoon feels colder than wood",
+      "audience": "curious adults",
+      "durationSeconds": 10,
+      "baselinePrompt": "Photorealistic vertical static shot at a table. An adult compares a metal spoon and wooden spoon while explaining thermal conductivity. Stable object geometry, natural hand contact, realistic highlights, clean speech, fixed camera. No captions, logos or synthetic gloss."
+    }
+  ],
+  "frozenHash": "281b64698b5e92e8b59c14d8cc393ce7c05acd642d36df98c5ef6c443f6c5508"
+}
