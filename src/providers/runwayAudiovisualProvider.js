@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
+import { buildRealismPromptBlock } from '../core/realismDirector.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -345,6 +346,7 @@ function buildAudiovisualPrompt({
     location ? `LOCATION: ${location.name}. ${location.description}. Lighting: ${location.lighting}. Fixed elements: ${location.fixedElements.join(', ')}.` : '',
     `ACTION: ${segment.action}.`,
     `CAMERA: ${segment.camera}.`,
+    buildRealismPromptBlock(segment),
     segment.editing?.allowInternalCuts
       ? `EDITING: internal cuts allowed; maximum ${segment.editing.shotCount || 2} shots. Use only clean motivated cuts.`
       : 'EDITING: ONE continuous shot only. No internal cuts, dissolves, crossfades, flash transitions, ghosting, double exposure or montage.',
