@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -86,6 +86,8 @@ export async function runRealGenerationBenchmark({
   const runDir = path.join(outputDir, runId);
   const manifestPath = path.join(runDir, 'manifest.json');
   const summaryPath = path.join(runDir, 'summary.json');
+  const blindRatingsPath = path.join(runDir, 'ratings-blind.json');
+  const ratingKeyPath = path.join(runDir, 'rating-key.json');
   await mkdir(runDir, { recursive: true });
 
   const probe = instrumentProviderWait(provider, now);
@@ -150,15 +152,31 @@ export async function runRealGenerationBenchmark({
   }
 
   run.finishedAt = now().toISOString();
+  const review = await createBlindedReviewPack({ run, runDir });
+  run.review = {
+    blindRatingsPath,
+    ratingKeyPath,
+    sampleCount: review.ratingSheet.samples.length,
+  };
   run.summary = summarizeBenchmarkRun(run);
   await writeFile(manifestPath, JSON.stringify(run, null, 2));
   await writeFile(summaryPath, JSON.stringify(run.summary, null, 2));
-  return { mode: 'live', run, manifestPath, summaryPath };
+  await writeFile(blindRatingsPath, JSON.stringify(review.ratingSheet, null, 2));
+  await writeFile(ratingKeyPath, JSON.stringify(review.ratingKey, null, 2));
+  return {
+    mode: 'live',
+    run,
+    manifestPath,
+    summaryPath,
+    blindRatingsPath,
+    ratingKeyPath,
+  };
 }
 
 export async function summarizeBenchmarkFiles({
   runPath,
   ratingsPath = null,
+  ratingKeyPath = null,
   outputPath = null,
 } = {}) {
   if (!runPath) throw new Error('runPath is required');
@@ -166,7 +184,31 @@ export async function summarizeBenchmarkFiles({
   let ratings = [];
   if (ratingsPath) {
     const parsed = JSON.parse(await readFile(ratingsPath, 'utf8'));
-    ratings = Array.isArray(parsed.ratings) ? parsed.ratings : [];
+    if (Array.isArray(parsed.ratings)) {
+      ratings = parsed.ratings;
+    } else if (Array.isArray(parsed.samples)) {
+      const keyPath = ratingKeyPath || path.join(path.dirname(ratingsPath), 'rating-key.json');
+      const key = JSON.parse(await readFile(keyPath, 'utf8'));
+      const keyBySample = new Map(
+        (key.samples || []).map((item) => [String(item.sampleId), item]),
+      );
+      ratings = parsed.samples
+        .map((sample) => {
+          const identity = keyBySample.get(String(sample.sampleId));
+          if (!identity) return null;
+          return {
+            caseId: identity.caseId,
+            arm: identity.arm,
+            publishable: sample.publishable,
+            realismScore: sample.realismScore,
+            identityConsistencyScore: sample.identityConsistencyScore,
+            dialogueAccuracyScore: sample.dialogueAccuracyScore,
+            motionFidelityScore: sample.motionFidelityScore,
+            notes: sample.notes || '',
+          };
+        })
+        .filter(Boolean);
+    }
   }
   const summary = summarizeBenchmarkRun(run, { ratings });
   const destination = outputPath || path.join(path.dirname(runPath), 'summary.json');
@@ -223,8 +265,8 @@ export function summarizeBenchmarkRun(run, { ratings = [] } = {}) {
     },
     ratings: {
       supplied: ratings.length,
-      expected: (run.pairs || []).length * 2,
-      complete: ratings.length > 0 && ratings.length === (run.pairs || []).length * 2,
+      expected: countRateableArtifacts(run),
+      complete: ratings.length > 0 && ratings.length === countRateableArtifacts(run),
     },
     notes: [
       'Provider spend is treated as actual only when the provider task response exposes explicit USD cost or credits.',
@@ -434,7 +476,7 @@ function aggregateArm(rows, isFull) {
     totalProviderSpendUsd: totalCost,
     spendCoverageRate: rate(costs.length, count),
     humanRatingCoverageRate: rate(ratings.length, count),
-    humanPublishableRate: rate(publishable, ratings.length),
+    humanPublishableRate: rate(publishable, count),
     humanRealismScore: average(ratings.map((rating) => rating.realismScore)),
     humanIdentityConsistencyScore: average(ratings.map((rating) => rating.identityConsistencyScore)),
     humanDialogueAccuracyScore: average(ratings.map((rating) => rating.dialogueAccuracyScore)),
@@ -463,10 +505,95 @@ function firstOutputUrl(task) {
 
 function firstFinite(...values) {
   for (const value of values) {
+    if (value == null || value === '') continue;
     const number = Number(value);
     if (Number.isFinite(number)) return number;
   }
   return null;
+}
+
+async function createBlindedReviewPack({ run, runDir }) {
+  const candidates = [];
+  for (const pair of run.pairs || []) {
+    for (const arm of ['baseline', 'full']) {
+      const result = pair[arm];
+      if (!result?.success || !result.artifactPath) continue;
+      candidates.push({
+        caseId: pair.caseId,
+        category: pair.category,
+        arm,
+        artifactPath: result.artifactPath,
+        sortKey: crypto.createHash('sha256')
+          .update(String(run.runId) + ':' + pair.caseId + ':' + arm)
+          .digest('hex'),
+      });
+    }
+  }
+  candidates.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  const reviewDir = path.join(runDir, 'review');
+  await mkdir(reviewDir, { recursive: true });
+  const samples = [];
+  const keySamples = [];
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const sampleId = 'sample_' + String(index + 1).padStart(3, '0');
+    const extension = path.extname(candidate.artifactPath) || '.mp4';
+    const reviewPath = path.join(reviewDir, sampleId + extension);
+    try {
+      await link(candidate.artifactPath, reviewPath);
+    } catch {
+      await copyFile(candidate.artifactPath, reviewPath);
+    }
+    samples.push({
+      sampleId,
+      category: candidate.category,
+      artifactPath: reviewPath,
+      publishable: null,
+      realismScore: null,
+      identityConsistencyScore: null,
+      dialogueAccuracyScore: null,
+      motionFidelityScore: null,
+      notes: '',
+    });
+    keySamples.push({
+      sampleId,
+      caseId: candidate.caseId,
+      arm: candidate.arm,
+    });
+  }
+
+  return {
+    ratingSheet: {
+      schemaVersion: 1,
+      runId: run.runId,
+      blinded: true,
+      scoreScale: '1-5; higher is better',
+      instructions: [
+        'Review each sample without opening rating-key.json.',
+        'Set publishable to true or false.',
+        'Score realism, identity consistency, dialogue accuracy and motion fidelity from 1 to 5.',
+        'Use null when a dimension is genuinely not applicable.',
+      ],
+      samples,
+    },
+    ratingKey: {
+      schemaVersion: 1,
+      runId: run.runId,
+      warning: 'Keep this file hidden from raters until scoring is complete.',
+      samples: keySamples,
+    },
+  };
+}
+
+function countRateableArtifacts(run) {
+  let count = 0;
+  for (const pair of run.pairs || []) {
+    if (pair.baseline?.success && pair.baseline?.artifactPath) count += 1;
+    if (pair.full?.success && pair.full?.artifactPath) count += 1;
+  }
+  return count;
 }
 
 function average(values) {
