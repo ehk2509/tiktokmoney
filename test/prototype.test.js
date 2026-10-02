@@ -35,7 +35,10 @@ import {
   ProductionScriptGenerator,
   productionScriptToStoryBible,
 } from '../src/core/productionScriptGenerator.js';
-import { RunwayAudiovisualProvider } from '../src/providers/runwayAudiovisualProvider.js';
+import {
+  RunwayAudiovisualProvider,
+  buildVideoReferencePlan,
+} from '../src/providers/runwayAudiovisualProvider.js';
 import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
 import { AudiovisualRenderer } from '../src/renderers/audiovisualRenderer.js';
 import {
@@ -58,6 +61,14 @@ import {
   buildMotionRegionPromptBlock,
   buildMotionRegionQcContract,
 } from '../src/core/motionRegionDirector.js';
+import {
+  MotionGuideDirector,
+  directMotionGuide,
+  classifyMotionAction,
+  scoreReference,
+  buildMotionGuidePromptBlock,
+} from '../src/core/motionGuideDirector.js';
+import { MotionReferenceStore } from '../src/storage/motionReferenceStore.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 import {
@@ -6047,4 +6058,748 @@ test('audiovisual pipeline persists project-wide motion-region provenance', asyn
   assert.ok(project.productionScript.segments.every(
     (segment) => segment.motionRegionDirection?.enabled,
   ));
+});
+
+
+test('motion reference store validates URL/duration and preserves rights metadata', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-motion-ref-store-'));
+  const file = path.join(dir, 'motion-references.json');
+  try {
+    await writeFile(file, JSON.stringify({
+      references: [
+        {
+          id: 'licensed-walk',
+          actionClass: 'walking',
+          tags: ['full body', 'weight transfer'],
+          cameraMode: 'locked',
+          people: 1,
+          durationSeconds: 6,
+          url: 'https://cdn.example/walk.mp4',
+          license: 'owned recording',
+          rightsConfirmed: true,
+          verifiedHumanMotion: true,
+        },
+        {
+          id: 'invalid-local',
+          actionClass: 'walking',
+          durationSeconds: 6,
+          url: '/tmp/walk.mp4',
+          rightsConfirmed: true,
+        },
+        {
+          id: 'too-long',
+          actionClass: 'walking',
+          durationSeconds: 20,
+          url: 'https://cdn.example/too-long.mp4',
+          rightsConfirmed: true,
+        },
+      ],
+    }));
+
+    const store = new MotionReferenceStore(file);
+    const refs = await store.list();
+
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].id, 'licensed-walk');
+    assert.equal(refs[0].rightsConfirmed, true);
+    assert.equal(refs[0].actionClass, 'walking');
+    assert.ok(refs[0].tags.includes('full-body'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('motion guide director selects a rights-confirmed human reference for high-risk action', async () => {
+  const refs = [
+    {
+      id: 'wrong-run',
+      actionClass: 'running',
+      tags: ['running', 'full-body'],
+      cameraMode: 'locked',
+      people: 1,
+      durationSeconds: 6,
+      url: 'https://cdn.example/run.mp4',
+      verifiedHumanMotion: true,
+      rightsConfirmed: true,
+    },
+    {
+      id: 'walk-good',
+      actionClass: 'walking',
+      tags: ['walking', 'natural', 'full-body', 'weight-transfer'],
+      cameraMode: 'tracking',
+      people: 1,
+      durationSeconds: 5,
+      url: 'https://cdn.example/walk.mp4',
+      verifiedHumanMotion: true,
+      rightsConfirmed: true,
+    },
+    {
+      id: 'walk-unlicensed',
+      actionClass: 'walking',
+      tags: ['walking', 'natural'],
+      cameraMode: 'tracking',
+      people: 1,
+      durationSeconds: 5,
+      url: 'https://cdn.example/unlicensed.mp4',
+      verifiedHumanMotion: true,
+      rightsConfirmed: false,
+    },
+  ];
+  const director = new MotionGuideDirector({
+    store: { list: async () => refs },
+    enabled: true,
+    mode: 'auto',
+    minRiskScore: 50,
+    minSelectionScore: 0.55,
+    requireRightsConfirmed: true,
+  });
+
+  const result = await director.direct({
+    segments: [{
+      index: 0,
+      durationSeconds: 5,
+      characterIds: ['alex'],
+      action: 'Alex walks naturally across the gym floor.',
+      startState: 'Alex stands at the left edge.',
+      endState: 'Alex reaches the rack.',
+      realismDirection: {
+        riskScore: 62,
+        camera: { axis: 'tracking' },
+      },
+    }],
+  });
+
+  const plan = result.segments[0].motionGuideDirection;
+  assert.equal(plan.eligible, true);
+  assert.equal(plan.actionClass, 'walking');
+  assert.equal(plan.selectedReference.id, 'walk-good');
+  assert.ok(plan.selectedReference.selectionScore >= 0.55);
+  assert.equal(result.motionGuideDirection.selectedActs, 1);
+  assert.equal(result.motionGuideDirection.usableLibrarySize, 2);
+});
+
+test('motion guide director skips low-risk talking scene and classifies physical actions', () => {
+  assert.equal(classifyMotionAction({
+    action: 'Alex lifts one dumbbell from the rack.',
+  }), 'lifting');
+  assert.equal(classifyMotionAction({
+    action: 'Maya walks toward the window.',
+  }), 'walking');
+
+  const segment = directMotionGuide({
+    durationSeconds: 5,
+    dialogue: 'This is the point.',
+    action: 'Presenter stands naturally.',
+    realismDirection: { riskScore: 18, camera: { axis: 'locked' } },
+  }, [{
+    id: 'unused',
+    actionClass: 'walking',
+    durationSeconds: 5,
+    url: 'https://cdn.example/walk.mp4',
+    rightsConfirmed: true,
+    verifiedHumanMotion: true,
+  }]);
+
+  assert.equal(segment.motionGuideDirection.eligible, false);
+  assert.equal(segment.motionGuideDirection.actionClass, 'talking');
+  assert.equal(segment.motionGuideDirection.selectedReference, null);
+});
+
+test('motion guide reference scoring rewards matching action, camera and duration', () => {
+  const segment = {
+    durationSeconds: 6,
+    characterIds: ['runner'],
+    action: 'Runner sprints forward with natural foot plants.',
+    realismDirection: { camera: { axis: 'tracking' } },
+  };
+  const good = scoreReference(segment, {
+    actionClass: 'running',
+    tags: ['running', 'sprint', 'foot-plants'],
+    cameraMode: 'tracking',
+    people: 1,
+    durationSeconds: 6,
+  }, 'running');
+  const weak = scoreReference(segment, {
+    actionClass: 'walking',
+    tags: ['walking'],
+    cameraMode: 'locked',
+    people: 2,
+    durationSeconds: 12,
+  }, 'running');
+
+  assert.ok(good > weak);
+  assert.ok(good >= 0.75);
+});
+
+test('motion guide prompt treats reference as mechanics only, never identity/style authority', () => {
+  const block = buildMotionGuidePromptBlock({
+    motionGuideDirection: {
+      actionClass: 'walking',
+      selectedReference: { id: 'walk-1' },
+    },
+  });
+
+  assert.match(block, /VIDEO MOTION REFERENCE GUIDANCE/i);
+  assert.match(block, /temporal rhythm/i);
+  assert.match(block, /body mechanics/i);
+  assert.match(block, /Do NOT copy the reference performer identity/i);
+  assert.match(block, /Canonical character identity/i);
+});
+
+test('video reference planner prioritizes motion guide and never exceeds 15 seconds', () => {
+  const plan = buildVideoReferencePlan({
+    motionGuide: {
+      selectedReference: {
+        id: 'walk',
+        url: 'https://cdn.example/walk.mp4',
+        durationSeconds: 7,
+      },
+    },
+    previousAsset: {
+      sourceUrl: 'https://cdn.example/previous.mp4',
+      generatedDuration: '9s',
+    },
+    maxCombinedSeconds: 15,
+  });
+
+  assert.deepEqual(plan.references, [
+    { type: 'video', uri: 'https://cdn.example/walk.mp4' },
+  ]);
+  assert.deepEqual(plan.metadata.roles, ['motion-guide']);
+  assert.deepEqual(plan.metadata.droppedRoles, ['previous-act']);
+  assert.equal(plan.metadata.totalDurationSeconds, 7);
+
+  const fits = buildVideoReferencePlan({
+    motionGuide: {
+      selectedReference: {
+        id: 'walk',
+        url: 'https://cdn.example/walk.mp4',
+        durationSeconds: 6,
+      },
+    },
+    previousAsset: {
+      sourceUrl: 'https://cdn.example/previous.mp4',
+      generatedDuration: '5s',
+    },
+  });
+  assert.equal(fits.references.length, 2);
+  assert.equal(fits.metadata.totalDurationSeconds, 11);
+});
+
+test('Runway audiovisual provider sends real-motion guide with locked dialogue and caches it for QC', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-motion-guide-provider-'));
+  const requests = [];
+  let guideDownloads = 0;
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueMode: 'locked',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 1,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target === 'https://cdn.example/walk-guide.mp4') {
+          guideDownloads += 1;
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('real-motion-guide').buffer,
+          };
+        }
+        if (target.endsWith('/text_to_speech') && options.method === 'POST') {
+          return jsonResponse({ id: 'tts-motion-guide' });
+        }
+        if (target.endsWith('/tasks/tts-motion-guide')) {
+          return jsonResponse({
+            id: 'tts-motion-guide',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/dialogue.mp3'],
+          });
+        }
+        if (target.endsWith('/text_to_video') && options.method === 'POST') {
+          assert.deepEqual(body.referenceVideos, [{
+            type: 'video',
+            uri: 'https://cdn.example/walk-guide.mp4',
+          }]);
+          assert.equal(body.referenceAudio[0].uri, 'https://cdn.example/dialogue.mp3');
+          assert.match(body.promptText, /VIDEO MOTION REFERENCE GUIDANCE/i);
+          assert.match(body.promptText, /Do NOT copy the reference performer identity/i);
+          return jsonResponse({ id: 'motion-guided-video' });
+        }
+        if (target.endsWith('/tasks/motion-guided-video')) {
+          return jsonResponse({
+            id: 'motion-guided-video',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/generated.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/generated.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('generated-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const segment = {
+      index: 0,
+      purpose: 'demo',
+      durationSeconds: 6,
+      dialogue: 'Watch how the weight shifts naturally.',
+      dialogueTurns: [{
+        turnIndex: 0,
+        speakerCharacterId: 'alex',
+        text: 'Watch how the weight shifts naturally.',
+      }],
+      speakerCharacterId: 'alex',
+      speakerMode: 'single-speaker',
+      characterIds: ['alex'],
+      locationId: 'gym',
+      action: 'Alex walks naturally toward the rack.',
+      camera: 'Tracking medium shot.',
+      ambience: 'Gym room tone.',
+      soundEffects: ['footsteps'],
+      music: '',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+      realismDirection: {
+        riskScore: 62,
+        camera: { axis: 'tracking' },
+      },
+      keyframeDirection: { enabled: false, policy: 'off' },
+      motionGuideDirection: {
+        enabled: true,
+        eligible: true,
+        actionClass: 'walking',
+        selectedReference: {
+          id: 'walk-guide',
+          actionClass: 'walking',
+          tags: ['walking'],
+          cameraMode: 'tracking',
+          people: 1,
+          durationSeconds: 6,
+          url: 'https://cdn.example/walk-guide.mp4',
+          rightsConfirmed: true,
+          verifiedHumanMotion: true,
+          selectionScore: 0.9,
+        },
+      },
+    };
+    const script = {
+      characters: [{
+        id: 'alex',
+        name: 'Alex',
+        description: 'adult trainer',
+        physicalTraits: 'short dark hair',
+        wardrobe: 'white shirt',
+        voice: {
+          presetId: 'Bernard',
+          languageCode: 'en',
+          description: 'natural male voice',
+          delivery: 'calm',
+        },
+      }],
+      locations: [{
+        id: 'gym',
+        name: 'Gym',
+        description: 'real neighborhood gym',
+        lighting: 'window daylight',
+        fixedElements: ['rack'],
+      }],
+      visualStyle: {
+        description: 'natural documentary',
+        cameraRules: 'physical tracking camera',
+        lightingRules: 'motivated daylight',
+      },
+      audioDirection: { mix: 'clear dialogue', musicPolicy: 'low' },
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript: script,
+      projectId: 'motion-guide-project',
+    });
+
+    assert.equal(asset.motionGuideMode, 'reference-video');
+    assert.equal(asset.motionGuide.selectedReference.id, 'walk-guide');
+    assert.equal(asset.referenceVideoPlan.totalDurationSeconds, 6);
+    assert.deepEqual(asset.referenceVideoPlan.roles, ['motion-guide']);
+    assert.equal(asset.motionGuideError, null);
+    assert.equal(guideDownloads, 1);
+    assert.equal(await readFile(asset.motionGuide.localPath, 'utf8'), 'real-motion-guide');
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'generated-video');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('motion guide failure can fail open without lying in the generation prompt', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-motion-guide-fail-open-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueMode: 'native',
+      motionGuideFailOpen: true,
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 1,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, body });
+
+        if (target === 'https://cdn.example/broken-guide.mp4') {
+          return {
+            ok: false,
+            status: 403,
+            arrayBuffer: async () => new ArrayBuffer(0),
+          };
+        }
+        if (target.endsWith('/text_to_video')) {
+          assert.equal(body.referenceVideos, undefined);
+          assert.doesNotMatch(body.promptText, /VIDEO MOTION REFERENCE GUIDANCE/i);
+          return jsonResponse({ id: 'fallback-no-guide' });
+        }
+        if (target.endsWith('/tasks/fallback-no-guide')) {
+          return jsonResponse({
+            id: 'fallback-no-guide',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/fallback-no-guide.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/fallback-no-guide.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('fallback').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const asset = await provider.generateSegment({
+      segment: {
+        index: 0,
+        purpose: 'action',
+        durationSeconds: 5,
+        dialogue: '',
+        dialogueTurns: [],
+        characterIds: ['p'],
+        locationId: 'room',
+        action: 'Person walks.',
+        camera: 'Locked shot.',
+        ambience: 'room',
+        soundEffects: [],
+        music: '',
+        editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+        realismDirection: { riskScore: 60, camera: { axis: 'locked' } },
+        keyframeDirection: { enabled: false, policy: 'off' },
+        motionGuideDirection: {
+          enabled: true,
+          eligible: true,
+          actionClass: 'walking',
+          selectedReference: {
+            id: 'broken',
+            url: 'https://cdn.example/broken-guide.mp4',
+            durationSeconds: 5,
+            selectionScore: 0.8,
+          },
+        },
+      },
+      productionScript: {
+        characters: [{
+          id: 'p',
+          name: 'Person',
+          description: 'adult',
+          physicalTraits: 'natural',
+          wardrobe: 'neutral',
+          voice: { presetId: 'Bernard', languageCode: 'en' },
+        }],
+        locations: [{
+          id: 'room',
+          name: 'Room',
+          description: 'real room',
+          lighting: 'daylight',
+          fixedElements: [],
+        }],
+        visualStyle: { description: 'real', cameraRules: 'natural', lightingRules: 'daylight' },
+        audioDirection: { mix: 'natural', musicPolicy: 'none' },
+      },
+      projectId: 'fail-open-guide',
+    });
+
+    assert.equal(asset.motionGuideMode, 'off');
+    assert.match(asset.motionGuideError, /download failed/i);
+    assert.equal(asset.referenceVideoCount, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('realism QC rejects motion that looks plausible but misses real-motion guide mechanics', async () => {
+  const sampledPaths = [];
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    temporalEnabled: true,
+    motionGuideThreshold: 80,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,STATIC' },
+      ],
+      sampleTemporal: async (localPath) => {
+        sampledPaths.push(localPath);
+        return localPath.includes('guide')
+          ? [
+            { index: 0, timestamp: 0.1, dataUrl: 'data:image/jpeg;base64,G0' },
+            { index: 1, timestamp: 2.5, dataUrl: 'data:image/jpeg;base64,G1' },
+          ]
+          : [
+            { index: 0, timestamp: 0.1, dataUrl: 'data:image/jpeg;base64,T0' },
+            { index: 1, timestamp: 2.5, dataUrl: 'data:image/jpeg;base64,T1' },
+          ];
+      },
+    },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      const content = body.messages[1].content;
+      assert.ok(content.some(
+        (part) => part.type === 'text' && /REAL-MOTION REFERENCE SEQUENCE/i.test(part.text),
+      ));
+      assert.ok(content.some(
+        (part) => part.type === 'image_url'
+          && part.image_url.url === 'data:image/jpeg;base64,G0',
+      ));
+
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overallScore: 93,
+              temporalScore: 91,
+              scores: {
+                photorealism: 93,
+                anatomy: 93,
+                geometry: 93,
+                physics: 92,
+                motionConsistency: 91,
+                continuity: 93,
+                identityContinuity: 93,
+                locationContinuity: 93,
+                sceneRelevance: 92,
+                artifactFreedom: 93,
+                materialRealism: 92,
+                cameraPhysics: 92,
+                lightingNaturalism: 92,
+                keyframeStartMatch: 100,
+                keyframeEndMatch: 100,
+              },
+              temporalScores: {
+                identityStability: 91,
+                objectPersistence: 91,
+                geometryStability: 91,
+                motionPlausibility: 90,
+                cameraContinuity: 92,
+                flickerFreedom: 92,
+                temporalArtifactFreedom: 91,
+                actionContinuity: 91,
+              },
+              motionRegionScores: {
+                motionRegionCompliance: 100,
+                lockedRegionStability: 100,
+                intendedMotionCompliance: 100,
+                backgroundDriftFreedom: 100,
+              },
+              motionGuideScores: {
+                motionGuideAdherence: 58,
+                poseTrajectoryMatch: 62,
+                timingRhythmMatch: 55,
+                contactMechanicsMatch: 49,
+              },
+              issues: [],
+              temporalIssues: [],
+              regenerationGuidance: '',
+            }),
+          },
+        }],
+      });
+    },
+  });
+
+  const result = await qc.evaluateScene({
+    narration: 'Person walks naturally.',
+    duration: 5,
+    continuity: { characterIds: ['p'], locationId: 'room' },
+  }, {
+    localPath: '/fake/generated.mp4',
+    generatedDuration: '5s',
+    prompt: 'walk naturally',
+    motionControlMode: 'off',
+    motionGuideMode: 'reference-video',
+    motionGuide: {
+      actionClass: 'walking',
+      localPath: '/fake/guide.mp4',
+      selectedReference: {
+        id: 'walk-guide',
+        durationSeconds: 5,
+        selectionScore: 0.9,
+      },
+    },
+  });
+
+  assert.equal(result.staticPassed, true);
+  assert.equal(result.temporalPassed, true);
+  assert.equal(result.motionGuideVerified, true);
+  assert.equal(result.motionGuidePassed, false);
+  assert.equal(result.passed, false);
+  assert.equal(result.motionGuideScores.contactMechanicsMatch, 49);
+  assert.match(result.regenerationGuidance, /MOTION GUIDE CORRECTION/i);
+  assert.ok(sampledPaths.includes('/fake/guide.mp4'));
+});
+
+test('audiovisual pipeline persists selected motion-guide provenance when library matches', async () => {
+  const motionGuideDirector = new MotionGuideDirector({
+    enabled: true,
+    mode: 'always',
+    minSelectionScore: 0.5,
+    requireRightsConfirmed: true,
+    store: {
+      list: async () => [{
+        id: 'lift-guide',
+        actionClass: 'lifting',
+        tags: ['lifting', 'dumbbell'],
+        cameraMode: 'any',
+        people: 1,
+        durationSeconds: 5,
+        url: 'https://cdn.example/lift.mp4',
+        verifiedHumanMotion: true,
+        rightsConfirmed: true,
+      }],
+    },
+  });
+
+  const pipeline = new AudiovisualPipeline({
+    llm: {
+      generateCreativeCandidates: async () => ({
+        candidates: [{
+          id: 'c1',
+          angle: 'demo',
+          hook: 'Watch the movement.',
+          format: 'demo',
+          retentionDevice: 'open loop',
+          payoff: 'show form',
+          visualOpportunity: 'gym action',
+          monetizationFit: 'evergreen',
+          riskNotes: [],
+        }],
+      }),
+      judgeCreativeCandidates: async ({ candidates }) => ({
+        judgments: candidates.map((candidate) => ({
+          candidateId: candidate.id,
+          scores: {
+            hookStrength: 90,
+            retentionPotential: 90,
+            clarity: 90,
+            novelty: 80,
+            productionFeasibility: 90,
+            monetizationFit: 80,
+            factualSafety: 95,
+            platformFit: 90,
+          },
+        })),
+      }),
+      generateProductionScript: async () => ({
+        title: 'Lift',
+        topic: 'lift',
+        synopsis: 'A lifting demo',
+        characters: [{
+          id: 'alex',
+          name: 'Alex',
+          description: 'trainer',
+          physicalTraits: 'natural',
+          wardrobe: 'white shirt',
+          voice: { presetId: 'Bernard', languageCode: 'en' },
+        }],
+        locations: [{
+          id: 'gym',
+          name: 'Gym',
+          description: 'real gym',
+          lighting: 'daylight',
+          fixedElements: ['rack'],
+        }],
+        visualStyle: {
+          description: 'natural',
+          cameraRules: 'locked',
+          lightingRules: 'daylight',
+        },
+        audioDirection: { mix: 'natural', musicPolicy: 'none' },
+        segments: [{
+          index: 0,
+          start: 0,
+          durationSeconds: 5,
+          purpose: 'demo',
+          speakerCharacterId: 'alex',
+          characterIds: ['alex'],
+          locationId: 'gym',
+          dialogue: 'Lift with control.',
+          dialogueTurns: [{
+            speakerCharacterId: 'alex',
+            text: 'Lift with control.',
+          }],
+          action: 'Alex lifts one dumbbell from the rack.',
+          camera: 'Locked medium shot.',
+          ambience: 'gym',
+          soundEffects: [],
+          music: '',
+          transition: '',
+        }],
+      }),
+    },
+    audiovisual: {
+      generateSegment: async ({ segment }) => ({
+        type: 'ai-video',
+        localPath: '/fake/lift.mp4',
+        generationId: 'lift',
+        prompt: segment.action,
+        audioMode: 'native',
+        motionGuideMode: segment.motionGuideDirection?.selectedReference
+          ? 'reference-video'
+          : 'off',
+        motionGuide: segment.motionGuideDirection?.selectedReference
+          ? {
+            actionClass: segment.motionGuideDirection.actionClass,
+            localPath: '/fake/guide.mp4',
+            selectedReference: segment.motionGuideDirection.selectedReference,
+          }
+          : null,
+      }),
+    },
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: null,
+    motionGuideDirector,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'lifting form',
+    durationSeconds: 5,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(project.motionGuideDirection.selectedActs, 1);
+  assert.equal(
+    project.productionScript.segments[0].motionGuideDirection.selectedReference.id,
+    'lift-guide',
+  );
 });

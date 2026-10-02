@@ -76,6 +76,7 @@ export function createApp(overrides = {}) {
       trendIntelligence,
       keyframeDirector: overrides.keyframeDirector,
       motionRegionDirector: overrides.motionRegionDirector,
+      motionGuideDirector: overrides.motionGuideDirector,
     });
   } else {
     const voice = overrides.voice || createVoiceProvider();

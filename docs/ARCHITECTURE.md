@@ -904,3 +904,132 @@ backgroundDriftFreedom
 These scores do **not** alter the historical generic `temporalScore`; they form an independent gate. This preserves backwards-compatible temporal metrics while adding a stricter anti-drift requirement.
 
 When the gate fails, deterministic regeneration guidance repeats the relevant locked and allowed regions, with a separate rule for static-camera background lock versus moving-camera parallax.
+
+
+## Real-motion video guidance
+
+The motion-guide layer runs after the deterministic realism/keyframe/region directors because it consumes their risk and camera metadata.
+
+```text
+ProductionScript
+  -> RealismDirector
+  -> KeyframeDirector
+  -> MotionRegionDirector
+  -> MotionGuideDirector
+       -> classify action
+       -> risk eligibility
+       -> select licensed real-motion reference
+  -> RunwayAudiovisualProvider
+```
+
+### MotionReferenceStore
+
+The default store reads:
+
+```text
+./data/motion-references.json
+```
+
+The repository ships only `data/motion-references.example.json`.
+
+Each usable record contains:
+
+```text
+id
+actionClass
+tags
+cameraMode
+people
+durationSeconds
+url
+source
+license
+verifiedHumanMotion
+rightsConfirmed
+```
+
+The store rejects non-HTTPS references and references longer than 15 seconds. By default the director additionally requires `rightsConfirmed=true`.
+
+### Selection
+
+MotionGuideDirector uses deterministic scoring rather than another LLM call.
+
+A reference gets credit for:
+
+```text
+exact action class       0.55
+action/tag overlap       up to 0.20
+camera compatibility     0.10
+duration fit             up to 0.10
+person-count match       0.05
+```
+
+A simple speaking scene is not eligible. In auto mode, physical-action scenes also need to clear the configured realism-risk threshold.
+
+### Provider transport
+
+For WAN audiovisual generation the selected real-motion clip is sent through `referenceVideos`.
+
+This keeps the existing generation contract compatible with:
+
+- first/last keyframes
+- locked reference dialogue audio
+- canonical story-bible image generation
+- native audiovisual output
+
+The prompt distinguishes motion authority from appearance authority:
+
+```text
+motion reference:
+  timing / trajectory / mechanics
+
+canonical refs + keyframes:
+  identity / wardrobe / location / lighting / composition
+```
+
+### Reference-video budget
+
+The provider constructs an ordered reference plan.
+
+Priority:
+
+1. selected human motion guide
+2. previous accepted act for continuity
+
+References are added only while the known combined duration remains <=15 seconds. Unknown previous-act duration is conservatively budgeted as 15 seconds.
+
+This prevents an otherwise valid generation from being rejected by the provider because accumulated video references exceed the model contract.
+
+### Local guide cache
+
+Before submission, the selected guide is downloaded into `ASSET_DIR` using a URL fingerprint.
+
+The local copy serves two purposes:
+
+- identical guide URLs are not repeatedly downloaded
+- realism QC can sample the exact same guide used for generation
+
+If download fails and `MOTION_GUIDE_FAIL_OPEN=true`, the provider removes motion-guide language/reference from the request and records the error in asset provenance.
+
+### Motion-guide QC
+
+When `asset.motionGuideMode=reference-video`, the realism evaluator samples the real-motion clip and generated clip as separate chronological sequences.
+
+It receives explicit instructions to ignore:
+- identity
+- wardrobe
+- environment
+- light
+- visual style
+
+and evaluate only:
+- action trajectory
+- pose order
+- rhythm / acceleration
+- grips / contacts / releases
+- foot plants
+- weight transfer
+
+The guide gate is independent from generic temporal score and Motion Region QC. A generation must pass all enabled gates.
+
+The asset/project provenance records the selected reference id, selection score, local cache path, reference-video roles and any dropped continuity references.

@@ -1079,3 +1079,185 @@ Generated audiovisual assets now record:
 ```
 
 This distinction is deliberate. When a provider later exposes real spatial motion masks, TikTokMoney can add a native transport behind the same MotionRegionDirector contract without pretending the current API already supports it.
+
+
+## Real-motion video guidance
+
+TikTokMoney can now use a **real human motion clip as a movement reference** for difficult actions while keeping AI character identity, wardrobe, location, keyframes and locked dialogue authoritative.
+
+This is intentionally different from blindly restyling the reference video.
+
+```text
+real licensed human-motion clip
+        ↓
+MotionGuideDirector
+  action classification
+  risk gate
+  reference ranking
+        ↓
+canonical AI character + location
+first/last keyframes
+motion-region locks
+exact dialogue reference audio
+        ↓
+WAN audiovisual generation
+  referenceVideos = motion guide
+        ↓
+Motion Guide QC
+  pose trajectory
+  timing rhythm
+  contact mechanics
+  motion adherence
+```
+
+### Motion library
+
+Create the active library from the example:
+
+```bash
+cp data/motion-references.example.json data/motion-references.json
+```
+
+Then replace the example URL with a real HTTPS/Runway-hosted clip and document its rights:
+
+```json
+{
+  "references": [
+    {
+      "id": "walk-side-01",
+      "actionClass": "walking",
+      "tags": ["walking", "natural", "full-body", "weight-transfer"],
+      "cameraMode": "tracking",
+      "people": 1,
+      "durationSeconds": 6,
+      "url": "https://...",
+      "source": "our internal motion capture session",
+      "license": "owned footage",
+      "verifiedHumanMotion": true,
+      "rightsConfirmed": true
+    }
+  ]
+}
+```
+
+By default, references are **not eligible** unless `rightsConfirmed=true`.
+
+This keeps autonomous production from accidentally treating arbitrary web video as reusable motion data.
+
+### Selection policy
+
+Defaults:
+
+```env
+MOTION_GUIDE_ENABLED=true
+MOTION_GUIDE_MODE=auto
+MOTION_REFERENCE_LIBRARY_PATH=./data/motion-references.json
+MOTION_GUIDE_MIN_RISK_SCORE=50
+MOTION_GUIDE_MIN_SELECTION_SCORE=0.55
+MOTION_GUIDE_MAX_REFERENCE_SECONDS=15
+MOTION_GUIDE_REQUIRE_RIGHTS_CONFIRMED=true
+MOTION_GUIDE_FAIL_OPEN=true
+```
+
+The selector classifies actions such as:
+
+- walking
+- running
+- lifting
+- squat
+- reaching / pick-up
+- placing
+- drinking
+- jumping
+- throwing
+- dancing
+- boxing
+- turning
+
+Simple talking-head/general scenes are not motion-guide candidates.
+
+In `auto` mode, the scene must also clear the realism-risk threshold. References are ranked by:
+
+- action-class match
+- semantic action/tag overlap
+- camera compatibility
+- duration fit
+- number of people
+
+If no reference clears the threshold, TikTokMoney simply uses the existing generation path.
+
+### What the video reference controls
+
+The generation prompt explicitly says to use the clip only for:
+
+- temporal rhythm
+- pose progression
+- balance
+- body mechanics
+- weight transfer
+- contact timing
+- physically plausible trajectory
+
+It explicitly forbids copying:
+
+- performer identity
+- face / apparent age
+- clothing
+- background
+- location
+- lighting
+- color palette
+- reference-video camera look
+
+Canonical story-bible identity and keyframes remain authoritative.
+
+### 15-second reference budget
+
+WAN video references have a combined duration budget. TikTokMoney therefore builds a deterministic reference plan.
+
+The motion guide has priority. The previous accepted act is included as an additional continuity video only when both fit within the configured 15-second total.
+
+Example:
+
+```text
+motion guide   7 s
+previous act   9 s
+-----------------
+total         16 s
+
+=> keep motion guide
+=> drop previous-act video reference
+=> continuity still comes from story bible + keyframes
+```
+
+When both fit, both are retained.
+
+### Guide caching + independent QC
+
+The exact motion guide sent to generation is cached under `ASSET_DIR`. Realism QC samples both:
+
+```text
+generated temporal sequence
+real-motion reference sequence
+```
+
+and compares motion rather than appearance.
+
+Four new independent scores are required when a guide was actually applied:
+
+```text
+motionGuideAdherence
+poseTrajectoryMatch
+timingRhythmMatch
+contactMechanicsMatch
+```
+
+Default:
+
+```env
+REALISM_QC_MOTION_GUIDE_THRESHOLD=80
+```
+
+These scores do not replace generic temporal realism or Motion Region QC. A clip can therefore look realistic and preserve identity but still be regenerated if the gait, grip, foot plant, timing or weight transfer diverges too far from the real human reference.
+
+Failed guide QC produces deterministic corrective guidance while preserving canonical identity, keyframes and locked regions.

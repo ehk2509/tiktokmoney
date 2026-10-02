@@ -218,6 +218,9 @@ export function createRealismQcProvider(env = process.env) {
     motionRegionThreshold: env.REALISM_QC_MOTION_REGION_THRESHOLD
       ? Number(env.REALISM_QC_MOTION_REGION_THRESHOLD)
       : undefined,
+    motionGuideThreshold: env.REALISM_QC_MOTION_GUIDE_THRESHOLD
+      ? Number(env.REALISM_QC_MOTION_GUIDE_THRESHOLD)
+      : undefined,
     temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
       ? undefined
       : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),
@@ -247,6 +250,9 @@ export function createAudiovisualProvider(env = process.env) {
     keyframeFailOpen: env.KEYFRAME_FAIL_OPEN == null
       ? undefined
       : isEnabled(env.KEYFRAME_FAIL_OPEN),
+    motionGuideFailOpen: env.MOTION_GUIDE_FAIL_OPEN == null
+      ? undefined
+      : isEnabled(env.MOTION_GUIDE_FAIL_OPEN),
     assetDir: env.ASSET_DIR,
     pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
     maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,

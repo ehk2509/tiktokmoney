@@ -1,5 +1,6 @@
 import { FrameSampler } from '../services/frameSampler.js';
 import { buildMotionRegionQcContract } from '../core/motionRegionDirector.js';
+import { buildMotionGuideQcContract } from '../core/motionGuideDirector.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -13,6 +14,7 @@ export class OpenRouterRealismQcProvider {
     continuityThreshold = Number(process.env.REALISM_QC_CONTINUITY_THRESHOLD || 85),
     keyframeThreshold = Number(process.env.REALISM_QC_KEYFRAME_THRESHOLD || 84),
     motionRegionThreshold = Number(process.env.REALISM_QC_MOTION_REGION_THRESHOLD || 84),
+    motionGuideThreshold = Number(process.env.REALISM_QC_MOTION_GUIDE_THRESHOLD || 80),
     temporalEnabled = parseBoolean(process.env.REALISM_QC_TEMPORAL_ENABLED, true),
     maxRegenerations = Number(process.env.REALISM_MAX_REGENERATIONS || 1),
     failClosed = parseBoolean(process.env.REALISM_QC_FAIL_CLOSED, true),
@@ -31,6 +33,7 @@ export class OpenRouterRealismQcProvider {
     this.continuityThreshold = clampScore(continuityThreshold);
     this.keyframeThreshold = clampScore(keyframeThreshold);
     this.motionRegionThreshold = clampScore(motionRegionThreshold);
+    this.motionGuideThreshold = clampScore(motionGuideThreshold);
     this.temporalEnabled = Boolean(temporalEnabled);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
     this.failClosed = Boolean(failClosed);
@@ -63,6 +66,14 @@ export class OpenRouterRealismQcProvider {
       && asset.motionControlMode !== 'off'
       ? buildMotionRegionQcContract(scene)
       : null;
+    const motionGuideContract = asset.motionGuideMode === 'reference-video'
+      ? buildMotionGuideQcContract(scene, asset)
+      : null;
+    const motionGuideFrames = motionGuideContract && this.temporalEnabled
+      ? await this.frameSampler.sampleTemporal(motionGuideContract.localPath, {
+        durationSeconds: motionGuideContract.durationSeconds,
+      })
+      : [];
     const prompt = buildPrompt({
       scene,
       asset,
@@ -72,6 +83,8 @@ export class OpenRouterRealismQcProvider {
       temporalFrameCount: temporalFrames.length,
       previousFrameCount: previousFrames.length,
       motionRegionContract,
+      motionGuideContract,
+      motionGuideFrameCount: motionGuideFrames.length,
     });
 
     const keyframeImages = [];
@@ -100,6 +113,13 @@ export class OpenRouterRealismQcProvider {
       ...(this.temporalEnabled ? [
         { type: 'text', text: 'TEMPORAL SEQUENCE — these frames are strictly chronological. Compare adjacent frames for motion and identity stability:' },
         ...labelledImageParts(temporalFrames, 'Temporal'),
+      ] : []),
+      ...(motionGuideFrames.length ? [
+        {
+          type: 'text',
+          text: 'REAL-MOTION REFERENCE SEQUENCE — compare body mechanics, pose progression, contact events and timing only. Ignore performer identity, clothing, background, lighting and visual style:',
+        },
+        ...labelledImageParts(motionGuideFrames, 'Motion reference'),
       ] : []),
     ];
 
@@ -139,6 +159,7 @@ export class OpenRouterRealismQcProvider {
     const scores = normalizeScores(parsed?.scores);
     const temporalScores = normalizeTemporalScores(parsed?.temporalScores);
     const motionRegionScores = normalizeMotionRegionScores(parsed?.motionRegionScores);
+    const motionGuideScores = normalizeMotionGuideScores(parsed?.motionGuideScores);
     const issues = normalizeIssues(parsed?.issues);
     const temporalIssues = normalizeIssues(parsed?.temporalIssues);
 
@@ -183,11 +204,24 @@ export class OpenRouterRealismQcProvider {
       Number.isFinite(Number(explicitMotionScores[key]))
       && clampScore(explicitMotionScores[key]) >= this.motionRegionThreshold
     ));
+    const motionGuideVerified = Boolean(motionGuideContract && this.temporalEnabled);
+    const explicitGuideScores = parsed?.motionGuideScores || {};
+    const motionGuidePassed = !motionGuideVerified || [
+      'motionGuideAdherence',
+      'poseTrajectoryMatch',
+      'timingRhythmMatch',
+      'contactMechanicsMatch',
+    ].every((key) => (
+      Number.isFinite(Number(explicitGuideScores[key]))
+      && clampScore(explicitGuideScores[key]) >= this.motionGuideThreshold
+    ));
+
     const passed = staticPassed
       && temporalPassed
       && continuityPassed
       && keyframeAdherencePassed
       && motionRegionPassed
+      && motionGuidePassed
       && !criticalFailure;
 
     const deterministicMotionGuidance = motionRegionVerified && !motionRegionPassed
@@ -195,6 +229,13 @@ export class OpenRouterRealismQcProvider {
         motionRegionContract,
         motionRegionScores,
         this.motionRegionThreshold,
+      )
+      : '';
+    const deterministicGuideGuidance = motionGuideVerified && !motionGuidePassed
+      ? buildMotionGuideGuidance(
+        motionGuideContract,
+        motionGuideScores,
+        this.motionGuideThreshold,
       )
       : '';
 
@@ -206,6 +247,7 @@ export class OpenRouterRealismQcProvider {
       continuityThreshold: this.continuityThreshold,
       keyframeThreshold: this.keyframeThreshold,
       motionRegionThreshold: this.motionRegionThreshold,
+      motionGuideThreshold: this.motionGuideThreshold,
       temporalEnabled: this.temporalEnabled,
       passed,
       staticPassed,
@@ -219,6 +261,9 @@ export class OpenRouterRealismQcProvider {
       motionRegionPassed,
       motionRegionVerified,
       motionRegionScores,
+      motionGuidePassed,
+      motionGuideVerified,
+      motionGuideScores,
       overallScore,
       temporalScore,
       scores,
@@ -230,6 +275,7 @@ export class OpenRouterRealismQcProvider {
       regenerationGuidance: [
         stringOrEmpty(parsed?.regenerationGuidance),
         deterministicMotionGuidance,
+        deterministicGuideGuidance,
       ].filter(Boolean).join(' ')
         || buildGuidance(
           allIssues,
@@ -242,6 +288,7 @@ export class OpenRouterRealismQcProvider {
       sampledFrames: frames.map(({ index, timestamp }) => ({ index, timestamp })),
       temporalFrames: temporalFrames.map(({ index, timestamp }) => ({ index, timestamp })),
       previousFrames: previousFrames.map(({ index, timestamp }) => ({ index, timestamp })),
+      motionGuideFrames: motionGuideFrames.map(({ index, timestamp }) => ({ index, timestamp })),
       previousGenerationId: previousAsset?.generationId || null,
       rawUsage: payload?.usage || null,
     };
@@ -270,6 +317,8 @@ function buildPrompt({
   temporalFrameCount,
   previousFrameCount,
   motionRegionContract,
+  motionGuideContract,
+  motionGuideFrameCount,
 }) {
   const binding = scene.continuity || {};
   const characters = (storyBible?.characters || [])
@@ -300,6 +349,9 @@ function buildPrompt({
       : '',
     motionRegionContract
       ? `Camera moving: ${motionRegionContract.cameraMoving ? 'yes — correct parallax is allowed, independent object drift is not' : 'no — background anchors should stay screen-space stable'}.`
+      : '',
+    motionGuideContract
+      ? `REAL-MOTION GUIDE: action=${motionGuideContract.actionClass}; reference=${motionGuideContract.referenceId}; ${motionGuideFrameCount} chronological reference frames are supplied. Compare motion only, never appearance.`
       : '',
     ...characters.map((character) => [
       `Canonical character ${character.name}: ${character.description}`,
@@ -355,6 +407,14 @@ function buildPrompt({
         '- intendedMotionCompliance: the regions that are supposed to move actually execute only the planned motion with the requested intensity.',
         '- backgroundDriftFreedom: background/fixed anchors remain stable, or move only through correct camera parallax when the camera moves.',
       ] : []),
+      ...(motionGuideContract ? [
+        '',
+        'MOTION GUIDE scores, each from 0 to 100:',
+        '- motionGuideAdherence: generated motion follows the reference action trajectory without copying reference appearance.',
+        '- poseTrajectoryMatch: major body poses progress in the same physically plausible order as the reference.',
+        '- timingRhythmMatch: cadence, acceleration/deceleration and important action beats follow the reference timing.',
+        '- contactMechanicsMatch: foot plants, grips, object contacts, releases and weight transfer occur with comparable physically plausible mechanics.',
+      ] : []),
       '',
       'Look especially for defects that may exist for only one or two adjacent frames.',
     ] : []),
@@ -380,6 +440,10 @@ function buildPrompt({
     '  "motionRegionScores": {',
     '    "motionRegionCompliance": 100, "lockedRegionStability": 100,',
     '    "intendedMotionCompliance": 100, "backgroundDriftFreedom": 100',
+    '  },',
+    '  "motionGuideScores": {',
+    '    "motionGuideAdherence": 100, "poseTrajectoryMatch": 100,',
+    '    "timingRhythmMatch": 100, "contactMechanicsMatch": 100',
     '  },',
     '  "issues": [{"code":"hands","severity":"high","evidence":"brief visible evidence"}],',
     '  "temporalIssues": [{"code":"face-morph","severity":"high","evidence":"face shape changes between temporal frames 4 and 5"}],',
@@ -449,6 +513,19 @@ function normalizeMotionRegionScores(scores = {}) {
   ]));
 }
 
+function normalizeMotionGuideScores(scores = {}) {
+  const keys = [
+    'motionGuideAdherence',
+    'poseTrajectoryMatch',
+    'timingRhythmMatch',
+    'contactMechanicsMatch',
+  ];
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    clampScore(scores?.[key] ?? 0),
+  ]));
+}
+
 function normalizeIssues(issues) {
   if (!Array.isArray(issues)) return [];
 
@@ -509,6 +586,22 @@ function buildGuidance(
   const targets = [...weakestStatic, ...weakestTemporal].filter(Boolean);
 
   return `Improve ${targets.join(', ') || 'photorealism and temporal stability'} while preserving the scene content and canonical continuity.`;
+}
+
+function buildMotionGuideGuidance(contract, scores, threshold) {
+  if (!contract) return '';
+  const weak = Object.entries(scores || {})
+    .filter(([, score]) => score < threshold)
+    .sort((a, b) => a[1] - b[1])
+    .map(([name]) => name);
+  if (!weak.length) return '';
+
+  return [
+    `MOTION GUIDE CORRECTION: fix ${weak.join(', ')} for the ${contract.actionClass} action.`,
+    'Follow the real-motion reference for pose order, rhythm, weight transfer and contact events.',
+    'Do not copy the reference performer identity, wardrobe, setting or camera look.',
+    'Preserve canonical character identity, scene, keyframes and motion-region locks.',
+  ].join(' ');
 }
 
 function buildMotionRegionGuidance(contract, scores, threshold) {

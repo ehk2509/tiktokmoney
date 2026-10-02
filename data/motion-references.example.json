@@ -1,0 +1,17 @@
+{
+  "references": [
+    {
+      "id": "walk-neutral-side-01",
+      "actionClass": "walking",
+      "tags": ["walking", "natural", "full-body", "weight-transfer"],
+      "cameraMode": "locked",
+      "people": 1,
+      "durationSeconds": 6,
+      "url": "https://example.com/replace-with-licensed-motion-reference.mp4",
+      "source": "Replace with a real HTTPS or Runway-hosted motion clip",
+      "license": "Record or document the usage rights here",
+      "verifiedHumanMotion": true,
+      "rightsConfirmed": false
+    }
+  ]
+}

@@ -6,6 +6,8 @@ import { CreativeTournament } from './creativeTournament.js';
 import { RealismDirector } from './realismDirector.js';
 import { KeyframeDirector } from './keyframeDirector.js';
 import { MotionRegionDirector } from './motionRegionDirector.js';
+import { MotionGuideDirector } from './motionGuideDirector.js';
+import { MotionReferenceStore } from '../storage/motionReferenceStore.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -26,6 +28,7 @@ export class AudiovisualPipeline {
     realismDirector = null,
     keyframeDirector = null,
     motionRegionDirector = null,
+    motionGuideDirector = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
     this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
@@ -33,6 +36,9 @@ export class AudiovisualPipeline {
     this.realismDirector = realismDirector || new RealismDirector();
     this.keyframeDirector = keyframeDirector || new KeyframeDirector();
     this.motionRegionDirector = motionRegionDirector || new MotionRegionDirector();
+    this.motionGuideDirector = motionGuideDirector || new MotionGuideDirector({
+      store: new MotionReferenceStore(),
+    });
     this.audiovisual = audiovisual;
     this.renderer = renderer;
     this.store = store;
@@ -117,12 +123,14 @@ export class AudiovisualPipeline {
     });
     const realismDirectedScript = this.realismDirector.direct(rawProductionScript);
     const keyframeDirectedScript = this.keyframeDirector.direct(realismDirectedScript);
-    const productionScript = this.motionRegionDirector.direct(keyframeDirectedScript);
+    const motionRegionDirectedScript = this.motionRegionDirector.direct(keyframeDirectedScript);
+    const productionScript = await this.motionGuideDirector.direct(motionRegionDirectedScript);
     let storyBible = productionScriptToStoryBible(productionScript);
     project.productionScript = productionScript;
     project.realismDirection = productionScript.realismDirection || null;
     project.keyframeDirection = productionScript.keyframeDirection || null;
     project.motionRegionDirection = productionScript.motionRegionDirection || null;
+    project.motionGuideDirection = productionScript.motionGuideDirection || null;
     project.storyBible = storyBible;
     project.status = 'SCRIPTED';
 
