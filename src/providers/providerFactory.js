@@ -236,23 +236,28 @@ export function createRealismQcProvider(env = process.env) {
 }
 
 export function createPoseMotionQcProvider(env = process.env) {
+  const extractor = new PoseMotionExtractor({
+    command: env.POSE_EXTRACTOR_COMMAND,
+    args: env.POSE_EXTRACTOR_ARGS ? JSON.parse(env.POSE_EXTRACTOR_ARGS) : undefined,
+    sampleFps: env.POSE_EXTRACTOR_FPS ? Number(env.POSE_EXTRACTOR_FPS) : undefined,
+    timeoutMs: env.POSE_EXTRACTOR_TIMEOUT_MS
+      ? Number(env.POSE_EXTRACTOR_TIMEOUT_MS)
+      : undefined,
+    cacheDir: env.POSE_CACHE_DIR,
+    modelPath: env.POSE_MODEL_PATH,
+  });
   const enabled = env.POSE_MOTION_QC_ENABLED == null
-    ? Boolean(env.POSE_EXTRACTOR_COMMAND)
+    ? extractor.available
     : isEnabled(env.POSE_MOTION_QC_ENABLED);
   if (!enabled) return null;
-  if (!env.POSE_EXTRACTOR_COMMAND) {
-    throw new Error('POSE_EXTRACTOR_COMMAND is required when POSE_MOTION_QC_ENABLED=true');
+  if (!extractor.available) {
+    throw new Error(
+      'Pose motion QC is enabled but no extractor is available. Run npm run setup:pose or set POSE_EXTRACTOR_COMMAND.',
+    );
   }
 
   return new PoseMotionQcProvider({
-    extractor: new PoseMotionExtractor({
-      command: env.POSE_EXTRACTOR_COMMAND,
-      args: env.POSE_EXTRACTOR_ARGS ? JSON.parse(env.POSE_EXTRACTOR_ARGS) : undefined,
-      sampleFps: env.POSE_EXTRACTOR_FPS ? Number(env.POSE_EXTRACTOR_FPS) : undefined,
-      timeoutMs: env.POSE_EXTRACTOR_TIMEOUT_MS
-        ? Number(env.POSE_EXTRACTOR_TIMEOUT_MS)
-        : undefined,
-    }),
+    extractor,
     threshold: env.POSE_MOTION_QC_THRESHOLD
       ? Number(env.POSE_MOTION_QC_THRESHOLD)
       : undefined,
@@ -295,6 +300,8 @@ export function createAudiovisualProvider(env = process.env) {
       timeoutMs: env.POSE_EXTRACTOR_TIMEOUT_MS
         ? Number(env.POSE_EXTRACTOR_TIMEOUT_MS)
         : undefined,
+      cacheDir: env.POSE_CACHE_DIR,
+      modelPath: env.POSE_MODEL_PATH,
     }),
     assetDir: env.ASSET_DIR,
     pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,

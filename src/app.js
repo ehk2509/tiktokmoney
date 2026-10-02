@@ -37,6 +37,14 @@ export function createApp(overrides = {}) {
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
 
   let pipeline;
+  const capabilities = {
+    poseMotion: {
+      enabled: false,
+      extractorAvailable: false,
+      extractorKind: null,
+      bundled: false,
+    },
+  };
   if (mode === 'audiovisual') {
     const audiovisual = overrides.audiovisual || createAudiovisualProvider();
     const renderer = overrides.renderer || new AudiovisualRenderer();
@@ -62,6 +70,12 @@ export function createApp(overrides = {}) {
     const poseMotionQc = Object.prototype.hasOwnProperty.call(overrides, 'poseMotionQc')
       ? overrides.poseMotionQc
       : createPoseMotionQcProvider();
+    capabilities.poseMotion = {
+      enabled: Boolean(poseMotionQc),
+      extractorAvailable: Boolean(poseMotionQc?.extractor?.available),
+      extractorKind: poseMotionQc?.extractor?.kind || null,
+      bundled: Boolean(poseMotionQc?.extractor?.bundled),
+    };
 
     pipeline = new AudiovisualPipeline({
       llm,
@@ -109,6 +123,7 @@ export function createApp(overrides = {}) {
     mode,
     pipeline,
     dailyPlanner,
+    capabilities,
     async opportunities() {
       const items = await trends.list();
       return trendIntelligence ? items : rankOpportunities(items);

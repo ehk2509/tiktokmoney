@@ -75,7 +75,11 @@ import {
   poseSummaryToPrompt,
   comparePoseSequences,
 } from '../src/core/poseMotion.js';
-import { PoseMotionExtractor } from '../src/services/poseMotionExtractor.js';
+import {
+  PoseMotionExtractor,
+  resolveExtractor,
+  bundledPythonCandidates,
+} from '../src/services/poseMotionExtractor.js';
 import { PoseMotionQcProvider } from '../src/providers/poseMotionQcProvider.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
@@ -7339,3 +7343,127 @@ function makePoseSequence({
     ],
   };
 }
+
+
+test('pose extractor auto-discovers repository-local MediaPipe sidecar', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-pose-discovery-'));
+  try {
+    const script = path.join(dir, 'scripts', 'mediapipe_pose_extractor.py');
+    const python = path.join(
+      dir,
+      '.venv-pose',
+      process.platform === 'win32' ? 'Scripts' : 'bin',
+      process.platform === 'win32' ? 'python.exe' : 'python',
+    );
+    await import('node:fs/promises').then(({ mkdir }) => Promise.all([
+      mkdir(path.dirname(script), { recursive: true }),
+      mkdir(path.dirname(python), { recursive: true }),
+    ]));
+    await writeFile(script, '# test sidecar');
+    await writeFile(python, '');
+
+    const resolved = resolveExtractor({
+      cwd: dir,
+      platform: process.platform,
+      modelPath: path.join(dir, 'models', 'pose.task'),
+    });
+
+    assert.equal(resolved.kind, 'bundled-mediapipe');
+    assert.equal(resolved.command, python);
+    assert.equal(resolved.args[0], script);
+    assert.ok(resolved.args.includes('{video}'));
+    assert.ok(resolved.args.includes('{output_json}'));
+    assert.ok(resolved.args.includes(path.join(dir, 'models', 'pose.task')));
+
+    const candidates = bundledPythonCandidates(dir, process.platform);
+    assert.equal(candidates[0], python);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('explicit pose extractor command keeps the generic command contract', () => {
+  const resolved = resolveExtractor({
+    command: 'custom-pose',
+    cwd: '/not-used',
+  });
+
+  assert.equal(resolved.kind, 'external-command');
+  assert.equal(resolved.command, 'custom-pose');
+  assert.deepEqual(resolved.args, [
+    '--video',
+    '{video}',
+    '--output-json',
+    '{output_json}',
+    '--fps',
+    '{fps}',
+  ]);
+});
+
+test('pose extractor caches normalized sequence by video fingerprint', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-pose-cache-'));
+  const video = path.join(dir, 'video.mp4');
+  const cache = path.join(dir, 'cache');
+  await writeFile(video, 'fake-video-bytes');
+  let calls = 0;
+
+  try {
+    const extractor = new PoseMotionExtractor({
+      command: 'fake-pose',
+      args: ['--video', '{video}', '--output-json', '{output_json}', '--fps', '{fps}'],
+      sampleFps: 8,
+      cacheDir: cache,
+      cwd: dir,
+      runCommand: async (_command, args) => {
+        calls += 1;
+        const outputPath = args[args.indexOf('--output-json') + 1];
+        await writeFile(outputPath, JSON.stringify(makePoseSequence({
+          kneeBend: [0.02, 0.1, 0.2, 0.1, 0.02],
+        })));
+      },
+    });
+
+    const first = await extractor.extract(video, { durationSeconds: 4 });
+    const second = await extractor.extract(video, { durationSeconds: 4 });
+
+    assert.equal(calls, 1);
+    assert.equal(first.source, 'external-command');
+    assert.equal(first.cached, false);
+    assert.equal(second.source, 'cache');
+    assert.equal(second.cached, true);
+    assert.ok(second.sequence.frames.length >= 5);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pose extractor cache invalidates when source video changes', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-pose-cache-invalidate-'));
+  const video = path.join(dir, 'video.mp4');
+  const cache = path.join(dir, 'cache');
+  await writeFile(video, 'v1');
+  let calls = 0;
+
+  try {
+    const extractor = new PoseMotionExtractor({
+      command: 'fake-pose',
+      args: ['--video', '{video}', '--output-json', '{output_json}'],
+      cacheDir: cache,
+      cwd: dir,
+      runCommand: async (_command, args) => {
+        calls += 1;
+        const outputPath = args[args.indexOf('--output-json') + 1];
+        await writeFile(outputPath, JSON.stringify(makePoseSequence({})));
+      },
+    });
+
+    await extractor.extract(video, { durationSeconds: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await writeFile(video, 'v2-with-different-size');
+    await extractor.extract(video, { durationSeconds: 4 });
+
+    assert.equal(calls, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

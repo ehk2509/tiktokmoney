@@ -1117,3 +1117,96 @@ If `POSE_EXTRACTOR_COMMAND` is absent, pose-motion QC is not constructed by defa
 Embedded `poseSequence` data can still enrich the generation prompt, because the reference skeleton does not require extracting the generated video. Full deterministic comparison only becomes active when generated-video pose extraction is available.
 
 The current Runway path does not expose a native skeleton/mocap parameter in the contract used by TikTokMoney. The normalized pose layer therefore improves prompting and QC today while remaining ready for a future native pose transport.
+
+
+## Bundled MediaPipe pose sidecar
+
+v0.23 adds a concrete default implementation behind the v0.22 `PoseMotionExtractor` boundary.
+
+```text
+video file
+   ↓
+FFmpeg frame sampler
+   ↓
+MediaPipe Pose Landmarker (VIDEO mode)
+   ↓
+33 timestamped landmarks
+   ↓
+PoseMotionExtractor normalization
+   ↓
+pose cache
+   ↓
+generation summary + deterministic QC
+```
+
+### Local installation
+
+`npm run setup:pose` creates an isolated `.venv-pose` and installs `scripts/pose-sidecar-requirements.txt`.
+
+The setup then downloads the Pose Landmarker Full task model into:
+
+```text
+models/pose_landmarker_full.task
+```
+
+Both the venv and downloaded binary model are intentionally ignored by Git.
+
+### Runtime discovery
+
+When no explicit `POSE_EXTRACTOR_COMMAND` is provided, `PoseMotionExtractor` checks for:
+
+```text
+<repo>/.venv-pose/bin/python
+<repo>/.venv-pose/Scripts/python.exe
+/opt/tiktokmoney-pose/bin/python
+```
+
+If one exists together with the bundled extractor script, the extractor is classified as:
+
+```text
+kind = bundled-mediapipe
+```
+
+Custom commands retain `kind = external-command`.
+
+### Docker
+
+The production Docker image includes:
+- Python 3
+- isolated `/opt/tiktokmoney-pose` virtual environment
+- pinned MediaPipe package
+- official Pose Landmarker Full model
+- build-time sidecar health check
+
+No OpenCV package is required. FFmpeg performs video decode and sampling.
+
+### Cache
+
+The Node adapter caches normalized results in `POSE_CACHE_DIR`.
+
+The fingerprint includes file path, size, mtime, sampling rate and extractor contract. The cache is therefore reusable for immutable motion-reference assets but invalidates when the source changes.
+
+Writes use a temporary file + rename so a partially written extraction does not become a valid cache entry.
+
+### Factory behavior
+
+`createPoseMotionQcProvider()` constructs the extractor first.
+
+When `POSE_MOTION_QC_ENABLED` is unset:
+- discovered sidecar -> QC enabled
+- no sidecar -> QC absent
+
+When explicitly enabled without an available extractor, startup fails with a setup instruction instead of silently claiming biomechanical QC is active.
+
+### Operations
+
+`GET /health` exposes the effective pose capability:
+
+```text
+enabled
+extractorAvailable
+extractorKind
+bundled
+```
+
+This separates installed capability from configuration and prevents deployments from assuming pose verification is running when it is not.

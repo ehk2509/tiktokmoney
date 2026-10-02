@@ -7,7 +7,13 @@ const port = Number(process.env.PORT || 3000);
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      return json(res, 200, { ok: true, service: 'tiktokmoney', version: '0.1.0' });
+      return json(res, 200, {
+        ok: true,
+        service: 'tiktokmoney',
+        version: process.env.npm_package_version || '0.23.0',
+        mode: app.mode,
+        capabilities: app.capabilities,
+      });
     }
 
     if (req.method === 'GET' && req.url === '/api/opportunities') {
