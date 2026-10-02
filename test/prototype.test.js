@@ -2938,6 +2938,9 @@ test('audiovisual pipeline skips visual speech QC for an off-screen voiceover na
     assert.equal(project.status, 'READY');
     assert.equal(lipSyncCalls, 0);
     assert.equal(project.productionScript.characters[0].onScreen, false);
+    assert.equal(project.scenes[0].qcApplicability.lipSync.applicable, false);
+    assert.equal(project.scenes[0].qcApplicability.lipSync.reason, 'offscreen-voiceover');
+    assert.equal(project.scenes[0].qcApplicability.poseMotion.reason, 'no-visible-human');
     assert.match(prompts[0], /VOICEOVER: the dialogue is off-screen narration/);
     assert.doesNotMatch(prompts[0], /synchronize the visible speaker/);
   } finally {
