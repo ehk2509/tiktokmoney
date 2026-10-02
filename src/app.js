@@ -54,6 +54,10 @@ export function createApp(overrides = {}) {
       extractorKind: null,
       bundled: false,
     },
+    motionLibrary: {
+      builderAvailable: Boolean(motionLibraryBuilder.extractor?.available),
+      libraryPath: motionReferenceStore.filePath,
+    },
   };
   if (mode === 'audiovisual') {
     const audiovisual = overrides.audiovisual || createAudiovisualProvider();
