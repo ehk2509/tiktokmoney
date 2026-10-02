@@ -1033,3 +1033,87 @@ and evaluate only:
 The guide gate is independent from generic temporal score and Motion Region QC. A generation must pass all enabled gates.
 
 The asset/project provenance records the selected reference id, selection score, local cache path, reference-video roles and any dropped continuity references.
+
+
+## Pose / skeleton motion abstraction
+
+The pose subsystem sits underneath Motion Guide and is deliberately provider-neutral.
+
+```text
+real motion reference
+  -> PoseMotionExtractor
+       -> optional embedded poseSequence
+       -> or external command
+  -> normalizePoseSequence()
+       -> body-center translation removal
+       -> torso/shoulder/hip scale normalization
+  -> skeleton summary
+       -> generation prompt
+  -> generated video
+       -> PoseMotionExtractor
+       -> normalized skeleton
+  -> PoseMotionQcProvider
+```
+
+### Extractor boundary
+
+The JavaScript runtime has no mandatory pose-estimation dependency.
+
+`PoseMotionExtractor` shells out to an optional command and expects one JSON file. This keeps the core compatible with any extractor capable of producing timestamped 2D joints.
+
+The adapter replaces these placeholders in configured args:
+
+```text
+{video}
+{output_json}
+{fps}
+{duration}
+```
+
+### Normalization
+
+Raw image coordinates are not compared directly.
+
+For every frame:
+
+1. estimate body center from hips, then shoulders, then visible-joint centroid
+2. estimate body scale from torso length, shoulder width or hip width
+3. translate joints around the body center
+4. divide x/y by body scale
+5. retain per-joint confidence
+
+This removes most performer position/size differences before motion comparison.
+
+### Resampling
+
+Reference and generated sequences are resampled onto the same normalized 0..1 timeline.
+
+The deterministic comparator evaluates:
+
+- normalized joint-position trajectory
+- elbow / hip / knee angle progression
+- normalized whole-body motion-energy rhythm
+- annotated contact events when available
+- common-joint coverage
+
+### Independent QC
+
+`PoseMotionQcProvider` is separate from OpenRouter temporal QC.
+
+This matters because a vision model can judge a clip as plausible while missing a biomechanical mismatch that is obvious in normalized joint trajectories.
+
+The pose gate participates in the standard audiovisual retry loop and can produce the dedicated terminal state:
+
+```text
+POSE_MOTION_QC_FAILED
+```
+
+when the configured retry budget is exhausted.
+
+### Graceful fallback
+
+If `POSE_EXTRACTOR_COMMAND` is absent, pose-motion QC is not constructed by default.
+
+Embedded `poseSequence` data can still enrich the generation prompt, because the reference skeleton does not require extracting the generated video. Full deterministic comparison only becomes active when generated-video pose extraction is available.
+
+The current Runway path does not expose a native skeleton/mocap parameter in the contract used by TikTokMoney. The normalized pose layer therefore improves prompting and QC today while remaining ready for a future native pose transport.
