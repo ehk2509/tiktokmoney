@@ -222,7 +222,7 @@ function normalizeWordTimings(items) {
       start: Math.max(0, Number(item.start) || 0),
       end: Math.max(Number(item.start) || 0, Number(item.end) || Number(item.start) || 0),
     }))
-    .filter((item) => item.end > item.start)
+    // Keep zero-length words (Whisper emits them); highlight events enforce a minimum duration.
     .sort((a, b) => a.start - b.start);
 }
 

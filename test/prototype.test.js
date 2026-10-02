@@ -1650,6 +1650,23 @@ test('router records QC outcomes into persistent provider statistics', async () 
 });
 
 
+test('subtitle builder keeps zero-length transcription words', () => {
+  const subtitles = buildSubtitles({
+    voice: {
+      wordTimings: [
+        { word: 'An', start: 0, end: 1.4 },
+        { word: 'octopus', start: 1.4, end: 1.4 },
+        { word: 'has', start: 1.4, end: 1.82 },
+      ],
+    },
+    scenes: [],
+    config: { maxWordsPerCue: 3, maxCharsPerCue: 40 },
+  });
+
+  assert.deepEqual(subtitles.cues.flatMap((cue) => cue.lines.flat().map((item) => item.word)), ['An', 'octopus', 'has']);
+  assert.ok(subtitles.events.every((event) => event.end > event.start));
+});
+
 test('subtitle builder uses exact voice word timings and creates word-highlight events', () => {
   const subtitles = buildSubtitles({
     voice: {
