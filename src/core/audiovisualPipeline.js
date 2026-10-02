@@ -24,6 +24,7 @@ export class AudiovisualPipeline {
     phonemeVisemeQc = null,
     speakerTurnQc = null,
     textArtifactQc = null,
+    visualFactualQc = null,
     poseMotionQc = null,
     subtitleConfig = null,
     creativeTournament = null,
@@ -53,6 +54,7 @@ export class AudiovisualPipeline {
     this.phonemeVisemeQc = phonemeVisemeQc;
     this.speakerTurnQc = speakerTurnQc;
     this.textArtifactQc = textArtifactQc;
+    this.visualFactualQc = visualFactualQc;
     this.poseMotionQc = poseMotionQc;
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
@@ -164,6 +166,7 @@ export class AudiovisualPipeline {
         speakerTurnQc: this.speakerTurnQc,
         poseMotionQc: this.poseMotionQc,
         textArtifactQc: this.textArtifactQc,
+        visualFactualQc: this.visualFactualQc,
         segment,
         productionScript,
         storyBible: project.storyBible,
@@ -192,6 +195,8 @@ export class AudiovisualPipeline {
         phonemeVisemeQc: generated.phonemeVisemeQc,
         speakerTurnQc: generated.speakerTurnQc,
         poseMotionQc: generated.poseMotionQc,
+        textArtifactQc: generated.textArtifactQc,
+        visualFactualQc: generated.visualFactualQc,
         qcApplicability: generated.qcApplicability || null,
       });
 
@@ -259,6 +264,7 @@ async function generateWithQc({
   speakerTurnQc,
   poseMotionQc,
   textArtifactQc,
+  visualFactualQc,
   segment,
   productionScript,
   storyBible,
@@ -276,6 +282,7 @@ async function generateWithQc({
     speakerTurn: 0,
     poseMotion: 0,
     textArtifact: 0,
+    visualFactual: 0,
   };
   const maxTotalRegenerations = [
     realismQc,
@@ -286,10 +293,11 @@ async function generateWithQc({
     speakerTurnQc,
     poseMotionQc,
     textArtifactQc,
+    visualFactualQc,
   ].reduce((sum, qc) => sum + Math.max(0, Number(qc?.maxRegenerations) || 0), 0);
   const hasQc = Boolean(
     realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc
-      || textArtifactQc,
+      || textArtifactQc || visualFactualQc,
   );
 
   for (let attempt = 0; attempt <= maxTotalRegenerations; attempt += 1) {
@@ -312,6 +320,8 @@ async function generateWithQc({
         phonemeVisemeQc: null,
         speakerTurnQc: null,
         poseMotionQc: null,
+        textArtifactQc: null,
+        visualFactualQc: null,
         failure: null,
         failureStatus: null,
       };
@@ -395,6 +405,16 @@ async function generateWithQc({
       ? await textArtifactQc.evaluate(asset, { durationSeconds: segment.durationSeconds })
       : null;
 
+    const visualFactual = visualFactualQc && applicability.visualFactual.applicable
+      ? await visualFactualQc.evaluate(asset, {
+        narration: segment.dialogue,
+        action: segment.action,
+        purpose: segment.purpose,
+        onScreenLabels: segment.onScreenLabels,
+        durationSeconds: segment.durationSeconds,
+      })
+      : null;
+
     const phonemeViseme = phonemeVisemeQc && applicability.phonemeViseme.applicable
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
@@ -424,6 +444,7 @@ async function generateWithQc({
       ['speakerTurn', speakerTurn, speakerTurnQc],
       ['poseMotion', poseMotion, poseMotionQc],
       ['textArtifact', textArtifact, textArtifactQc],
+      ['visualFactual', visualFactual, visualFactualQc],
     ];
     const passed = checks
       .map(([, result]) => result)
@@ -456,6 +477,7 @@ async function generateWithQc({
         'pose-motion',
       ),
       ...prefixIssues(textArtifact?.issues, 'text-artifact'),
+      ...prefixIssues(visualFactual?.issues, 'visual-factual'),
     ];
     const regenerationGuidance = [
       realism && !realism.passed ? realism.regenerationGuidance : '',
@@ -466,6 +488,7 @@ async function generateWithQc({
       speakerTurn && !speakerTurn.passed ? speakerTurn.regenerationGuidance : '',
       poseMotion && !poseMotion.passed ? poseMotion.regenerationGuidance : '',
       textArtifact && !textArtifact.passed ? textArtifact.regenerationGuidance : '',
+      visualFactual && !visualFactual.passed ? visualFactual.regenerationGuidance : '',
     ].filter(Boolean).join(' ');
 
     const historyEntry = {
@@ -481,6 +504,7 @@ async function generateWithQc({
       speakerTurn,
       poseMotion,
       textArtifact,
+      visualFactual,
       issues,
       regenerationGuidance,
       applicability,
@@ -501,6 +525,8 @@ async function generateWithQc({
           phonemeVisemeQc: phonemeViseme,
           speakerTurnQc: speakerTurn,
           poseMotionQc: poseMotion,
+          textArtifactQc: textArtifact,
+          visualFactualQc: visualFactual,
           qcApplicability: applicability,
         },
         qcHistory,
@@ -510,6 +536,8 @@ async function generateWithQc({
         phonemeVisemeQc: phonemeViseme,
         speakerTurnQc: speakerTurn,
         poseMotionQc: poseMotion,
+        textArtifactQc: textArtifact,
+        visualFactualQc: visualFactual,
         qcApplicability: applicability,
         failure: null,
         failureStatus: null,
@@ -532,6 +560,8 @@ async function generateWithQc({
       ? 'DIALOGUE_QC_FAILED'
       : textArtifact && !textArtifact.passed
         ? 'TEXT_ARTIFACT_QC_FAILED'
+      : visualFactual && !visualFactual.passed
+        ? 'VISUAL_FACT_QC_FAILED'
       : poseMotion && !poseMotion.passed
         ? 'POSE_MOTION_QC_FAILED'
       : speakerTurn && !speakerTurn.passed
@@ -553,6 +583,8 @@ async function generateWithQc({
       phonemeVisemeQc: phonemeViseme,
       speakerTurnQc: speakerTurn,
       poseMotionQc: poseMotion,
+      textArtifactQc: textArtifact,
+      visualFactualQc: visualFactual,
       qcApplicability: applicability,
       failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
       failureStatus,
@@ -568,6 +600,8 @@ async function generateWithQc({
     phonemeVisemeQc: null,
     speakerTurnQc: null,
     poseMotionQc: null,
+    textArtifactQc: null,
+    visualFactualQc: null,
     failure: 'audiovisual generation failed',
     failureStatus: 'AUDIOVISUAL_QC_FAILED',
   };
