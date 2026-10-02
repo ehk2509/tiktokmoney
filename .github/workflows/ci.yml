@@ -31,3 +31,25 @@ jobs:
           python scripts/mediapipe_pose_extractor.py \
             --check \
             --model /tmp/pose_landmarker_full.task
+
+  docker-pose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t tiktokmoney-pose-ci .
+      - run: |
+          docker run -d --rm \
+            --name tiktokmoney-pose-ci \
+            -p 3000:3000 \
+            -e VIDEO_PIPELINE_MODE=audiovisual \
+            tiktokmoney-pose-ci
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:3000/health > /tmp/health.json; then
+              break
+            fi
+            sleep 1
+          done
+          cat /tmp/health.json
+          grep -q '"extractorKind": "bundled-mediapipe"' /tmp/health.json
+          grep -q '"bundled": true' /tmp/health.json
+          docker stop tiktokmoney-pose-ci
