@@ -25,7 +25,8 @@ test('QC applicability enables visual speech checks for a visible speaker', () =
   assert.equal(result.lipSync.applicable, true);
   assert.equal(result.deepLipSync.applicable, true);
   assert.equal(result.phonemeViseme.applicable, true);
-  assert.equal(result.poseMotion.applicable, true);
+  assert.equal(result.poseMotion.applicable, false);
+  assert.equal(result.poseMotion.reason, 'no-motion-reference');
   assert.equal(result.speakerTurn.applicable, false);
   assert.equal(result.speakerTurn.reason, 'fewer-than-two-visible-speakers');
 });
@@ -72,10 +73,12 @@ test('QC applicability does not grade a mixed visible plus voiceover track as on
     asset: {
       dialogueTrack: {
         turns: [
-          { speakerCharacterId: 'host', text: 'Host line.' },
-          { speakerCharacterId: 'narrator', text: 'Narrator line.' },
+          { speakerCharacterId: 'host', text: 'Host line.', start: 0, end: 1 },
+          { speakerCharacterId: 'narrator', text: 'Narrator line.', start: 1.2, end: 2.2 },
         ],
       },
+      motionGuideMode: 'reference-video',
+      motionGuide: { localPath: '/tmp/reference.mp4' },
     },
   });
 
@@ -104,11 +107,68 @@ test('speaker-turn visual QC requires at least two visible speaking characters',
       { id: 'a', onScreen: true },
       { id: 'b', onScreen: true },
     ]),
-    asset: {},
+    asset: {
+      dialogueTrack: {
+        turns: [
+          { speakerCharacterId: 'a', text: 'A.', start: 0, end: 1 },
+          { speakerCharacterId: 'b', text: 'B.', start: 1.2, end: 2.2 },
+        ],
+      },
+    },
   });
 
   assert.equal(result.speakerTurn.applicable, true);
   assert.equal(result.speakerTurn.visibleSpeakerCount, 2);
+  assert.equal(result.speakerTurn.timedVisibleSpeakerCount, 2);
+});
+
+test('speaker-turn visual QC stays inapplicable until timed turns exist', () => {
+  const result = resolveQcApplicability({
+    segment: {
+      dialogue: 'A then B.',
+      speakerCharacterId: 'a',
+      characterIds: ['a', 'b'],
+      dialogueTurns: [
+        { speakerCharacterId: 'a', text: 'A.' },
+        { speakerCharacterId: 'b', text: 'B.' },
+      ],
+    },
+    productionScript: baseScript([
+      { id: 'a', onScreen: true },
+      { id: 'b', onScreen: true },
+    ]),
+    asset: {},
+  });
+
+  assert.equal(result.speakerTurn.applicable, false);
+  assert.equal(result.speakerTurn.reason, 'speaker-turn-timing-missing');
+  assert.equal(result.speakerTurn.timedTurnCount, 0);
+});
+
+test('pose QC requires an applied real-motion reference', () => {
+  const input = {
+    segment: {
+      dialogue: 'Move naturally.',
+      speakerCharacterId: 'host',
+      characterIds: ['host'],
+      dialogueTurns: [{ speakerCharacterId: 'host', text: 'Move naturally.' }],
+    },
+    productionScript: baseScript([{ id: 'host', onScreen: true }]),
+  };
+
+  const withoutReference = resolveQcApplicability({ ...input, asset: {} });
+  assert.equal(withoutReference.poseMotion.applicable, false);
+  assert.equal(withoutReference.poseMotion.reason, 'no-motion-reference');
+
+  const withReference = resolveQcApplicability({
+    ...input,
+    asset: {
+      motionGuideMode: 'reference-video',
+      motionGuide: { localPath: '/tmp/motion-reference.mp4' },
+    },
+  });
+  assert.equal(withReference.poseMotion.applicable, true);
+  assert.equal(withReference.context.hasMotionReference, true);
 });
 
 test('unknown speaker identity blocks visual speech QC instead of assuming visibility', () => {
