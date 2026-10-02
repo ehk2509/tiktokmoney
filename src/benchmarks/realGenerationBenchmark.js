@@ -359,6 +359,9 @@ export function extractFullStackMetrics(project) {
         ? entry.realism.overallScore
         : entry.overallScore
     )))),
+    visualFactualConsistencyScore: average(scenes.map((scene) => (
+      scene.visualFactualQc?.score
+    ))),
   };
 }
 
@@ -692,7 +695,12 @@ function detectUntrackedCostComponents(pipeline) {
   if (pipeline?.realismQc) components.push('realism-qc');
   if (pipeline?.dialogueQc) components.push('dialogue-qc');
   if (pipeline?.lipSyncQc) components.push('lip-sync-qc');
+  if (pipeline?.deepLipSyncQc) components.push('deep-lip-sync-qc');
+  if (pipeline?.phonemeVisemeQc) components.push('phoneme-viseme-qc');
   if (pipeline?.speakerTurnQc) components.push('speaker-turn-qc');
+  if (pipeline?.poseMotionQc) components.push('pose-motion-qc');
+  if (pipeline?.textArtifactQc) components.push('text-artifact-qc');
+  if (pipeline?.visualFactualQc) components.push('visual-factual-qc');
   if (pipeline?.visual) components.push('visual-reference-provider');
   return [...new Set(components)];
 }

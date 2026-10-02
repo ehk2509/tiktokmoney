@@ -93,6 +93,14 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const failedVisualFactual = scenes.filter((scene) => scene.visualFactualQc?.passed === false);
+  if (failedVisualFactual.length) {
+    blockers.push({
+      code: 'visual-factual-consistency',
+      message: `Generated visuals contradicted the scene's factual contract for scene(s): ${failedVisualFactual.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   if (subtitles?.enabled && subtitles.layout?.passed === false) {
     blockers.push({
       code: 'subtitle-layout',
