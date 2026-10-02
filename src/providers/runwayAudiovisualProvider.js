@@ -3,6 +3,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 import { buildRealismPromptBlock } from '../core/realismDirector.js';
+import { buildKeyframePrompts } from '../core/keyframeDirector.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -15,6 +16,10 @@ export class RunwayAudiovisualProvider {
     dialogueMode = process.env.AUDIOVISUAL_DIALOGUE_MODE || 'locked',
     ttsModel = process.env.AUDIOVISUAL_TTS_MODEL || 'eleven_v3',
     defaultVoice = process.env.AUDIOVISUAL_DEFAULT_VOICE || 'Bernard',
+    imageModel = process.env.RUNWAY_IMAGE_MODEL || 'gen4_image',
+    keyframeImageRatio = process.env.KEYFRAME_IMAGE_RATIO || '720:1280',
+    keyframeVideoRatio = process.env.KEYFRAME_VIDEO_RATIO || 'auto_720p',
+    keyframeFailOpen = parseBoolean(process.env.KEYFRAME_FAIL_OPEN, true),
     assetDir = process.env.ASSET_DIR || './outputs/assets',
     pollIntervalMs = Number(process.env.RUNWAY_POLL_INTERVAL_MS || 2500),
     maxPolls = Number(process.env.RUNWAY_MAX_POLLS || 120),
@@ -33,6 +38,10 @@ export class RunwayAudiovisualProvider {
     this.dialogueMode = dialogueMode;
     this.ttsModel = ttsModel;
     this.defaultVoice = defaultVoice;
+    this.imageModel = imageModel;
+    this.keyframeImageRatio = keyframeImageRatio;
+    this.keyframeVideoRatio = keyframeVideoRatio;
+    this.keyframeFailOpen = Boolean(keyframeFailOpen);
     this.assetDir = assetDir;
     this.pollIntervalMs = pollIntervalMs;
     this.maxPolls = maxPolls;
