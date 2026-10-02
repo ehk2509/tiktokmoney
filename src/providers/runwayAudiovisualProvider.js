@@ -674,10 +674,12 @@ export function buildVideoReferencePlan({
   maxCombinedSeconds = 15,
 } = {}) {
   const candidates = [];
-  if (motionGuide?.providerUri) {
+  const motionGuideUri = motionGuide?.providerUri
+    || motionGuide?.selectedReference?.url;
+  if (motionGuideUri) {
     candidates.push({
       role: 'motion-guide',
-      uri: motionGuide.providerUri,
+      uri: motionGuideUri,
       durationSeconds: Number(motionGuide.selectedReference.durationSeconds) || 0,
     });
   }
