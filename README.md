@@ -1261,3 +1261,140 @@ REALISM_QC_MOTION_GUIDE_THRESHOLD=80
 These scores do not replace generic temporal realism or Motion Region QC. A clip can therefore look realistic and preserve identity but still be regenerated if the gait, grip, foot plant, timing or weight transfer diverges too far from the real human reference.
 
 Failed guide QC produces deterministic corrective guidance while preserving canonical identity, keyframes and locked regions.
+
+
+## Pose / skeleton motion abstraction
+
+TikTokMoney can now separate **movement geometry** from the pixels of a motion-reference video.
+
+The goal is to compare and describe:
+
+- pose trajectory
+- joint-angle progression
+- timing rhythm
+- body mechanics
+- foot/hand contact events
+
+without depending on:
+
+- performer identity
+- body size
+- clothing
+- location
+- lighting
+- image style
+
+### Normalized pose contract
+
+A motion reference may include an optional precomputed `poseSequence`:
+
+```json
+{
+  "durationSeconds": 4,
+  "frames": [
+    {
+      "time": 0,
+      "joints": {
+        "left_shoulder": { "x": 0.42, "y": 0.30, "confidence": 0.98 },
+        "right_shoulder": { "x": 0.58, "y": 0.30, "confidence": 0.98 },
+        "left_hip": { "x": 0.45, "y": 0.62, "confidence": 0.98 },
+        "right_hip": { "x": 0.55, "y": 0.62, "confidence": 0.98 }
+      }
+    }
+  ],
+  "contacts": [
+    { "type": "left-foot-plant", "time": 0.2 }
+  ]
+}
+```
+
+TikTokMoney recenters every frame on the body and scales it using torso / shoulder / hip geometry.
+
+That makes the representation approximately invariant to:
+
+```text
+screen position
+actor height
+camera crop scale
+raw pixel coordinates
+```
+
+while preserving the actual articulated movement.
+
+### Skeleton prompt abstraction
+
+If a motion reference already contains a pose sequence, or if an extractor is configured, the Runway audiovisual provider derives a compact skeleton summary before generation:
+
+```text
+beat 1[t=0, hipY=..., knee=...]
+ -> beat 2[t=0.25, hipY=..., knee=...]
+ -> beat 3...
+```
+
+The summary is added beside the real-motion video reference.
+
+It contains geometry/timing only — no visual appearance information.
+
+### External pose extractor
+
+TikTokMoney does not force a Python/computer-vision dependency into the Node runtime.
+
+Instead it exposes a command adapter:
+
+```env
+POSE_MOTION_QC_ENABLED=true
+POSE_EXTRACTOR_COMMAND=/path/to/your/pose-extractor
+POSE_EXTRACTOR_ARGS=["--video","{video}","--output-json","{output_json}","--fps","{fps}"]
+POSE_EXTRACTOR_FPS=8
+POSE_EXTRACTOR_TIMEOUT_MS=120000
+```
+
+Supported placeholders:
+
+```text
+{video}
+{output_json}
+{fps}
+{duration}
+```
+
+The command must write JSON matching the pose contract above.
+
+This makes MediaPipe, MoveNet, OpenPose, YOLO-pose or an internal mocap service interchangeable without adding a runtime dependency to TikTokMoney.
+
+### Deterministic pose-motion QC
+
+When a pose extractor is configured and a real-motion guide was used, a new deterministic gate compares the generated clip against the reference skeleton.
+
+It computes:
+
+```text
+poseTrajectoryScore
+bodyMechanicsScore
+timingRhythmScore
+contactMechanicsScore
+coverage
+overallScore
+```
+
+Default configuration:
+
+```env
+POSE_MOTION_QC_THRESHOLD=78
+POSE_MOTION_QC_MIN_COVERAGE=0.55
+POSE_MOTION_QC_MAX_REGENERATIONS=1
+POSE_MOTION_QC_FAIL_CLOSED=true
+```
+
+The comparison uses body-normalized coordinates and joint-angle sequences, so the generated character is **not required to have the same height, screen position or proportions in raw pixels** as the motion actor.
+
+A failed gate feeds corrective guidance back into regeneration:
+
+```text
+POSE MOTION CORRECTION:
+improve pose trajectory / joint mechanics / rhythm / contacts.
+Match the normalized skeleton motion, not the actor appearance.
+Preserve canonical identity, wardrobe, location, keyframes and motion-region locks.
+```
+
+If no pose extractor is configured, this gate remains inactive and the v0.21 real-video Motion Guide + vision QC path continues unchanged.
