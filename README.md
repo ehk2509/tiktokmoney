@@ -894,3 +894,81 @@ ANTI_PLASTIC_GRAIN_MAX_STRENGTH=2.2
 ```
 
 Realism QC now also scores `materialRealism`, `cameraPhysics` and `lightingNaturalism`, so waxy skin, floating camera motion and glossy synthetic lighting become explicit regeneration signals instead of being hidden inside one generic photorealism score.
+
+
+## Adaptive First / Last Frame Director
+
+TikTokMoney can now lock the physical start and end state of higher-risk WAN 3 acts instead of asking the video model to invent the complete trajectory from text alone.
+
+```text
+ProductionScript
+  -> startState / endState
+  -> RealismDirector risk score
+  -> KeyframeDirector
+       low risk    -> no extra keyframe
+       medium risk -> first frame
+       high risk   -> first + last frame
+  -> Runway Gen-4 Image keyframes
+       + canonical character references
+       + canonical location reference
+       + previous accepted act endpoint
+  -> WAN 3 image-to-video
+       + first/last keyframes
+       + locked reference audio
+       + previous video reference
+  -> keyframe adherence QC
+```
+
+The screenplay now supports `startState` and `endState` for every audiovisual act. They describe two moments in the **same physical scene**: identical characters, wardrobe, location, lighting and camera setup, with the end state being a reachable consequence of the action.
+
+Default policy:
+
+```env
+FIRST_LAST_FRAME_ENABLED=true
+KEYFRAME_MODE=auto
+KEYFRAME_FIRST_RISK_THRESHOLD=32
+KEYFRAME_LAST_RISK_THRESHOLD=50
+KEYFRAME_IMAGE_RATIO=720:1280
+KEYFRAME_VIDEO_RATIO=auto_720p
+KEYFRAME_FAIL_OPEN=true
+REALISM_QC_KEYFRAME_THRESHOLD=84
+```
+
+In `auto` mode:
+- risk < 32: keep the existing reference/text-to-video path
+- risk 32-49: generate a first frame and use WAN image-to-video
+- risk >= 50: generate both first and last frames
+
+The first frame is built from canonical character/location references. The last frame additionally uses the generated first frame as a reference so identity, wardrobe, framing and environment remain tied to the same shot.
+
+For WAN keyframe generation, TikTokMoney switches from:
+
+```text
+POST /text_to_video
+```
+
+to:
+
+```text
+POST /image_to_video
+
+promptImage:
+  first -> generated start keyframe
+  last  -> generated end keyframe
+```
+
+while preserving `referenceAudio` for exact locked dialogue and `referenceVideos` for cross-act continuity.
+
+If keyframe generation fails and `KEYFRAME_FAIL_OPEN=true`, the act falls back to the existing WAN text-to-video path and records `keyframeError` in the asset provenance instead of losing the entire video.
+
+### Keyframe adherence QC
+
+The generated keyframes are also supplied to realism QC as explicit visual anchors.
+
+The QC model now returns:
+- `keyframeStartMatch`
+- `keyframeEndMatch`
+
+When a keyframe exists, the corresponding score must be explicitly present and reach `REALISM_QC_KEYFRAME_THRESHOLD`. A visually realistic clip can therefore still be rejected when it starts with the wrong pose/object state or finishes in a different identity/location/state.
+
+This closes an important failure mode where endpoint images are accepted by the provider but the generated trajectory drifts away from them.
