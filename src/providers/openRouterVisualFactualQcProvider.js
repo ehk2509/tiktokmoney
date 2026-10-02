@@ -125,6 +125,7 @@ export class OpenRouterVisualFactualQcProvider {
         score: null,
         contradictions: [],
         issues: [],
+        warnings: [],
         summary: stringOrEmpty(parsed?.summary),
         regenerationGuidance: '',
         sampledFrames: frames.map(({ index, timestamp }) => ({ index, timestamp })),
