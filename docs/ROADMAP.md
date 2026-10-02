@@ -113,6 +113,18 @@
 - [x] Research packets with source provenance and downstream grounding
 - [x] Idea tournament and independent judge
 
+## M2.5 - Production evidence
+
+- [x] Frozen 30-case real-provider corpus across 10 production classes
+- [x] Plain-provider vs full-stack paired runner
+- [x] First-pass/final success, retry and latency capture
+- [x] Provider-reported spend capture without estimated-cost substitution
+- [x] Blinded review aliases + separate arm key
+- [x] Human publishability / realism / identity / dialogue / motion score import
+- [x] Frozen-suite hash validation in tests
+- [ ] Complete the first 30-case paid-provider run
+- [ ] Establish release-over-release benchmark history on the unchanged suite hash
+
 ## M3 - Publishing + analytics
 
 - [ ] TikTok official publishing adapter
