@@ -111,6 +111,45 @@ export class DialogueAudioComposer {
       turns: timing,
     };
   }
+
+  /**
+   * Lay the exact narration recording over a generated clip, keeping the
+   * clip's ambience underneath. Used for off-screen voiceover, where the video
+   * model has no lips to sync and tends to paraphrase or garble the words.
+   */
+  async mixVoiceover({
+    videoPath,
+    voicePath,
+    projectId = 'project',
+    segmentIndex = 0,
+    generationId = 'clip',
+    ambienceGain = 0.35,
+  }) {
+    await mkdir(this.assetDir, { recursive: true });
+    const outputPath = path.join(
+      this.assetDir,
+      `voiceover-${safe(projectId)}-${segmentIndex}-${safe(generationId)}.mp4`,
+    );
+    const output = ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', outputPath];
+
+    try {
+      await this.runCommand(this.ffmpegBin, [
+        '-y', '-i', videoPath, '-i', voicePath,
+        '-filter_complex',
+        `[0:a]volume=${ambienceGain}[bed];[bed][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`,
+        '-map', '0:v:0', '-map', '[a]',
+        ...output,
+      ]);
+    } catch {
+      // Clip without an audio stream: narration alone, padded to the clip length.
+      await this.runCommand(this.ffmpegBin, [
+        '-y', '-i', videoPath, '-i', voicePath,
+        '-map', '0:v:0', '-map', '1:a:0', '-af', 'apad', '-shortest',
+        ...output,
+      ]);
+    }
+    return outputPath;
+  }
 }
 
 function run(command, args) {

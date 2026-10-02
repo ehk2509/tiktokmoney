@@ -113,6 +113,13 @@ export class RunwayAudiovisualProvider {
 
     let dialogueTrack = null;
     let actDurationSeconds = Number(segment.durationSeconds);
+    // Off-screen narration has no lips to sync, so the exact recording is mixed in
+    // after generation instead of asking the video model to re-speak (and garble) it.
+    const narrationInPost = this.dialogueMode === 'locked'
+      && dialogueTurns.length > 0
+      && dialogueTurns.every((turn) => (
+        productionScript.characters.find((item) => item.id === turn.speakerCharacterId)?.onScreen === false
+      ));
     if (this.dialogueMode === 'locked' && dialogueTurns.length) {
       if (dialogueTurns.length > 1 || speakerIds.length > 1) {
         const turnTracks = [];
@@ -160,7 +167,7 @@ export class RunwayAudiovisualProvider {
         if (dialogueTrack.durationSeconds > actDurationSeconds + 0.25) {
           actDurationSeconds = Math.ceil(dialogueTrack.durationSeconds + 0.25);
         }
-        referenceAudio.push({ type: 'audio', uri: dialogueTrack.dataUri });
+        if (!narrationInPost) referenceAudio.push({ type: 'audio', uri: dialogueTrack.dataUri });
       } else {
         const character = productionScript.characters.find(
           (item) => item.id === dialogueTurns[0].speakerCharacterId,
@@ -191,7 +198,7 @@ export class RunwayAudiovisualProvider {
           voicePresetId: dialogueTrack.voicePresetId,
           delivery: dialogueTurns[0].delivery || '',
         }];
-        referenceAudio.push({ type: 'audio', uri: dialogueTrack.url });
+        if (!narrationInPost) referenceAudio.push({ type: 'audio', uri: dialogueTrack.url });
       }
     }
 
@@ -211,6 +218,7 @@ export class RunwayAudiovisualProvider {
         },
       };
     const promptText = buildAudiovisualPrompt({
+      narrationInPost,
       segment: promptSegment,
       productionScript,
       characters,
@@ -290,12 +298,28 @@ export class RunwayAudiovisualProvider {
     );
     if (!(await fileExists(localPath))) await this.download(sourceUrl, localPath);
 
+    let finalPath = localPath;
+    if (narrationInPost) {
+      if (!dialogueTrack?.localPath) {
+        throw new Error(`voiceover act ${segment.index} has no local narration track to mix`);
+      }
+      finalPath = await this.dialogueComposer.mixVoiceover({
+        videoPath: localPath,
+        voicePath: dialogueTrack.localPath,
+        projectId,
+        segmentIndex: segment.index,
+        generationId: task.id,
+      });
+    }
+
     const multiSpeaker = speakerIds.length > 1;
     return {
       provider: 'runway',
       providerModelId: `runway-${this.model}-audiovisual`,
       type: 'ai-video',
-      audioMode: this.dialogueMode === 'locked'
+      audioMode: narrationInPost
+        ? 'voiceover-post-mix'
+        : this.dialogueMode === 'locked'
         ? multiSpeaker
           ? 'locked-multi-speaker-native-mix'
           : 'locked-dialogue-native-mix'
@@ -303,7 +327,8 @@ export class RunwayAudiovisualProvider {
           ? 'native-multi-speaker'
           : 'native',
       model: this.model,
-      localPath,
+      localPath: finalPath,
+      rawLocalPath: localPath,
       sourceUrl,
       generationId: task.id,
       generatedDuration: `${duration}s`,
@@ -606,6 +631,7 @@ export class RunwayAudiovisualProvider {
 }
 
 function buildAudiovisualPrompt({
+  narrationInPost = false,
   segment,
   productionScript,
   characters,
@@ -665,24 +691,28 @@ function buildAudiovisualPrompt({
     segment.editing?.allowDissolves
       ? 'A motivated dissolve is allowed only if explicitly required by the action.'
       : 'Dissolves and crossfades are forbidden.',
-    multiSpeaker
-      ? voiceoverOnly
-        ? 'MULTI-VOICE VOICEOVER PLAN:'
-        : mixedSpeakerVisibility
-          ? 'MIXED ON-CAMERA / VOICEOVER PLAN:'
-          : 'MULTI-SPEAKER DIALOGUE BLOCKING:'
-      : 'EXACT SPOKEN DIALOGUE:',
-    ...turnPlan,
+    narrationInPost
+      ? 'AUDIO: ambience and sound effects only. No speech, voices, narration, singing or vocal sounds of any kind; the narration is added in post-production. No visible person speaks.'
+      : multiSpeaker
+        ? voiceoverOnly
+          ? 'MULTI-VOICE VOICEOVER PLAN:'
+          : mixedSpeakerVisibility
+            ? 'MIXED ON-CAMERA / VOICEOVER PLAN:'
+            : 'MULTI-SPEAKER DIALOGUE BLOCKING:'
+        : 'EXACT SPOKEN DIALOGUE:',
+    ...(narrationInPost ? [] : turnPlan),
     multiSpeaker && visibleSpeakersOnly
       ? 'Turn-taking is strict and non-overlapping. During each line, ONLY the named active visible speaker talks and moves their mouth as speech. Other visible characters listen/react silently with closed or naturally resting mouths. Never swap speakers, voices, faces, or lines.'
       : '',
-    voiceoverOnly
+    voiceoverOnly && !narrationInPost
       ? 'VOICEOVER: all dialogue is off-screen narration. No visible person speaks or lip-syncs; keep the picture on the described action.'
       : '',
     mixedSpeakerVisibility
       ? 'MIXED DIALOGUE: visible-speaker turns must lip-sync only the named visible character. Off-screen narrator turns must remain disembodied voiceover; no visible character may mouth those lines. Keep turn ownership exact and non-overlapping.'
       : '',
-    dialogueTrack
+    narrationInPost
+      ? ''
+      : dialogueTrack
       ? multiSpeaker && visibleSpeakersOnly
         ? 'The supplied audio reference is the exact composed dialogue master containing the named visible characters in the exact turn order above. Treat it as the timing master. Preserve every word and assign each audible voice to the matching visible character.'
         : voiceoverOnly
