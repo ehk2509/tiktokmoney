@@ -258,25 +258,20 @@ async function generateWithQc({
 }) {
   const qcHistory = [];
   let regeneration = null;
-  const plannedApplicability = resolveQcApplicability({
-    segment,
-    productionScript,
-    asset: null,
-  });
-  const maxRegenerations = Math.max(
-    plannedApplicability.realism.applicable ? realismQc?.maxRegenerations || 0 : 0,
-    plannedApplicability.dialogue.applicable ? dialogueQc?.maxRegenerations || 0 : 0,
-    plannedApplicability.lipSync.applicable ? lipSyncQc?.maxRegenerations || 0 : 0,
-    plannedApplicability.deepLipSync.applicable ? deepLipSyncQc?.maxRegenerations || 0 : 0,
-    plannedApplicability.phonemeViseme.applicable ? phonemeVisemeQc?.maxRegenerations || 0 : 0,
-    plannedApplicability.speakerTurn.applicable ? speakerTurnQc?.maxRegenerations || 0 : 0,
-    plannedApplicability.poseMotion.applicable ? poseMotionQc?.maxRegenerations || 0 : 0,
+  const maxConfiguredRegenerations = Math.max(
+    realismQc?.maxRegenerations || 0,
+    dialogueQc?.maxRegenerations || 0,
+    lipSyncQc?.maxRegenerations || 0,
+    deepLipSyncQc?.maxRegenerations || 0,
+    phonemeVisemeQc?.maxRegenerations || 0,
+    speakerTurnQc?.maxRegenerations || 0,
+    poseMotionQc?.maxRegenerations || 0,
   );
   const hasQc = Boolean(
     realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc,
   );
 
-  for (let attempt = 0; attempt <= maxRegenerations; attempt += 1) {
+  for (let attempt = 0; attempt <= maxConfiguredRegenerations; attempt += 1) {
     const asset = await provider.generateSegment({
       segment,
       productionScript,
@@ -398,6 +393,15 @@ async function generateWithQc({
     const passed = [realism, dialogue, lipSync, deepLipSync, phonemeViseme, speakerTurn, poseMotion]
       .filter(Boolean)
       .every((result) => result.passed);
+    const retryBudget = passed ? 0 : Math.max(
+      realism && !realism.passed ? realismQc?.maxRegenerations || 0 : 0,
+      dialogue && !dialogue.passed ? dialogueQc?.maxRegenerations || 0 : 0,
+      lipSync && !lipSync.passed ? lipSyncQc?.maxRegenerations || 0 : 0,
+      deepLipSync && !deepLipSync.passed ? deepLipSyncQc?.maxRegenerations || 0 : 0,
+      phonemeViseme && !phonemeViseme.passed ? phonemeVisemeQc?.maxRegenerations || 0 : 0,
+      speakerTurn && !speakerTurn.passed ? speakerTurnQc?.maxRegenerations || 0 : 0,
+      poseMotion && !poseMotion.passed ? poseMotionQc?.maxRegenerations || 0 : 0,
+    );
 
     const issues = [
       ...prefixIssues(realism?.issues, 'realism'),
@@ -441,6 +445,7 @@ async function generateWithQc({
       issues,
       regenerationGuidance,
       applicability,
+      retryBudget,
     };
     qcHistory.push(historyEntry);
 
@@ -471,7 +476,7 @@ async function generateWithQc({
       };
     }
 
-    if (attempt < maxRegenerations) {
+    if (attempt < retryBudget) {
       regeneration = {
         attempt: attempt + 1,
         guidance: regenerationGuidance,
