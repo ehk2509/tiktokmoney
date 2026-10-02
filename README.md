@@ -839,3 +839,58 @@ Execution reuses the frozen research packet rather than fetching new evidence, m
 ### Cost semantics
 
 `DAILY_CONTENT_ESTIMATED_VIDEO_COST_USD` is currently a **planning estimate**, not provider-billing truth. It prevents planned work from exceeding a configured budget under the estimate, but the next cost-control milestone should reconcile actual LLM/TTS/video/QC usage against the plan after generation.
+
+
+## Anti-Plastic Realism Pipeline
+
+The audiovisual path now includes a deterministic `RealismDirector` before generation and a bounded optical post stage after QC.
+
+```text
+ProductionScript
+  -> RealismDirector
+       -> action-risk score
+       -> capture profile
+       -> one-axis physical camera rule
+       -> human-action complexity budget
+       -> stable-shot duration target
+       -> micro environmental motion
+       -> motivated imperfect lighting
+       -> room tone + synced foley plan
+  -> WAN audiovisual generation
+  -> realism / temporal QC
+  -> bounded optical post
+       -> slight optical softness
+       -> saturation normalization
+       -> contrast normalization
+       -> subtle temporal grain
+  -> subtitles + loudness normalization
+```
+
+Profiles are selected automatically unless `REALISM_CAPTURE_PROFILE` is forced:
+
+- `organic-documentary`: 24 fps, restrained human-operated camera
+- `organic-smartphone`: 30 fps, subtle handheld phone behavior
+- `fitness-action`: 30 fps, grounded movement and lower blur
+- `cinematic`: 24 fps, restrained 35mm-style camera language
+
+The director explicitly removes prompt filler such as `hyperrealistic`, `4K`, `8K`, `masterpiece`, and `trending on artstation`. It replaces those tokens with physical instructions about lens behavior, lighting, camera inertia, body weight, fabric/hair response, and environmental motion.
+
+Complex hand/object interactions, aggressive camera moves, action scenes and multi-person scenes increase a scene risk score. High-risk acts get shorter stable-shot targets and may use a small number of clean motivated cuts instead of one long drifting shot.
+
+Sound realism is also planned before generation. Each act receives explicit room-tone, foley, breathing/clothing and environment cues so WAN's native audio is asked to generate a physically grounded soundscape rather than only dialogue plus generic music.
+
+Post-processing is intentionally conservative. TikTokMoney does **not** automatically add chromatic aberration or synthetic motion blur. The renderer currently applies only bounded softness, saturation/contrast normalization and subtle grain. Motion blur is considered unsafe when QC reports morphing, anatomy, geometry or melting defects.
+
+Configuration:
+
+```env
+ANTI_PLASTIC_REALISM_ENABLED=true
+REALISM_CAPTURE_PROFILE=auto
+REALISM_MAX_SHOTS_PER_ACT=3
+
+ANTI_PLASTIC_POST_ENABLED=true
+ANTI_PLASTIC_SOFTNESS_MAX_SIGMA=0.35
+ANTI_PLASTIC_GRAIN_MAX_STRENGTH=2.2
+```
+
+Realism QC now also scores `materialRealism`, `cameraPhysics` and `lightingNaturalism`, so waxy skin, floating camera motion and glossy synthetic lighting become explicit regeneration signals instead of being hidden inside one generic photorealism score.
