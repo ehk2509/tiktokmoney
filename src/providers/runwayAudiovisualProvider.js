@@ -301,7 +301,7 @@ export class RunwayAudiovisualProvider {
     let last = null;
     if (prompts.last) {
       const lastReferences = uniqueTaggedReferences([
-        { uri: first.url, tag: 'first_frame' },
+        { uri: first.url, tag: 'firstframe' },
         ...references,
       ]).slice(0, 6);
       last = await this.generateKeyframeImage({
@@ -552,7 +552,7 @@ function collectKeyframeReferences(segment, storyBible, previousAsset) {
       if (image.url) {
         refs.push({
           uri: image.url,
-          tag: `character_${characterIndex++}`,
+          tag: `character${characterIndex++}`,
         });
       }
     }
@@ -564,7 +564,7 @@ function collectKeyframeReferences(segment, storyBible, previousAsset) {
   const previousEnd = previousAsset?.keyframes?.last?.url
     || previousAsset?.referenceEndImageUrl
     || previousAsset?.referenceImageUrl;
-  if (previousEnd) refs.push({ uri: previousEnd, tag: 'previous_act' });
+  if (previousEnd) refs.push({ uri: previousEnd, tag: 'previousact' });
 
   return uniqueTaggedReferences(refs).slice(0, 6);
 }
