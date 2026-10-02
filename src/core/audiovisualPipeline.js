@@ -3,6 +3,7 @@ import { ProductionScriptGenerator, productionScriptToStoryBible } from './produ
 import { buildSubtitles } from './subtitleBuilder.js';
 import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
 import { CreativeTournament } from './creativeTournament.js';
+import { RealismDirector } from './realismDirector.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -20,10 +21,12 @@ export class AudiovisualPipeline {
     subtitleConfig = null,
     creativeTournament = null,
     trendIntelligence = null,
+    realismDirector = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
     this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
     this.trendIntelligence = trendIntelligence;
+    this.realismDirector = realismDirector || new RealismDirector();
     this.audiovisual = audiovisual;
     this.renderer = renderer;
     this.store = store;
@@ -99,15 +102,17 @@ export class AudiovisualPipeline {
       return project;
     }
 
-    const productionScript = await this.productionScriptGenerator.generate({
+    const rawProductionScript = await this.productionScriptGenerator.generate({
       topic: normalizedTopic,
       audience,
       durationSeconds,
       creativeBrief: tournament.winner || null,
       researchPacket,
     });
+    const productionScript = this.realismDirector.direct(rawProductionScript);
     let storyBible = productionScriptToStoryBible(productionScript);
     project.productionScript = productionScript;
+    project.realismDirection = productionScript.realismDirection || null;
     project.storyBible = storyBible;
     project.status = 'SCRIPTED';
 
@@ -275,6 +280,7 @@ async function generateWithQc({
       realism: {
         motionPrompt: asset.prompt,
       },
+      realismDirection: segment.realismDirection || null,
     };
 
     const realism = realismQc
