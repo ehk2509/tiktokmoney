@@ -10,7 +10,8 @@
       "url": "https://example.com/replace-with-licensed-motion-reference.mp4",
       "source": "Replace with a real HTTPS or Runway-hosted motion clip",
       "license": "Record or document the usage rights here",
-      "verifiedHumanMotion": true
+      "verifiedHumanMotion": true,
+      "rightsConfirmed": false
     }
   ]
 }
