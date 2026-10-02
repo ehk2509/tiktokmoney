@@ -972,3 +972,110 @@ The QC model now returns:
 When a keyframe exists, the corresponding score must be explicitly present and reach `REALISM_QC_KEYFRAME_THRESHOLD`. A visually realistic clip can therefore still be rejected when it starts with the wrong pose/object state or finishes in a different identity/location/state.
 
 This closes an important failure mode where endpoint images are accepted by the provider but the generated trajectory drifts away from them.
+
+
+## Motion Region Director
+
+TikTokMoney now plans **where motion is allowed to happen** instead of treating every pixel in an AI-generated act as equally free to move.
+
+The current Runway video-generation contract used by the project does not expose a native spatial motion-brush/mask parameter. v0.20 therefore implements provider-neutral semantic region control rather than sending an invented API field.
+
+```text
+ProductionScript
+  -> RealismDirector
+  -> KeyframeDirector
+  -> MotionRegionDirector
+       -> ALLOWED TO MOVE
+       -> LOCKED / STABILIZE
+       -> camera-parallax policy
+       -> multi-speaker inactive-subject policy
+  -> WAN prompt
+  -> temporal regional QC
+  -> targeted regeneration
+```
+
+Defaults:
+
+```env
+MOTION_REGION_CONTROL_ENABLED=true
+MOTION_REGION_MODE=semantic
+MOTION_REGION_BACKGROUND_LOCK=true
+MOTION_REGION_FACE_LOCK=true
+REALISM_QC_MOTION_REGION_THRESHOLD=84
+```
+
+### Example: talking head
+
+```text
+ALLOWED
+- active speaker mouth/jaw: speech articulation only
+- shoulders/upper torso: tiny breathing/posture motion
+
+LOCKED
+- face identity outside mouth/jaw
+- body silhouette outside micro-motion
+- walls / doors / desk / furniture
+- every unrelated background object
+```
+
+### Example: hand/object interaction
+
+```text
+ALLOWED
+- hands / wrists / forearms
+- exactly one manipulated prop
+
+LOCKED
+- face geometry
+- torso / hips / legs not required by the action
+- furniture and architecture
+- unrelated props
+```
+
+### Camera motion
+
+A moving camera does **not** imply moving scenery.
+
+For locked/tripod shots, environment anchors are expected to remain screen-space stable.
+
+For tracking/push/pan shots, the environment may move in frame only through physically correct camera parallax. Furniture and architecture must still preserve rigid geometry and must not breathe, slide independently or deform.
+
+### Multi-speaker scenes
+
+During each dialogue turn, the active speaker may articulate speech. Inactive speakers are explicitly constrained to:
+- resting/closed mouth
+- stable face identity
+- stable body position
+- subtle listening reactions only
+
+This works together with the existing speaker-turn QC rather than replacing it.
+
+### Regional QC
+
+When an audiovisual provider reports that it applied motion-region control, realism QC requires four explicit scores:
+
+```text
+motionRegionCompliance
+lockedRegionStability
+intendedMotionCompliance
+backgroundDriftFreedom
+```
+
+All must clear `REALISM_QC_MOTION_REGION_THRESHOLD`.
+
+A clip can therefore have excellent photorealism and a strong generic temporal score but still fail because a desk edge breathes, a wall drifts, an inactive speaker moves their mouth, or motion leaks from a hand into the arm/torso/background.
+
+The regeneration prompt receives deterministic region-specific guidance identifying the locked and allowed regions that must be corrected.
+
+### Provider capability provenance
+
+Generated audiovisual assets now record:
+
+```json
+{
+  "motionControlMode": "semantic-region-prompt",
+  "nativeMotionMask": false
+}
+```
+
+This distinction is deliberate. When a provider later exposes real spatial motion masks, TikTokMoney can add a native transport behind the same MotionRegionDirector contract without pretending the current API already supports it.

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 import { buildRealismPromptBlock } from '../core/realismDirector.js';
 import { buildKeyframePrompts } from '../core/keyframeDirector.js';
+import { buildMotionRegionPromptBlock } from '../core/motionRegionDirector.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -266,6 +267,11 @@ export class RunwayAudiovisualProvider {
           : 'off',
       keyframes,
       keyframeError,
+      motionControlMode: segment.motionRegionDirection?.enabled
+        ? 'semantic-region-prompt'
+        : 'off',
+      nativeMotionMask: false,
+      motionRegionDirection: segment.motionRegionDirection || null,
       referenceImageUrl: keyframes?.first?.url || references[0]?.uri || null,
       referenceEndImageUrl: keyframes?.last?.url || null,
       previousGenerationId: previousAsset?.generationId || null,
@@ -492,6 +498,7 @@ function buildAudiovisualPrompt({
     `ACTION: ${segment.action}.`,
     `CAMERA: ${segment.camera}.`,
     buildRealismPromptBlock(segment),
+    buildMotionRegionPromptBlock(segment),
     segment.editing?.allowInternalCuts
       ? `EDITING: internal cuts allowed; maximum ${segment.editing.shotCount || 2} shots. Use only clean motivated cuts.`
       : 'EDITING: ONE continuous shot only. No internal cuts, dissolves, crossfades, flash transitions, ghosting, double exposure or montage.',

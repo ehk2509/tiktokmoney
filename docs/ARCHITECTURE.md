@@ -812,3 +812,95 @@ Image generation is an additional dependency. By default `KEYFRAME_FAIL_OPEN=tru
 ### Verification
 
 Realism QC receives the exact first and last keyframe images alongside sampled generated frames. When keyframes exist it requires explicit `keyframeStartMatch` / `keyframeEndMatch` scores above the configured threshold. Missing scores fail the keyframe gate rather than inheriting the generic photorealism score.
+
+
+## Motion region control
+
+The MotionRegionDirector runs after realism and keyframe planning.
+
+```text
+ProductionScript
+  -> RealismDirector
+  -> KeyframeDirector
+  -> MotionRegionDirector
+  -> audiovisual provider
+```
+
+It emits a provider-neutral semantic contract:
+
+```json
+{
+  "allowedMotion": [
+    {
+      "id": "speech-mouth-jaw",
+      "region": "active speaker mouth and jaw",
+      "behavior": "speech articulation only",
+      "intensity": "low"
+    }
+  ],
+  "lockedRegions": [
+    {
+      "id": "environment-anchors",
+      "region": "walls, doors, windows, furniture...",
+      "rule": "preserve rigid geometry",
+      "tolerance": "locked"
+    }
+  ]
+}
+```
+
+### Region construction
+
+The director derives regions deterministically from existing screenplay/realism metadata:
+
+- spoken dialogue enables mouth/jaw articulation
+- hand/object interactions enable hands, forearms and the primary prop
+- athletic/action scenes enable the biomechanical body chain
+- micro-motion directions can enable loose hair/fabric or explicitly motivated environmental motion
+- face identity is locked outside required articulation
+- static background anchors remain locked
+- inactive speakers are constrained during another character's dialogue turn
+
+### Camera-aware locking
+
+A static camera uses strict screen-space stability for background anchors.
+
+A moving camera changes the rule to **parallax-only**: fixed geometry may move across the image because the camera moves, but individual background objects may not independently warp, slide, grow or animate.
+
+This prevents a naive mask policy from incorrectly rejecting normal perspective change.
+
+### Provider transport
+
+The current audiovisual Runway path exposes:
+
+```text
+motionControlMode = semantic-region-prompt
+nativeMotionMask = false
+```
+
+The semantic contract is inserted directly into the generation prompt.
+
+No undocumented `mask` or `motionBrush` parameter is sent.
+
+The interface intentionally separates:
+- motion intent
+- provider transport
+
+so a future provider can implement native masks without changing screenplay or QC contracts.
+
+### Motion-region QC
+
+The regional gate is activated only when the returned asset says the provider applied motion-region control. Legacy providers and mocks are not penalized.
+
+The vision/temporal QC model receives the exact allowed and locked region contract and returns a separate `motionRegionScores` block:
+
+```text
+motionRegionCompliance
+lockedRegionStability
+intendedMotionCompliance
+backgroundDriftFreedom
+```
+
+These scores do **not** alter the historical generic `temporalScore`; they form an independent gate. This preserves backwards-compatible temporal metrics while adding a stricter anti-drift requirement.
+
+When the gate fails, deterministic regeneration guidance repeats the relevant locked and allowed regions, with a separate rule for static-camera background lock versus moving-camera parallax.

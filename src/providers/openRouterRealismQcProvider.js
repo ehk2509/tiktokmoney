@@ -1,4 +1,5 @@
 import { FrameSampler } from '../services/frameSampler.js';
+import { buildMotionRegionQcContract } from '../core/motionRegionDirector.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -11,6 +12,7 @@ export class OpenRouterRealismQcProvider {
     temporalThreshold = Number(process.env.REALISM_QC_TEMPORAL_THRESHOLD || 80),
     continuityThreshold = Number(process.env.REALISM_QC_CONTINUITY_THRESHOLD || 85),
     keyframeThreshold = Number(process.env.REALISM_QC_KEYFRAME_THRESHOLD || 84),
+    motionRegionThreshold = Number(process.env.REALISM_QC_MOTION_REGION_THRESHOLD || 84),
     temporalEnabled = parseBoolean(process.env.REALISM_QC_TEMPORAL_ENABLED, true),
     maxRegenerations = Number(process.env.REALISM_MAX_REGENERATIONS || 1),
     failClosed = parseBoolean(process.env.REALISM_QC_FAIL_CLOSED, true),
@@ -28,6 +30,7 @@ export class OpenRouterRealismQcProvider {
     this.temporalThreshold = clampScore(temporalThreshold);
     this.continuityThreshold = clampScore(continuityThreshold);
     this.keyframeThreshold = clampScore(keyframeThreshold);
+    this.motionRegionThreshold = clampScore(motionRegionThreshold);
     this.temporalEnabled = Boolean(temporalEnabled);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
     this.failClosed = Boolean(failClosed);
@@ -56,6 +59,10 @@ export class OpenRouterRealismQcProvider {
       ? await this.frameSampler.sampleComparison(previousAsset.localPath, { durationSeconds: previousDuration })
       : [];
 
+    const motionRegionContract = asset.motionControlMode
+      && asset.motionControlMode !== 'off'
+      ? buildMotionRegionQcContract(scene)
+      : null;
     const prompt = buildPrompt({
       scene,
       asset,
@@ -64,6 +71,7 @@ export class OpenRouterRealismQcProvider {
       temporalEnabled: this.temporalEnabled,
       temporalFrameCount: temporalFrames.length,
       previousFrameCount: previousFrames.length,
+      motionRegionContract,
     });
 
     const keyframeImages = [];
@@ -130,6 +138,7 @@ export class OpenRouterRealismQcProvider {
 
     const scores = normalizeScores(parsed?.scores);
     const temporalScores = normalizeTemporalScores(parsed?.temporalScores);
+    const motionRegionScores = normalizeMotionRegionScores(parsed?.motionRegionScores);
     const issues = normalizeIssues(parsed?.issues);
     const temporalIssues = normalizeIssues(parsed?.temporalIssues);
 
@@ -162,11 +171,32 @@ export class OpenRouterRealismQcProvider {
       || (Number.isFinite(Number(explicitKeyframeEndScore))
         && clampScore(explicitKeyframeEndScore) >= this.keyframeThreshold);
     const keyframeAdherencePassed = keyframeStartPassed && keyframeEndPassed;
+    const hasMotionRegionPlan = Boolean(motionRegionContract);
+    const motionRegionVerified = hasMotionRegionPlan && this.temporalEnabled;
+    const explicitMotionScores = parsed?.motionRegionScores || {};
+    const motionRegionPassed = !motionRegionVerified || [
+      'motionRegionCompliance',
+      'lockedRegionStability',
+      'intendedMotionCompliance',
+      'backgroundDriftFreedom',
+    ].every((key) => (
+      Number.isFinite(Number(explicitMotionScores[key]))
+      && clampScore(explicitMotionScores[key]) >= this.motionRegionThreshold
+    ));
     const passed = staticPassed
       && temporalPassed
       && continuityPassed
       && keyframeAdherencePassed
+      && motionRegionPassed
       && !criticalFailure;
+
+    const deterministicMotionGuidance = motionRegionVerified && !motionRegionPassed
+      ? buildMotionRegionGuidance(
+        motionRegionContract,
+        motionRegionScores,
+        this.motionRegionThreshold,
+      )
+      : '';
 
     return {
       provider: 'openrouter',
@@ -175,6 +205,7 @@ export class OpenRouterRealismQcProvider {
       temporalThreshold: this.temporalThreshold,
       continuityThreshold: this.continuityThreshold,
       keyframeThreshold: this.keyframeThreshold,
+      motionRegionThreshold: this.motionRegionThreshold,
       temporalEnabled: this.temporalEnabled,
       passed,
       staticPassed,
@@ -185,6 +216,9 @@ export class OpenRouterRealismQcProvider {
       keyframeAdherencePassed,
       keyframeStartPassed,
       keyframeEndPassed,
+      motionRegionPassed,
+      motionRegionVerified,
+      motionRegionScores,
       overallScore,
       temporalScore,
       scores,
@@ -193,8 +227,18 @@ export class OpenRouterRealismQcProvider {
       temporalIssues,
       summary: stringOrEmpty(parsed?.summary),
       temporalSummary: stringOrEmpty(parsed?.temporalSummary),
-      regenerationGuidance: stringOrEmpty(parsed?.regenerationGuidance)
-        || buildGuidance(allIssues, scores, temporalScores),
+      regenerationGuidance: [
+        stringOrEmpty(parsed?.regenerationGuidance),
+        deterministicMotionGuidance,
+      ].filter(Boolean).join(' ')
+        || buildGuidance(
+          allIssues,
+          scores,
+          temporalScores,
+          motionRegionContract,
+          motionRegionScores,
+          this.motionRegionThreshold,
+        ),
       sampledFrames: frames.map(({ index, timestamp }) => ({ index, timestamp })),
       temporalFrames: temporalFrames.map(({ index, timestamp }) => ({ index, timestamp })),
       previousFrames: previousFrames.map(({ index, timestamp }) => ({ index, timestamp })),
@@ -225,6 +269,7 @@ function buildPrompt({
   temporalEnabled,
   temporalFrameCount,
   previousFrameCount,
+  motionRegionContract,
 }) {
   const binding = scene.continuity || {};
   const characters = (storyBible?.characters || [])
@@ -247,6 +292,15 @@ function buildPrompt({
     style.lightingRules ? `Canonical lighting rules: ${style.lightingRules}` : '',
     realismDirection.profile ? `Capture realism profile: ${realismDirection.profile}; risk level: ${realismDirection.riskLevel}; stable-shot target: ${realismDirection.stableShotSeconds}s.` : '',
     realismDirection.microMotion?.length ? `Expected physically motivated micro-motion: ${realismDirection.microMotion.join('; ')}.` : '',
+    motionRegionContract
+      ? `MOTION REGION PLAN — allowed motion: ${motionRegionContract.allowedMotion.map((item) => `${item.id}: ${item.region} => ${item.expected}`).join(' | ')}`
+      : '',
+    motionRegionContract
+      ? `MOTION REGION PLAN — locked regions: ${motionRegionContract.lockedRegions.map((item) => `${item.id}: ${item.region} => ${item.expected} [${item.tolerance}]`).join(' | ')}`
+      : '',
+    motionRegionContract
+      ? `Camera moving: ${motionRegionContract.cameraMoving ? 'yes — correct parallax is allowed, independent object drift is not' : 'no — background anchors should stay screen-space stable'}.`
+      : '',
     ...characters.map((character) => [
       `Canonical character ${character.name}: ${character.description}`,
       character.physicalTraits ? `Physical traits: ${character.physicalTraits}` : '',
@@ -293,6 +347,14 @@ function buildPrompt({
       '- flickerFreedom: lighting, texture, color and fine detail do not pulse or flicker unnaturally.',
       '- temporalArtifactFreedom: no melting, rubbery motion, frame-to-frame duplication anomalies or sudden AI artifacts.',
       '- actionContinuity: the intended action progresses coherently through time.',
+      ...(motionRegionContract ? [
+        '',
+        'MOTION REGION scores, each from 0 to 100:',
+        '- motionRegionCompliance: visible motion stays inside the allowed semantic regions except for physically correct camera parallax.',
+        '- lockedRegionStability: locked face/body/architecture/object regions preserve identity and geometry without breathing, warping, sliding or unintended animation.',
+        '- intendedMotionCompliance: the regions that are supposed to move actually execute only the planned motion with the requested intensity.',
+        '- backgroundDriftFreedom: background/fixed anchors remain stable, or move only through correct camera parallax when the camera moves.',
+      ] : []),
       '',
       'Look especially for defects that may exist for only one or two adjacent frames.',
     ] : []),
@@ -314,6 +376,10 @@ function buildPrompt({
     '  "temporalScores": {',
     '    "identityStability": 0, "objectPersistence": 0, "geometryStability": 0, "motionPlausibility": 0,',
     '    "cameraContinuity": 0, "flickerFreedom": 0, "temporalArtifactFreedom": 0, "actionContinuity": 0',
+    '  },',
+    '  "motionRegionScores": {',
+    '    "motionRegionCompliance": 100, "lockedRegionStability": 100,',
+    '    "intendedMotionCompliance": 100, "backgroundDriftFreedom": 100',
     '  },',
     '  "issues": [{"code":"hands","severity":"high","evidence":"brief visible evidence"}],',
     '  "temporalIssues": [{"code":"face-morph","severity":"high","evidence":"face shape changes between temporal frames 4 and 5"}],',
@@ -370,6 +436,19 @@ function normalizeTemporalScores(scores = {}) {
   return Object.fromEntries(keys.map((key) => [key, clampScore(scores?.[key] ?? 0)]));
 }
 
+function normalizeMotionRegionScores(scores = {}) {
+  const keys = [
+    'motionRegionCompliance',
+    'lockedRegionStability',
+    'intendedMotionCompliance',
+    'backgroundDriftFreedom',
+  ];
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    clampScore(scores?.[key] ?? 0),
+  ]));
+}
+
 function normalizeIssues(issues) {
   if (!Array.isArray(issues)) return [];
 
@@ -389,7 +468,14 @@ function normalizeSeverity(value) {
   return 'medium';
 }
 
-function buildGuidance(issues, scores, temporalScores) {
+function buildGuidance(
+  issues,
+  scores,
+  temporalScores,
+  motionRegionContract = null,
+  motionRegionScores = null,
+  motionRegionThreshold = 84,
+) {
   const severe = issues
     .filter((issue) => ['high', 'critical'].includes(issue.severity))
     .map((issue) => `${issue.code}: ${issue.evidence}`)
@@ -399,11 +485,57 @@ function buildGuidance(issues, scores, temporalScores) {
     return `Correct these visible defects: ${severe.join('; ')}. Preserve canonical identity, geometry, realistic physics and smooth temporal continuity.`;
   }
 
+  if (motionRegionContract && motionRegionScores) {
+    const weakMotion = Object.entries(motionRegionScores)
+      .filter(([, score]) => score < motionRegionThreshold)
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, 2)
+      .map(([name]) => name);
+    if (weakMotion.length) {
+      const locked = motionRegionContract.lockedRegions
+        .map((item) => item.region)
+        .slice(0, 4)
+        .join(', ');
+      const allowed = motionRegionContract.allowedMotion
+        .map((item) => item.region)
+        .slice(0, 4)
+        .join(', ');
+      return `Correct motion-region failures (${weakMotion.join(', ')}). Keep locked regions stable: ${locked}. Restrict visible motion to: ${allowed}. Preserve camera parallax only where physically required.`;
+    }
+  }
+
   const weakestStatic = weakestNames(scores, 1);
   const weakestTemporal = weakestNames(temporalScores, 2);
   const targets = [...weakestStatic, ...weakestTemporal].filter(Boolean);
 
   return `Improve ${targets.join(', ') || 'photorealism and temporal stability'} while preserving the scene content and canonical continuity.`;
+}
+
+function buildMotionRegionGuidance(contract, scores, threshold) {
+  if (!contract) return '';
+  const weak = Object.entries(scores || {})
+    .filter(([, score]) => score < threshold)
+    .sort((a, b) => a[1] - b[1])
+    .map(([name]) => name);
+  if (!weak.length) return '';
+
+  const locked = contract.lockedRegions
+    .map((item) => item.region)
+    .slice(0, 5)
+    .join(', ');
+  const allowed = contract.allowedMotion
+    .map((item) => item.region)
+    .slice(0, 5)
+    .join(', ');
+
+  return [
+    `MOTION REGION CORRECTION: fix ${weak.join(', ')}.`,
+    locked ? `Keep these regions stable: ${locked}.` : '',
+    allowed ? `Visible subject/environment motion is allowed only in: ${allowed}.` : '',
+    contract.cameraMoving
+      ? 'Preserve rigid scene geometry; allow only physically correct camera parallax outside moving regions.'
+      : 'Keep background anchors screen-space stable with no breathing, sliding, warping or decorative motion.',
+  ].filter(Boolean).join(' ');
 }
 
 function weakestNames(scores, count) {

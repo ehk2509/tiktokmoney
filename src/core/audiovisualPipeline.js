@@ -5,6 +5,7 @@ import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
 import { CreativeTournament } from './creativeTournament.js';
 import { RealismDirector } from './realismDirector.js';
 import { KeyframeDirector } from './keyframeDirector.js';
+import { MotionRegionDirector } from './motionRegionDirector.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -24,12 +25,14 @@ export class AudiovisualPipeline {
     trendIntelligence = null,
     realismDirector = null,
     keyframeDirector = null,
+    motionRegionDirector = null,
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
     this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
     this.trendIntelligence = trendIntelligence;
     this.realismDirector = realismDirector || new RealismDirector();
     this.keyframeDirector = keyframeDirector || new KeyframeDirector();
+    this.motionRegionDirector = motionRegionDirector || new MotionRegionDirector();
     this.audiovisual = audiovisual;
     this.renderer = renderer;
     this.store = store;
@@ -113,11 +116,13 @@ export class AudiovisualPipeline {
       researchPacket,
     });
     const realismDirectedScript = this.realismDirector.direct(rawProductionScript);
-    const productionScript = this.keyframeDirector.direct(realismDirectedScript);
+    const keyframeDirectedScript = this.keyframeDirector.direct(realismDirectedScript);
+    const productionScript = this.motionRegionDirector.direct(keyframeDirectedScript);
     let storyBible = productionScriptToStoryBible(productionScript);
     project.productionScript = productionScript;
     project.realismDirection = productionScript.realismDirection || null;
     project.keyframeDirection = productionScript.keyframeDirection || null;
+    project.motionRegionDirection = productionScript.motionRegionDirection || null;
     project.storyBible = storyBible;
     project.status = 'SCRIPTED';
 
@@ -286,6 +291,7 @@ async function generateWithQc({
         motionPrompt: asset.prompt,
       },
       realismDirection: segment.realismDirection || null,
+      motionRegionDirection: segment.motionRegionDirection || null,
     };
 
     const realism = realismQc
