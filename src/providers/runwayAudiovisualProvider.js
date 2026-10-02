@@ -5,6 +5,7 @@ import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 import { buildRealismPromptBlock } from '../core/realismDirector.js';
 import { buildKeyframePrompts } from '../core/keyframeDirector.js';
 import { buildMotionRegionPromptBlock } from '../core/motionRegionDirector.js';
+import { buildMotionGuidePromptBlock } from '../core/motionGuideDirector.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -21,6 +22,7 @@ export class RunwayAudiovisualProvider {
     keyframeImageRatio = process.env.KEYFRAME_IMAGE_RATIO || '720:1280',
     keyframeVideoRatio = process.env.KEYFRAME_VIDEO_RATIO || 'auto_720p',
     keyframeFailOpen = parseBoolean(process.env.KEYFRAME_FAIL_OPEN, true),
+    motionGuideFailOpen = parseBoolean(process.env.MOTION_GUIDE_FAIL_OPEN, true),
     assetDir = process.env.ASSET_DIR || './outputs/assets',
     pollIntervalMs = Number(process.env.RUNWAY_POLL_INTERVAL_MS || 2500),
     maxPolls = Number(process.env.RUNWAY_MAX_POLLS || 120),
@@ -43,6 +45,7 @@ export class RunwayAudiovisualProvider {
     this.keyframeImageRatio = keyframeImageRatio;
     this.keyframeVideoRatio = keyframeVideoRatio;
     this.keyframeFailOpen = Boolean(keyframeFailOpen);
+    this.motionGuideFailOpen = Boolean(motionGuideFailOpen);
     this.assetDir = assetDir;
     this.pollIntervalMs = pollIntervalMs;
     this.maxPolls = maxPolls;
@@ -73,9 +76,30 @@ export class RunwayAudiovisualProvider {
     ) || characters[0] || productionScript.characters[0];
 
     const references = collectImageReferences(segment, storyBible, previousAsset);
-    const referenceVideos = previousAsset?.sourceUrl
-      ? [{ type: 'video', uri: previousAsset.sourceUrl }]
-      : [];
+    let motionGuide = null;
+    let motionGuideError = null;
+    if (segment.motionGuideDirection?.selectedReference) {
+      if (supportsMotionGuide(this.model)) {
+        try {
+          motionGuide = await this.prepareMotionGuide({
+            segment,
+            projectId,
+          });
+        } catch (error) {
+          if (!this.motionGuideFailOpen) throw error;
+          motionGuideError = error.message;
+        }
+      } else {
+        motionGuideError = `motion-guide reference video is not enabled for audiovisual model ${this.model}`;
+      }
+    }
+
+    const videoReferencePlan = buildVideoReferencePlan({
+      motionGuide,
+      previousAsset,
+      maxCombinedSeconds: 15,
+    });
+    const referenceVideos = videoReferencePlan.references;
     const referenceAudio = [];
 
     let dialogueTrack = null;
@@ -155,8 +179,17 @@ export class RunwayAudiovisualProvider {
       }
     }
 
+    const promptSegment = motionGuide
+      ? segment
+      : {
+        ...segment,
+        motionGuideDirection: {
+          ...(segment.motionGuideDirection || {}),
+          selectedReference: null,
+        },
+      };
     const promptText = buildAudiovisualPrompt({
-      segment,
+      segment: promptSegment,
       productionScript,
       characters,
       primaryCharacter,
@@ -267,6 +300,10 @@ export class RunwayAudiovisualProvider {
           : 'off',
       keyframes,
       keyframeError,
+      motionGuideMode: motionGuide ? 'reference-video' : 'off',
+      motionGuide,
+      motionGuideError,
+      referenceVideoPlan: videoReferencePlan.metadata,
       motionControlMode: segment.motionRegionDirection?.enabled
         ? 'semantic-region-prompt'
         : 'off',
@@ -275,6 +312,31 @@ export class RunwayAudiovisualProvider {
       referenceImageUrl: keyframes?.first?.url || references[0]?.uri || null,
       referenceEndImageUrl: keyframes?.last?.url || null,
       previousGenerationId: previousAsset?.generationId || null,
+    };
+  }
+
+  async prepareMotionGuide({
+    segment,
+    projectId = 'project',
+  }) {
+    const selected = segment.motionGuideDirection?.selectedReference;
+    if (!selected?.url) return null;
+
+    await mkdir(this.assetDir, { recursive: true });
+    const localPath = path.join(
+      this.assetDir,
+      `motion-guide-${safe(selected.id)}-${fingerprint(selected.url)}.mp4`,
+    );
+    if (!(await fileExists(localPath))) {
+      await this.download(selected.url, localPath);
+    }
+
+    return {
+      actionClass: segment.motionGuideDirection.actionClass,
+      selectedReference: selected,
+      localPath,
+      projectId,
+      segmentIndex: segment.index,
     };
   }
 
@@ -499,6 +561,7 @@ function buildAudiovisualPrompt({
     `CAMERA: ${segment.camera}.`,
     buildRealismPromptBlock(segment),
     buildMotionRegionPromptBlock(segment),
+    buildMotionGuidePromptBlock(segment),
     segment.editing?.allowInternalCuts
       ? `EDITING: internal cuts allowed; maximum ${segment.editing.shotCount || 2} shots. Use only clean motivated cuts.`
       : 'EDITING: ONE continuous shot only. No internal cuts, dissolves, crossfades, flash transitions, ghosting, double exposure or montage.',
@@ -549,6 +612,63 @@ function normalizedDialogueTurns(segment, productionScript) {
     delivery: '',
     pauseAfterSeconds: 0,
   }];
+}
+
+export function buildVideoReferencePlan({
+  motionGuide = null,
+  previousAsset = null,
+  maxCombinedSeconds = 15,
+} = {}) {
+  const candidates = [];
+  if (motionGuide?.selectedReference?.url) {
+    candidates.push({
+      role: 'motion-guide',
+      uri: motionGuide.selectedReference.url,
+      durationSeconds: Number(motionGuide.selectedReference.durationSeconds) || 0,
+    });
+  }
+  if (previousAsset?.sourceUrl) {
+    candidates.push({
+      role: 'previous-act',
+      uri: previousAsset.sourceUrl,
+      durationSeconds: parseVideoDuration(previousAsset),
+    });
+  }
+
+  const selected = [];
+  let totalDurationSeconds = 0;
+  for (const candidate of candidates) {
+    if (!candidate.uri || selected.some((item) => item.uri === candidate.uri)) continue;
+    const duration = Math.max(0, Number(candidate.durationSeconds) || 0);
+    if (duration > 0 && totalDurationSeconds + duration > maxCombinedSeconds + 1e-9) {
+      continue;
+    }
+    selected.push(candidate);
+    totalDurationSeconds += duration;
+  }
+
+  return {
+    references: selected.map((item) => ({ type: 'video', uri: item.uri })),
+    metadata: {
+      maxCombinedSeconds,
+      totalDurationSeconds: Math.round(totalDurationSeconds * 1000) / 1000,
+      roles: selected.map((item) => item.role),
+      droppedRoles: candidates
+        .filter((candidate) => !selected.some((item) => item.role === candidate.role))
+        .map((item) => item.role),
+    },
+  };
+}
+
+function parseVideoDuration(asset) {
+  const direct = Number(asset?.durationSeconds);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const match = String(asset?.generatedDuration || '').match(/([0-9]+(?:\.[0-9]+)?)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function supportsMotionGuide(model) {
+  return ['wan3', 'wan3_prime'].includes(String(model || '').toLowerCase());
 }
 
 function collectKeyframeReferences(segment, storyBible, previousAsset) {
