@@ -217,7 +217,10 @@ export async function summarizeBenchmarkFiles({
 }
 
 export function summarizeBenchmarkRun(run, { ratings = [] } = {}) {
-  const ratingMap = new Map(ratings.map((rating) => [
+  const completedRatings = ratings.filter(
+    (rating) => rating && typeof rating.publishable === 'boolean',
+  );
+  const ratingMap = new Map(completedRatings.map((rating) => [
     String(rating.caseId) + ':' + String(rating.arm),
     rating,
   ]));
@@ -264,9 +267,10 @@ export function summarizeBenchmarkRun(run, { ratings = [] } = {}) {
       ),
     },
     ratings: {
-      supplied: ratings.length,
+      supplied: completedRatings.length,
       expected: countRateableArtifacts(run),
-      complete: ratings.length > 0 && ratings.length === countRateableArtifacts(run),
+      complete: completedRatings.length > 0
+        && completedRatings.length === countRateableArtifacts(run),
     },
     notes: [
       'Provider spend is treated as actual only when the provider task response exposes explicit USD cost or credits.',
@@ -457,6 +461,7 @@ function summarizeUsage(events) {
 function aggregateArm(rows, isFull) {
   const count = rows.length;
   const ratings = rows.map((row) => row.rating).filter(Boolean);
+  const rateable = rows.filter((row) => row.success && row.artifactPath).length;
   const publishable = ratings.filter((rating) => rating.publishable === true).length;
   const costs = rows.map((row) => row.spend && row.spend.costUsd).filter(Number.isFinite);
   const totalCost = costs.length === count && count
@@ -475,7 +480,7 @@ function aggregateArm(rows, isFull) {
     averageLatencyMs: average(rows.map((row) => row.latencyMs)),
     totalProviderSpendUsd: totalCost,
     spendCoverageRate: rate(costs.length, count),
-    humanRatingCoverageRate: rate(ratings.length, count),
+    humanRatingCoverageRate: rate(ratings.length, rateable),
     humanPublishableRate: rate(publishable, count),
     humanRealismScore: average(ratings.map((rating) => rating.realismScore)),
     humanIdentityConsistencyScore: average(ratings.map((rating) => rating.identityConsistencyScore)),
