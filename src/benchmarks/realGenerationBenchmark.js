@@ -116,45 +116,57 @@ export async function runRealGenerationBenchmark({
   };
 
   try {
-    for (const benchmarkCase of selectCases(suite.cases, { limit, caseIds })) {
-      probe.reset();
-      const baseline = await timedArm(async () => {
-        const asset = await generatePlainBaseline(provider, benchmarkCase, runId);
-        return {
-          success: Boolean(asset.localPath),
-          artifactPath: asset.localPath,
-          generationId: asset.generationId,
-          model: asset.model,
-        };
-      });
-      baseline.spend = summarizeUsage(probe.snapshot());
+    const selectedCases = selectCases(suite.cases, { limit, caseIds });
+    for (let caseIndex = 0; caseIndex < selectedCases.length; caseIndex += 1) {
+      const benchmarkCase = selectedCases[caseIndex];
+      const executionOrder = caseIndex % 2 === 0
+        ? ['baseline', 'full']
+        : ['full', 'baseline'];
+      let baseline = null;
+      let full = null;
 
-      probe.reset();
-      const full = await timedArm(async () => {
-        const project = await app.pipeline.generate({
-          topic: benchmarkCase.topic,
-          audience: benchmarkCase.audience || 'curious adults',
-          durationSeconds: Number(benchmarkCase.durationSeconds) || 10,
-          render,
-          researchPacket: null,
-        });
-        const metrics = extractFullStackMetrics(project);
-        return {
-          success: metrics.finalSuccess,
-          artifactPath: project.render && project.render.outputPath
-            ? project.render.outputPath
-            : firstScenePath(project.scenes),
-          projectId: project.id || null,
-          status: project.status || null,
-          metrics,
-        };
-      });
-      full.spend = summarizeUsage(probe.snapshot());
+      for (const arm of executionOrder) {
+        probe.reset();
+        if (arm === 'baseline') {
+          baseline = await timedArm(async () => {
+            const asset = await generatePlainBaseline(provider, benchmarkCase, runId);
+            return {
+              success: Boolean(asset.localPath),
+              artifactPath: asset.localPath,
+              generationId: asset.generationId,
+              model: asset.model,
+            };
+          });
+          baseline.spend = summarizeUsage(probe.snapshot());
+        } else {
+          full = await timedArm(async () => {
+            const project = await app.pipeline.generate({
+              topic: benchmarkCase.topic,
+              audience: benchmarkCase.audience || 'curious adults',
+              durationSeconds: Number(benchmarkCase.durationSeconds) || 10,
+              render,
+              researchPacket: null,
+            });
+            const metrics = extractFullStackMetrics(project);
+            return {
+              success: metrics.finalSuccess,
+              artifactPath: project.render && project.render.outputPath
+                ? project.render.outputPath
+                : firstScenePath(project.scenes),
+              projectId: project.id || null,
+              status: project.status || null,
+              metrics,
+            };
+          });
+          full.spend = summarizeUsage(probe.snapshot());
+        }
+      }
 
       run.pairs.push({
         caseId: benchmarkCase.id,
         category: benchmarkCase.category,
         topic: benchmarkCase.topic,
+        executionOrder,
         baseline,
         full,
       });
