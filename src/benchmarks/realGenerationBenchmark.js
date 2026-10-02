@@ -310,8 +310,8 @@ export function extractFullStackMetrics(project) {
       )
     ))),
     lipSyncScore: average(scenes.map((scene) => (
-      scene.deepLipSyncQc && (scene.deepLipSyncQc.score ?? scene.deepLipSyncQc.confidence)
-      ?? scene.lipSyncQc && scene.lipSyncQc.score
+      (scene.deepLipSyncQc && (scene.deepLipSyncQc.score ?? scene.deepLipSyncQc.confidence))
+      ?? (scene.lipSyncQc && scene.lipSyncQc.score)
     ))),
     poseFidelity: average(scenes.map((scene) => (
       scene.poseMotionQc && scene.poseMotionQc.overallScore
