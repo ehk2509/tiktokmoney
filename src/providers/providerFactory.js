@@ -235,6 +235,12 @@ export function createAudiovisualProvider(env = process.env) {
     dialogueMode: env.AUDIOVISUAL_DIALOGUE_MODE || 'locked',
     ttsModel: env.AUDIOVISUAL_TTS_MODEL || 'eleven_v3',
     defaultVoice: env.AUDIOVISUAL_DEFAULT_VOICE || 'Bernard',
+    imageModel: env.RUNWAY_IMAGE_MODEL || 'gen4_image',
+    keyframeImageRatio: env.KEYFRAME_IMAGE_RATIO || '720:1280',
+    keyframeVideoRatio: env.KEYFRAME_VIDEO_RATIO || 'auto_720p',
+    keyframeFailOpen: env.KEYFRAME_FAIL_OPEN == null
+      ? undefined
+      : isEnabled(env.KEYFRAME_FAIL_OPEN),
     assetDir: env.ASSET_DIR,
     pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
     maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,
