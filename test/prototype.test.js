@@ -69,6 +69,14 @@ import {
   buildMotionGuidePromptBlock,
 } from '../src/core/motionGuideDirector.js';
 import { MotionReferenceStore } from '../src/storage/motionReferenceStore.js';
+import {
+  normalizePoseSequence,
+  summarizePoseSequence,
+  poseSummaryToPrompt,
+  comparePoseSequences,
+} from '../src/core/poseMotion.js';
+import { PoseMotionExtractor } from '../src/services/poseMotionExtractor.js';
+import { PoseMotionQcProvider } from '../src/providers/poseMotionQcProvider.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 import {
@@ -6803,3 +6811,531 @@ test('audiovisual pipeline persists selected motion-guide provenance when librar
     'lift-guide',
   );
 });
+
+
+test('pose normalization is invariant to actor translation and scale', () => {
+  const reference = makePoseSequence({
+    offsetX: 0.2,
+    offsetY: 0.1,
+    scale: 0.8,
+    kneeBend: [0.02, 0.1, 0.18, 0.1, 0.02],
+  });
+  const transformed = makePoseSequence({
+    offsetX: 2.7,
+    offsetY: -1.4,
+    scale: 2.4,
+    kneeBend: [0.02, 0.1, 0.18, 0.1, 0.02],
+  });
+
+  const result = comparePoseSequences(reference, transformed);
+
+  assert.ok(result.coverage > 0.9);
+  assert.ok(result.poseTrajectoryScore >= 94);
+  assert.ok(result.bodyMechanicsScore >= 94);
+  assert.ok(result.overallScore >= 90);
+});
+
+test('pose comparison rejects different joint mechanics despite similar duration', () => {
+  const reference = makePoseSequence({
+    kneeBend: [0.02, 0.12, 0.28, 0.12, 0.02],
+    wristLift: [0, 0.05, 0.1, 0.05, 0],
+  });
+  const bad = makePoseSequence({
+    kneeBend: [0.02, 0.02, 0.02, 0.02, 0.02],
+    wristLift: [0, 0.35, 0.55, 0.35, 0],
+  });
+
+  const result = comparePoseSequences(reference, bad);
+
+  assert.ok(result.poseTrajectoryScore < 90);
+  assert.ok(result.bodyMechanicsScore < 90);
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((issue) => /trajectory|mechanics/i.test(issue)));
+});
+
+test('pose summary emits compact provider-safe skeleton beats', () => {
+  const summary = summarizePoseSequence(makePoseSequence({
+    kneeBend: [0.02, 0.12, 0.24, 0.12, 0.02],
+  }), { maxBeats: 5 });
+  const prompt = poseSummaryToPrompt(summary);
+
+  assert.equal(summary.beats.length, 5);
+  assert.match(prompt, /Normalized skeleton timing/i);
+  assert.match(prompt, /knee=/i);
+  assert.doesNotMatch(prompt, /face|shirt|background/i);
+});
+
+test('motion reference store normalizes embedded pose sequence without appearance data', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-pose-store-'));
+  const file = path.join(dir, 'motion-references.json');
+  try {
+    await writeFile(file, JSON.stringify({
+      references: [{
+        id: 'squat-owned',
+        actionClass: 'squat',
+        tags: ['squat', 'full-body'],
+        cameraMode: 'locked',
+        people: 1,
+        durationSeconds: 4,
+        url: 'https://cdn.example/squat.mp4',
+        source: 'internal capture',
+        license: 'owned',
+        verifiedHumanMotion: true,
+        rightsConfirmed: true,
+        poseSequence: makePoseSequence({
+          kneeBend: [0.02, 0.18, 0.32, 0.18, 0.02],
+        }),
+      }],
+    }));
+
+    const store = new MotionReferenceStore(file);
+    const refs = await store.list();
+
+    assert.equal(refs.length, 1);
+    assert.equal(refs[0].poseSequence.coordinateSpace, 'body-normalized-2d');
+    assert.ok(refs[0].poseSequence.frames.length >= 5);
+    assert.equal(refs[0].poseSequence.frames[0].appearance, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pose motion extractor can use embedded pose without external command', async () => {
+  const extractor = new PoseMotionExtractor({ command: '' });
+  const result = await extractor.extract('/not-needed.mp4', {
+    embeddedPoseSequence: makePoseSequence({
+      kneeBend: [0.02, 0.1, 0.2, 0.1, 0.02],
+    }),
+  });
+
+  assert.equal(result.source, 'embedded');
+  assert.equal(result.extractor, 'precomputed');
+  assert.ok(result.sequence.frames.length >= 5);
+});
+
+test('pose motion extractor executes configurable command contract and parses JSON', async () => {
+  const calls = [];
+  const extractor = new PoseMotionExtractor({
+    command: 'pose-tool',
+    args: ['--input', '{video}', '--out', '{output_json}', '--fps', '{fps}'],
+    sampleFps: 9,
+    runCommand: async (command, args, options) => {
+      calls.push({ command, args, options });
+      const outputPath = args[args.indexOf('--out') + 1];
+      await writeFile(outputPath, JSON.stringify(makePoseSequence({
+        kneeBend: [0.02, 0.1, 0.2, 0.1, 0.02],
+      })));
+    },
+  });
+
+  const result = await extractor.extract('/fake/generated.mp4', {
+    durationSeconds: 4,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'pose-tool');
+  assert.ok(calls[0].args.includes('/fake/generated.mp4'));
+  assert.ok(calls[0].args.includes('9'));
+  assert.equal(result.source, 'external-command');
+  assert.ok(result.sequence.frames.length >= 5);
+});
+
+test('motion guide prompt includes skeleton abstraction when pose summary is available', () => {
+  const summary = summarizePoseSequence(makePoseSequence({
+    kneeBend: [0.02, 0.18, 0.3, 0.18, 0.02],
+  }), { maxBeats: 5 });
+
+  const block = buildMotionGuidePromptBlock({
+    motionGuideDirection: {
+      actionClass: 'squat',
+      selectedReference: { id: 'squat-guide' },
+      poseSummary: summary,
+    },
+  });
+
+  assert.match(block, /POSE\/SKELETON ABSTRACTION/i);
+  assert.match(block, /Normalized skeleton timing/i);
+  assert.match(block, /knee=/i);
+});
+
+test('Runway motion guide extracts pose summary before building generation prompt', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-pose-prompt-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueMode: 'native',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 1,
+      sleepImpl: async () => {},
+      poseExtractor: {
+        available: true,
+        command: 'fake-pose',
+        extract: async () => ({
+          source: 'external-command',
+          extractor: 'fake-pose',
+          sequence: normalizePoseSequence(makePoseSequence({
+            kneeBend: [0.02, 0.18, 0.3, 0.18, 0.02],
+          })),
+        }),
+      },
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, body });
+
+        if (target === 'https://cdn.example/squat-guide.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('guide').buffer,
+          };
+        }
+        if (target.endsWith('/text_to_video')) {
+          assert.match(body.promptText, /POSE\/SKELETON ABSTRACTION/i);
+          assert.match(body.promptText, /Normalized skeleton timing/i);
+          return jsonResponse({ id: 'pose-prompt-video' });
+        }
+        if (target.endsWith('/tasks/pose-prompt-video')) {
+          return jsonResponse({
+            id: 'pose-prompt-video',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/pose-output.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/pose-output.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const asset = await provider.generateSegment({
+      segment: {
+        index: 0,
+        purpose: 'demo',
+        durationSeconds: 5,
+        dialogue: '',
+        dialogueTurns: [],
+        characterIds: ['alex'],
+        locationId: 'gym',
+        action: 'Alex performs one controlled squat.',
+        camera: 'Locked shot.',
+        ambience: 'gym',
+        soundEffects: [],
+        music: '',
+        editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+        realismDirection: { riskScore: 70, camera: { axis: 'locked' } },
+        keyframeDirection: { enabled: false, policy: 'off' },
+        motionGuideDirection: {
+          enabled: true,
+          eligible: true,
+          actionClass: 'squat',
+          selectedReference: {
+            id: 'squat-guide',
+            url: 'https://cdn.example/squat-guide.mp4',
+            durationSeconds: 5,
+            selectionScore: 0.91,
+          },
+        },
+      },
+      productionScript: {
+        characters: [{
+          id: 'alex',
+          name: 'Alex',
+          description: 'trainer',
+          physicalTraits: 'natural',
+          wardrobe: 'white shirt',
+          voice: { presetId: 'Bernard', languageCode: 'en' },
+        }],
+        locations: [{
+          id: 'gym',
+          name: 'Gym',
+          description: 'real gym',
+          lighting: 'daylight',
+          fixedElements: ['rack'],
+        }],
+        visualStyle: { description: 'natural', cameraRules: 'locked', lightingRules: 'daylight' },
+        audioDirection: { mix: 'natural', musicPolicy: 'none' },
+      },
+      projectId: 'pose-prompt',
+    });
+
+    assert.equal(asset.motionGuide.poseSource, 'external-command');
+    assert.ok(asset.motionGuide.poseSummary?.beats?.length >= 3);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pose motion QC passes translation/scale-equivalent skeleton motion', async () => {
+  const extractor = {
+    available: true,
+    extract: async (pathName, options = {}) => ({
+      source: options.embeddedPoseSequence ? 'embedded' : 'external-command',
+      extractor: 'fake',
+      sequence: normalizePoseSequence(
+        options.embeddedPoseSequence
+        || (pathName.includes('generated')
+          ? makePoseSequence({
+            offsetX: 2.5,
+            offsetY: -1.2,
+            scale: 2.1,
+            kneeBend: [0.02, 0.1, 0.2, 0.1, 0.02],
+          })
+          : makePoseSequence({
+            kneeBend: [0.02, 0.1, 0.2, 0.1, 0.02],
+          })),
+      ),
+    }),
+  };
+  const qc = new PoseMotionQcProvider({
+    extractor,
+    threshold: 78,
+    minCoverage: 0.55,
+  });
+
+  const result = await qc.evaluate({
+    localPath: '/fake/generated.mp4',
+    generatedDuration: '4s',
+    motionGuideMode: 'reference-video',
+    motionGuide: {
+      localPath: '/fake/reference.mp4',
+      selectedReference: {
+        id: 'squat',
+        durationSeconds: 4,
+        poseSequence: makePoseSequence({
+          kneeBend: [0.02, 0.1, 0.2, 0.1, 0.02],
+        }),
+      },
+    },
+  }, {
+    segment: { durationSeconds: 4 },
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(result.passed, true);
+  assert.ok(result.overallScore >= 90);
+  assert.ok(result.coverage >= 0.9);
+});
+
+test('pose motion QC rejects wrong biomechanics and produces targeted regeneration guidance', async () => {
+  const qc = new PoseMotionQcProvider({
+    extractor: {
+      available: true,
+      extract: async (pathName, options = {}) => ({
+        source: options.embeddedPoseSequence ? 'embedded' : 'external-command',
+        extractor: 'fake',
+        sequence: normalizePoseSequence(
+          options.embeddedPoseSequence
+          || (pathName.includes('generated')
+            ? makePoseSequence({
+              kneeBend: [0.02, 0.02, 0.02, 0.02, 0.02],
+              wristLift: [0, 0.45, 0.6, 0.45, 0],
+            })
+            : makePoseSequence({
+              kneeBend: [0.02, 0.18, 0.32, 0.18, 0.02],
+            })),
+        ),
+      }),
+    },
+    threshold: 82,
+    minCoverage: 0.55,
+    failClosed: true,
+  });
+
+  const result = await qc.evaluate({
+    localPath: '/fake/generated.mp4',
+    generatedDuration: '4s',
+    motionGuideMode: 'reference-video',
+    motionGuide: {
+      localPath: '/fake/reference.mp4',
+      selectedReference: {
+        id: 'squat',
+        durationSeconds: 4,
+        poseSequence: makePoseSequence({
+          kneeBend: [0.02, 0.18, 0.32, 0.18, 0.02],
+        }),
+      },
+    },
+  }, {
+    segment: { durationSeconds: 4 },
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.overallScore < 82);
+  assert.match(result.regenerationGuidance, /POSE MOTION CORRECTION/i);
+  assert.match(result.regenerationGuidance, /skeleton trajectory/i);
+});
+
+test('pose motion QC stays inactive when no generated-video extractor is configured', async () => {
+  const qc = new PoseMotionQcProvider({
+    extractor: {
+      available: false,
+    },
+  });
+
+  const result = await qc.evaluate({
+    localPath: '/fake/generated.mp4',
+    motionGuideMode: 'reference-video',
+    motionGuide: {
+      localPath: '/fake/reference.mp4',
+      selectedReference: {
+        id: 'walk',
+        durationSeconds: 4,
+        poseSequence: makePoseSequence({}),
+      },
+    },
+  }, {
+    segment: { durationSeconds: 4 },
+  });
+
+  assert.equal(result.enabled, false);
+  assert.equal(result.applied, false);
+  assert.equal(result.passed, true);
+});
+
+test('audiovisual pipeline regenerates pose-motion mismatch then accepts corrected biomechanics', async () => {
+  const calls = [];
+  let qcAttempt = 0;
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual: {
+      generateSegment: async ({ segment, regeneration }) => {
+        calls.push(regeneration);
+        return {
+          type: 'ai-video',
+          localPath: `/fake/pose-${segment.index}-${regeneration?.attempt || 0}.mp4`,
+          generationId: `pose-${segment.index}-${regeneration?.attempt || 0}`,
+          prompt: segment.action,
+          audioMode: 'native',
+          motionGuideMode: 'reference-video',
+          motionGuide: {
+            localPath: '/fake/reference.mp4',
+            selectedReference: { id: 'ref', durationSeconds: 5 },
+          },
+        };
+      },
+    },
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: null,
+    poseMotionQc: {
+      maxRegenerations: 1,
+      evaluate: async () => {
+        qcAttempt += 1;
+        if (qcAttempt === 1) {
+          return {
+            passed: false,
+            issues: ['body mechanics / joint angles diverge'],
+            regenerationGuidance: 'POSE MOTION CORRECTION: match knee flexion and weight transfer.',
+          };
+        }
+        return {
+          passed: true,
+          issues: [],
+          regenerationGuidance: '',
+        };
+      },
+    },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'controlled lifting movement',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.ok(calls.some((item) => item?.guidance?.includes('POSE MOTION CORRECTION')));
+  assert.ok(project.scenes.every((scene) => scene.poseMotionQc?.passed));
+});
+
+test('audiovisual pipeline returns POSE_MOTION_QC_FAILED when skeleton gate never passes', async () => {
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual: {
+      generateSegment: async ({ segment }) => ({
+        type: 'ai-video',
+        localPath: `/fake/pose-fail-${segment.index}.mp4`,
+        generationId: `pose-fail-${segment.index}`,
+        prompt: segment.action,
+        audioMode: 'native',
+        motionGuideMode: 'reference-video',
+        motionGuide: {
+          localPath: '/fake/reference.mp4',
+          selectedReference: { id: 'ref', durationSeconds: 5 },
+        },
+      }),
+    },
+    renderer: null,
+    store: { saveProject: async () => {} },
+    poseMotionQc: {
+      maxRegenerations: 0,
+      evaluate: async () => ({
+        passed: false,
+        issues: ['pose trajectory diverges from reference'],
+        regenerationGuidance: 'POSE MOTION CORRECTION: follow the reference trajectory.',
+      }),
+    },
+  });
+
+  const project = await pipeline.generate({
+    topic: 'pose failure',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'POSE_MOTION_QC_FAILED');
+  assert.match(project.error, /failed QC/i);
+});
+
+function makePoseSequence({
+  offsetX = 0,
+  offsetY = 0,
+  scale = 1,
+  kneeBend = [0.02, 0.1, 0.2, 0.1, 0.02],
+  wristLift = [0, 0.04, 0.08, 0.04, 0],
+} = {}) {
+  const frames = kneeBend.map((bend, index) => {
+    const t = index;
+    const wrist = wristLift[index] ?? 0;
+    const p = (x, y) => ({
+      x: offsetX + (x * scale),
+      y: offsetY + (y * scale),
+      confidence: 0.98,
+    });
+    return {
+      time: t,
+      joints: {
+        nose: p(0.5, 0.12 + (bend * 0.1)),
+        left_shoulder: p(0.42, 0.3 + bend),
+        right_shoulder: p(0.58, 0.3 + bend),
+        left_elbow: p(0.36, 0.46 + (bend * 0.8)),
+        right_elbow: p(0.64, 0.46 + (bend * 0.8)),
+        left_wrist: p(0.32, 0.62 - wrist + (bend * 0.5)),
+        right_wrist: p(0.68, 0.62 - wrist + (bend * 0.5)),
+        left_hip: p(0.45, 0.62 + bend),
+        right_hip: p(0.55, 0.62 + bend),
+        left_knee: p(0.44 - (bend * 0.22), 0.82 + (bend * 0.45)),
+        right_knee: p(0.56 + (bend * 0.22), 0.82 + (bend * 0.45)),
+        left_ankle: p(0.43, 1.02),
+        right_ankle: p(0.57, 1.02),
+      },
+    };
+  });
+
+  return {
+    durationSeconds: Math.max(1, frames.at(-1)?.time || 0),
+    frames,
+    contacts: [
+      { type: 'left-foot-plant', time: 0.2 },
+      { type: 'right-foot-plant', time: 2.2 },
+    ],
+  };
+}
