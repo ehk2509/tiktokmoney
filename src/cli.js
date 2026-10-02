@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 import { createApp } from './app.js';
+import {
+  runRealGenerationBenchmark,
+  summarizeBenchmarkFiles,
+} from './benchmarks/realGenerationBenchmark.js';
 
 const [command = 'help', ...args] = process.argv.slice(2);
 const options = parseArgs(args);
-const app = createApp();
+const liveBenchmark = command === 'benchmark-real' && options['confirm-spend'] === true;
+const app = command === 'benchmark-summary' || (command === 'benchmark-real' && !liveBenchmark)
+  ? null
+  : command === 'benchmark-real'
+    ? createApp({ trendIntelligence: null })
+    : createApp();
 
 try {
   if (command === 'generate') {
@@ -46,6 +55,31 @@ try {
     console.log(JSON.stringify(await app.listPlans({
       limit: options.limit ? Number(options.limit) : undefined,
     }), null, 2));
+  } else if (command === 'benchmark-real') {
+    const result = await runRealGenerationBenchmark({
+      suitePath: options.suite || './data/benchmarks/real-generation-v1.json',
+      outputDir: options.output || './outputs/benchmarks',
+      app,
+      confirmSpend: options['confirm-spend'] === true,
+      limit: options.limit ? Number(options.limit) : null,
+      caseIds: csv(options.case || options.cases),
+      render: options['no-render'] !== true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+  } else if (command === 'benchmark-summary') {
+    const runPath = options.run || options.manifest;
+    if (!runPath) {
+      throw new Error(
+        'Usage: node src/cli.js benchmark-summary --run ./outputs/benchmarks/<run>/manifest.json [--ratings ./ratings-blind.json]',
+      );
+    }
+    const result = await summarizeBenchmarkFiles({
+      runPath,
+      ratingsPath: options.ratings || null,
+      ratingKeyPath: options['rating-key'] || null,
+      outputPath: options.output || null,
+    });
+    console.log(JSON.stringify(result, null, 2));
   } else if (command === 'motion-library-build') {
     const input = options.input || options.file;
     const directory = options.dir || options.directory;
@@ -71,7 +105,24 @@ try {
   } else if (command === 'motion-library') {
     console.log(JSON.stringify(await app.listMotionLibrary(), null, 2));
   } else {
-    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities\n  research --topic "..."\n  plan [--budget 6] [--max-videos 3]\n  run-plan --id "plan_..."\n  plans\n  motion-library-build --input ./clip.mp4 --license "owned footage" --rights-confirmed [--action squat]\n  motion-library');
+    console.log([
+      'TikTokMoney prototype',
+      '',
+      'Commands:',
+      '  generate --topic "..." [--duration 35]',
+      '  opportunities',
+      '  research --topic "..."',
+      '  plan [--budget 6] [--max-videos 3]',
+      '  run-plan --id "plan_..."',
+      '  plans',
+      '  benchmark-real [--case talking-head-01] [--limit 3]',
+      '  benchmark-real --confirm-spend [--case talking-head-01] [--no-render]',
+      '  benchmark-summary --run ./outputs/benchmarks/<run>/manifest.json [--ratings ./ratings-blind.json]',
+      '  motion-library-build --input ./clip.mp4 --license "owned footage" --rights-confirmed [--action squat]',
+      '  motion-library',
+      '',
+      'benchmark-real is dry-run by default. --confirm-spend is required before paid provider calls.',
+    ].join('\n'));
   }
 } catch (error) {
   console.error(error.message);
@@ -92,4 +143,12 @@ function parseArgs(values) {
     }
   }
   return result;
+}
+
+function csv(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

@@ -1677,3 +1677,24 @@ a biomechanically near-duplicate is discarded when the existing reference is equ
 ```
 
 The mutation path intentionally remains CLI-only until an authenticated/admin API exists.
+
+
+## Real-generation benchmark
+
+v0.25 adds a frozen 30-case, 10-category paid-provider benchmark that compares a plain Runway generation with the complete TikTokMoney audiovisual stack.
+
+Planning is safe and free by default:
+
+```bash
+npm run benchmark:real
+```
+
+Paid provider calls require an explicit acknowledgement:
+
+```bash
+VIDEO_PIPELINE_MODE=audiovisual npm run benchmark:real -- --case talking-head-01 --confirm-spend
+```
+
+The harness records success, retries, latency, independent QC signals and provider-reported spend when available, then emits anonymized review clips for blinded human scoring. The corpus is content-hashed and must not be edited in place.
+
+See [docs/REAL_GENERATION_BENCHMARK.md](docs/REAL_GENERATION_BENCHMARK.md) for the protocol, full-suite command, rating workflow and interpretation rules.

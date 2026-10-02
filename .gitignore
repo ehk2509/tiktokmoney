@@ -2,7 +2,9 @@
 .DS_Store
 node_modules/
 outputs/
-data/
+data/*
+!data/benchmarks/
+!data/benchmarks/**
 *.log
 
 .venv-pose/
