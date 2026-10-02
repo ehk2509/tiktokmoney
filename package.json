@@ -1,6 +1,6 @@
 {
   "name": "tiktokmoney",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "private": true,
   "description": "Prototype autonomous short-form video engine: trend scoring, creative generation, scene planning and FFmpeg rendering.",
   "type": "module",
