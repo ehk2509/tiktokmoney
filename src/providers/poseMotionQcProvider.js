@@ -31,12 +31,12 @@ export class PoseMotionQcProvider {
       };
     }
 
-    if (!this.enabled && !motionGuide.selectedReference?.poseSequence) {
+    if (!this.enabled) {
       return {
         enabled: false,
         applied: false,
         passed: true,
-        reason: 'pose extractor is not configured',
+        reason: 'pose extractor is not configured for generated video',
       };
     }
 
