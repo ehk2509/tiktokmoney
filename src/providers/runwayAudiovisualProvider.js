@@ -589,9 +589,14 @@ function buildAudiovisualPrompt({
   const multiSpeaker = new Set(
     dialogueTurns.map((turn) => turn.speakerCharacterId),
   ).size > 1;
-  const voiceoverOnly = timedTurns.length > 0 && timedTurns.every((turn) => (
-    characters.find((character) => character.id === turn.speakerCharacterId)?.onScreen === false
+  const speakerVisibility = timedTurns.map((turn) => (
+    characters.find((character) => character.id === turn.speakerCharacterId)?.onScreen !== false
   ));
+  const voiceoverOnly = speakerVisibility.length > 0 && speakerVisibility.every((visible) => !visible);
+  const mixedSpeakerVisibility = speakerVisibility.some(Boolean)
+    && speakerVisibility.some((visible) => !visible);
+  const visibleSpeakersOnly = speakerVisibility.length > 0
+    && speakerVisibility.every(Boolean);
   const castLines = characters.length
     ? characters.map((character) => (character.onScreen === false
       ? `${character.id.toUpperCase()} = ${character.name}, an unseen voiceover narrator who never appears in frame. Voice: ${character.voice?.description || ''}; delivery: ${character.voice?.delivery || ''}.`
@@ -628,18 +633,23 @@ function buildAudiovisualPrompt({
       : 'Dissolves and crossfades are forbidden.',
     multiSpeaker ? 'MULTI-SPEAKER DIALOGUE BLOCKING:' : 'EXACT SPOKEN DIALOGUE:',
     ...turnPlan,
-    multiSpeaker
-      ? 'Turn-taking is strict and non-overlapping. During each line, ONLY the named active speaker talks and moves their mouth as speech. Other characters listen/react silently with closed or naturally resting mouths. Never swap speakers, voices, faces, or lines.'
+    multiSpeaker && visibleSpeakersOnly
+      ? 'Turn-taking is strict and non-overlapping. During each line, ONLY the named active visible speaker talks and moves their mouth as speech. Other visible characters listen/react silently with closed or naturally resting mouths. Never swap speakers, voices, faces, or lines.'
       : '',
     voiceoverOnly
-      ? 'VOICEOVER: the dialogue is off-screen narration. No visible person speaks or lip-syncs; keep the picture on the described action.'
+      ? 'VOICEOVER: all dialogue is off-screen narration. No visible person speaks or lip-syncs; keep the picture on the described action.'
+      : '',
+    mixedSpeakerVisibility
+      ? 'MIXED DIALOGUE: visible-speaker turns must lip-sync only the named visible character. Off-screen narrator turns must remain disembodied voiceover; no visible character may mouth those lines. Keep turn ownership exact and non-overlapping.'
       : '',
     dialogueTrack
-      ? multiSpeaker
-        ? 'The supplied audio reference is the exact composed dialogue master containing the named characters in the exact turn order above. Treat it as the timing master. Preserve every word and assign each audible voice to the matching visible character.'
+      ? multiSpeaker && visibleSpeakersOnly
+        ? 'The supplied audio reference is the exact composed dialogue master containing the named visible characters in the exact turn order above. Treat it as the timing master. Preserve every word and assign each audible voice to the matching visible character.'
         : voiceoverOnly
-          ? 'The supplied audio reference contains the exact voiceover performance. Preserve those words verbatim as off-screen narration.'
-          : 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
+          ? 'The supplied audio reference contains the exact off-screen voiceover master. Preserve every word and keep every narrator off camera.'
+          : mixedSpeakerVisibility
+            ? 'The supplied audio reference is the exact mixed dialogue master. Preserve every word; synchronize visible-speaker turns to their matching visible character and keep off-screen narrator turns as voiceover with no visible mouth movement.'
+            : 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
       : 'Generate natural synchronized speech using the exact dialogue turns above. Do not paraphrase, omit, summarize, add words, swap voices, or create crosstalk.',
     `AMBIENCE: ${segment.ambience}.`,
     segment.soundEffects.length ? `SOUND EFFECTS: ${segment.soundEffects.join('; ')}.` : '',
