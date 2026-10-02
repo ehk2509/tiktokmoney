@@ -46,8 +46,32 @@ try {
     console.log(JSON.stringify(await app.listPlans({
       limit: options.limit ? Number(options.limit) : undefined,
     }), null, 2));
+  } else if (command === 'motion-library-build') {
+    const input = options.input || options.file;
+    const directory = options.dir || options.directory;
+    if (!input && !directory) {
+      throw new Error(
+        'Usage: node src/cli.js motion-library-build --input ./clip.mp4 --license "owned footage" --rights-confirmed',
+      );
+    }
+    if (options['rights-confirmed'] !== true) {
+      throw new Error('--rights-confirmed is required for motion-library ingestion');
+    }
+    const report = await app.buildMotionLibrary({
+      clips: input ? [{ localPath: input }] : [],
+      directory,
+      source: options.source || '',
+      license: options.license || '',
+      rightsConfirmed: true,
+      actionHint: options.action || null,
+      cameraMode: options.camera || 'any',
+      people: options.people ? Number(options.people) : 1,
+    });
+    console.log(JSON.stringify(report, null, 2));
+  } else if (command === 'motion-library') {
+    console.log(JSON.stringify(await app.listMotionLibrary(), null, 2));
   } else {
-    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities\n  research --topic "..."\n  plan [--budget 6] [--max-videos 3]\n  run-plan --id "plan_..."\n  plans');
+    console.log('TikTokMoney prototype\n\nCommands:\n  generate --topic "..." [--duration 35]\n  opportunities\n  research --topic "..."\n  plan [--budget 6] [--max-videos 3]\n  run-plan --id "plan_..."\n  plans\n  motion-library-build --input ./clip.mp4 --license "owned footage" --rights-confirmed [--action squat]\n  motion-library');
   }
 } catch (error) {
   console.error(error.message);

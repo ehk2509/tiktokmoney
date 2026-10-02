@@ -91,6 +91,14 @@
 - [x] Pose extraction cache with source-file invalidation
 - [x] Pose sidecar CI smoke test
 - [x] Pose capability health reporting
+- [x] Automatic owned/licensed motion-library builder
+- [x] Motion-energy auto segmentation
+- [x] Pose-based action classification
+- [x] Foot-contact annotation
+- [x] Motion-reference quality scoring
+- [x] Skeleton-based library deduplication
+- [x] Local reference clips via bounded Runway data URI
+- [x] CLI ingestion + read-only library API
 - [x] Deterministic skeleton trajectory / joint-angle / rhythm / contact QC
 - [x] Pose-summary prompt guidance from precomputed or extracted skeletons
 - [ ] Native provider pose skeleton / mocap transport when providers expose it
