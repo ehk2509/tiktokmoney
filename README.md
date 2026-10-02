@@ -35,8 +35,9 @@ Added as the product direction:
 
 - Node.js 22.9+
 - FFmpeg available on `PATH`
+- Optional local pose sidecar: Python 3.9-3.12; Docker includes it automatically
 
-No npm dependencies are currently required.
+No npm runtime dependencies are currently required.
 
 ## Quick start
 
@@ -1398,3 +1399,96 @@ Preserve canonical identity, wardrobe, location, keyframes and motion-region loc
 ```
 
 If no pose extractor is configured, this gate remains inactive and the v0.21 real-video Motion Guide + vision QC path continues unchanged.
+
+
+## Bundled MediaPipe pose sidecar
+
+v0.23 turns pose-motion QC from an integration hook into an installable local capability.
+
+For a local checkout:
+
+```bash
+npm run setup:pose
+```
+
+That command:
+
+1. finds a compatible Python interpreter
+2. creates `.venv-pose`
+3. installs the pinned MediaPipe sidecar requirements
+4. downloads the official Pose Landmarker Full task model
+5. runs a sidecar health check
+
+After setup, TikTokMoney auto-detects:
+
+```text
+.venv-pose/bin/python        # Linux/macOS
+.venv-pose/Scripts/python.exe # Windows
+```
+
+No `POSE_EXTRACTOR_COMMAND` is required.
+
+Docker is fully prewired: the image creates `/opt/tiktokmoney-pose`, installs MediaPipe, downloads the pose model, and exposes it automatically to the audiovisual pipeline.
+
+### Why the worker uses FFmpeg + MediaPipe
+
+The sidecar deliberately does not add OpenCV. FFmpeg already exists in the TikTokMoney runtime and handles frame decoding/sampling; MediaPipe only performs pose inference.
+
+The worker uses MediaPipe Pose Landmarker in VIDEO mode with monotonic frame timestamps and maps the 33 landmarks into TikTokMoney's normalized pose contract. MediaPipe's Pose Landmarker supports image/video/live-stream modes and exposes the expected body landmarks such as shoulders, elbows, wrists, hips, knees and ankles. 
+
+### Extraction cache
+
+Pose extraction is cached under:
+
+```text
+./data/pose-cache
+```
+
+The cache key includes:
+
+```text
+absolute video path
+file size
+mtime
+sample FPS
+extractor command
+extractor arguments
+schema version
+```
+
+So a reused real-motion reference is not reprocessed for every generated act, while changed video files invalidate automatically.
+
+Configure:
+
+```env
+POSE_CACHE_DIR=./data/pose-cache
+POSE_MODEL_PATH=./models/pose_landmarker_full.task
+POSE_EXTRACTOR_FPS=8
+```
+
+### Auto-enable behavior
+
+When `POSE_MOTION_QC_ENABLED` is unset, audiovisual mode automatically enables deterministic pose QC when the bundled sidecar is discovered.
+
+You can explicitly disable it:
+
+```env
+POSE_MOTION_QC_ENABLED=false
+```
+
+or replace the bundled worker with any compatible command via `POSE_EXTRACTOR_COMMAND`.
+
+The service health response now reports the effective state:
+
+```json
+{
+  "capabilities": {
+    "poseMotion": {
+      "enabled": true,
+      "extractorAvailable": true,
+      "extractorKind": "bundled-mediapipe",
+      "bundled": true
+    }
+  }
+}
+```
