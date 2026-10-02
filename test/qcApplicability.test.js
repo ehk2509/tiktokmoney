@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { resolveQcApplicability } from '../src/core/qcApplicability.js';
+import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
+import { TemplateLlmProvider } from '../src/providers.js';
 
 function baseScript(characters) {
   return { characters };
@@ -188,4 +190,63 @@ test('unknown speaker identity blocks visual speech QC instead of assuming visib
   assert.equal(result.lipSync.reason, 'unknown-speaker');
   assert.deepEqual(result.context.unknownSpeakerIds, ['missing']);
   assert.equal(result.poseMotion.applicable, false);
+});
+
+
+test('inapplicable QC modules do not grant extra regeneration attempts', async () => {
+  let generations = 0;
+  const audiovisual = {
+    async generateSegment({ segment }) {
+      generations += 1;
+      return {
+        type: 'ai-video',
+        localPath: `/fake/applicability-${segment.index}-${generations}.mp4`,
+        generationId: `applicability-${segment.index}-${generations}`,
+        prompt: segment.dialogue,
+      };
+    },
+  };
+  const realismQc = {
+    maxRegenerations: 0,
+    async evaluateScene() {
+      return {
+        passed: false,
+        issues: [{ code: 'realism-failure', severity: 'high', evidence: 'test failure' }],
+        regenerationGuidance: 'Do not retry: realism has no retry budget.',
+      };
+    },
+  };
+  const speakerTurnQc = {
+    maxRegenerations: 3,
+    async evaluate() {
+      throw new Error('speaker-turn QC must be inapplicable without timed multi-speaker turns');
+    },
+  };
+  const poseMotionQc = {
+    maxRegenerations: 3,
+    async evaluate() {
+      throw new Error('pose QC must be inapplicable without an applied motion reference');
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc,
+    speakerTurnQc,
+    poseMotionQc,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'retry applicability contract',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'AUDIOVISUAL_QC_FAILED');
+  assert.equal(generations, 1);
+  assert.equal(project.scenes[0].visualQcHistory[0].retryBudget, 0);
+  assert.equal(project.scenes[0].qcApplicability.poseMotion.reason, 'no-motion-reference');
 });
