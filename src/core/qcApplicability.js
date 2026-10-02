@@ -54,9 +54,10 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
   const segmentCharacterIds = Array.isArray(segment?.characterIds)
     ? segment.characterIds
     : [];
-  const visibleCharacterIds = segmentCharacterIds.filter(
-    (id) => characters.get(id)?.onScreen !== false,
-  );
+  const visibleCharacterIds = segmentCharacterIds.filter((id) => {
+    const character = characters.get(id);
+    return character && character.onScreen !== false;
+  });
   const hasVisibleHuman = visibleCharacterIds.length > 0
     || visibleSpeakerIds.length > 0;
 
