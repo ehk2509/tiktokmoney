@@ -85,6 +85,12 @@
 - [x] Motion-guide adherence QC + targeted regeneration
 - [x] Provider-neutral normalized pose / skeleton abstraction
 - [x] Pluggable external pose extractor command
+- [x] Bundled MediaPipe Pose Landmarker sidecar
+- [x] One-command local pose setup + Docker preinstall
+- [x] Automatic bundled-extractor discovery
+- [x] Pose extraction cache with source-file invalidation
+- [x] Pose sidecar CI smoke test
+- [x] Pose capability health reporting
 - [x] Deterministic skeleton trajectory / joint-angle / rhythm / contact QC
 - [x] Pose-summary prompt guidance from precomputed or extracted skeletons
 - [ ] Native provider pose skeleton / mocap transport when providers expose it
