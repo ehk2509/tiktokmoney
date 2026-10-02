@@ -10,7 +10,7 @@ const extractor = path.join(root, 'scripts', 'mediapipe_pose_extractor.py');
 const model = path.join(root, 'models', 'pose_landmarker_full.task');
 
 const systemPython = resolvePython();
-run(systemPython, ['-m', 'venv', venv]);
+run(systemPython.command, [...systemPython.prefixArgs, '-m', 'venv', venv]);
 
 const venvPython = process.platform === 'win32'
   ? path.join(venv, 'Scripts', 'python.exe')
@@ -42,15 +42,18 @@ console.log('TikTokMoney will auto-detect .venv-pose; no POSE_EXTRACTOR_COMMAND 
 function resolvePython() {
   const candidates = [
     process.env.PYTHON,
+    process.platform === 'win32' ? 'py -3.12' : 'python3.12',
+    process.platform === 'win32' ? 'py -3.11' : 'python3.11',
     process.platform === 'win32' ? 'python' : 'python3',
     'python',
   ].filter(Boolean);
 
   for (const candidate of candidates) {
-    const result = spawnSync(candidate, ['--version'], {
+    const [command, ...prefixArgs] = candidate.split(' ');
+    const result = spawnSync(command, [...prefixArgs, '--version'], {
       stdio: 'ignore',
     });
-    if (result.status === 0) return candidate;
+    if (result.status === 0) return { command, prefixArgs };
   }
   throw new Error('Python 3 was not found. Install Python 3.9-3.12 and rerun npm run setup:pose.');
 }
