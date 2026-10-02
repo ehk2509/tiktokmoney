@@ -10,10 +10,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         service: 'tiktokmoney',
-        version: process.env.npm_package_version || '0.23.0',
+        version: process.env.npm_package_version || '0.24.0',
         mode: app.mode,
         capabilities: app.capabilities,
       });
+    }
+
+    if (req.method === 'GET' && req.url === '/api/motion-library') {
+      return json(res, 200, { items: await app.listMotionLibrary() });
     }
 
     if (req.method === 'GET' && req.url === '/api/opportunities') {
