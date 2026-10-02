@@ -8,6 +8,7 @@ import { KeyframeDirector } from './keyframeDirector.js';
 import { MotionRegionDirector } from './motionRegionDirector.js';
 import { MotionGuideDirector } from './motionGuideDirector.js';
 import { MotionReferenceStore } from '../storage/motionReferenceStore.js';
+import { resolveQcApplicability } from './qcApplicability.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -185,6 +186,7 @@ export class AudiovisualPipeline {
         phonemeVisemeQc: generated.phonemeVisemeQc,
         speakerTurnQc: generated.speakerTurnQc,
         poseMotionQc: generated.poseMotionQc,
+        qcApplicability: generated.qcApplicability || null,
       });
 
       if (generated.failure) {
@@ -256,7 +258,7 @@ async function generateWithQc({
 }) {
   const qcHistory = [];
   let regeneration = null;
-  const maxRegenerations = Math.max(
+  const maxConfiguredRegenerations = Math.max(
     realismQc?.maxRegenerations || 0,
     dialogueQc?.maxRegenerations || 0,
     lipSyncQc?.maxRegenerations || 0,
@@ -269,7 +271,7 @@ async function generateWithQc({
     realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc,
   );
 
-  for (let attempt = 0; attempt <= maxRegenerations; attempt += 1) {
+  for (let attempt = 0; attempt <= maxConfiguredRegenerations; attempt += 1) {
     const asset = await provider.generateSegment({
       segment,
       productionScript,
@@ -309,24 +311,24 @@ async function generateWithQc({
       motionRegionDirection: segment.motionRegionDirection || null,
     };
 
-    const realism = realismQc
+    const applicability = resolveQcApplicability({ segment, productionScript, asset });
+
+    const realism = realismQc && applicability.realism.applicable
       ? await realismQc.evaluateScene(sceneLike, asset, { previousAsset, storyBible })
       : null;
 
     const speaker = productionScript.characters.find(
       (character) => character.id === segment.speakerCharacterId,
     ) || null;
-    // An unseen voiceover narrator has no mouth on screen, so visual speech checks do not apply.
-    const visibleSpeech = speaker?.onScreen !== false;
 
-    const dialogue = dialogueQc
+    const dialogue = dialogueQc && applicability.dialogue.applicable
       ? await dialogueQc.evaluate(asset, {
         expectedText: segment.dialogue,
         language: speaker?.voice?.languageCode || null,
       })
       : null;
 
-    const lipSync = lipSyncQc && visibleSpeech
+    const lipSync = lipSyncQc && applicability.lipSync.applicable
       ? dialogue?.transcription
         ? await lipSyncQc.evaluate(asset, {
           transcription: dialogue.transcription,
@@ -347,7 +349,7 @@ async function generateWithQc({
         }
       : null;
 
-    const deepLipSync = deepLipSyncQc && visibleSpeech
+    const deepLipSync = deepLipSyncQc && applicability.deepLipSync.applicable
       ? await deepLipSyncQc.evaluate(asset, {
         transcription: dialogue?.transcription || null,
         expectedText: segment.dialogue,
@@ -357,21 +359,18 @@ async function generateWithQc({
     const speakerTurns = Array.isArray(asset.dialogueTrack?.turns)
       ? asset.dialogueTrack.turns
       : [];
-    const speakerTurn = speakerTurnQc && new Set(
-      speakerTurns.map((turn) => turn.speakerCharacterId),
-    ).size > 1 && speakerTurns.every((turn) => productionScript.characters
-      .find((character) => character.id === turn.speakerCharacterId)?.onScreen !== false)
+    const speakerTurn = speakerTurnQc && applicability.speakerTurn.applicable
       ? await speakerTurnQc.evaluate(asset, {
         dialogueTurns: speakerTurns,
         characters: productionScript.characters,
       })
       : null;
 
-    const poseMotion = poseMotionQc
+    const poseMotion = poseMotionQc && applicability.poseMotion.applicable
       ? await poseMotionQc.evaluate(asset, { segment })
       : null;
 
-    const phonemeViseme = phonemeVisemeQc && visibleSpeech
+    const phonemeViseme = phonemeVisemeQc && applicability.phonemeViseme.applicable
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
           transcription: dialogue.transcription,
@@ -394,6 +393,15 @@ async function generateWithQc({
     const passed = [realism, dialogue, lipSync, deepLipSync, phonemeViseme, speakerTurn, poseMotion]
       .filter(Boolean)
       .every((result) => result.passed);
+    const retryBudget = passed ? 0 : Math.max(
+      realism && !realism.passed ? realismQc?.maxRegenerations || 0 : 0,
+      dialogue && !dialogue.passed ? dialogueQc?.maxRegenerations || 0 : 0,
+      lipSync && !lipSync.passed ? lipSyncQc?.maxRegenerations || 0 : 0,
+      deepLipSync && !deepLipSync.passed ? deepLipSyncQc?.maxRegenerations || 0 : 0,
+      phonemeViseme && !phonemeViseme.passed ? phonemeVisemeQc?.maxRegenerations || 0 : 0,
+      speakerTurn && !speakerTurn.passed ? speakerTurnQc?.maxRegenerations || 0 : 0,
+      poseMotion && !poseMotion.passed ? poseMotionQc?.maxRegenerations || 0 : 0,
+    );
 
     const issues = [
       ...prefixIssues(realism?.issues, 'realism'),
@@ -436,6 +444,8 @@ async function generateWithQc({
       poseMotion,
       issues,
       regenerationGuidance,
+      applicability,
+      retryBudget,
     };
     qcHistory.push(historyEntry);
 
@@ -451,6 +461,7 @@ async function generateWithQc({
           phonemeVisemeQc: phonemeViseme,
           speakerTurnQc: speakerTurn,
           poseMotionQc: poseMotion,
+          qcApplicability: applicability,
         },
         qcHistory,
         dialogueVerification: dialogue,
@@ -459,12 +470,13 @@ async function generateWithQc({
         phonemeVisemeQc: phonemeViseme,
         speakerTurnQc: speakerTurn,
         poseMotionQc: poseMotion,
+        qcApplicability: applicability,
         failure: null,
         failureStatus: null,
       };
     }
 
-    if (attempt < maxRegenerations) {
+    if (attempt < retryBudget) {
       regeneration = {
         attempt: attempt + 1,
         guidance: regenerationGuidance,
@@ -496,6 +508,7 @@ async function generateWithQc({
       phonemeVisemeQc: phonemeViseme,
       speakerTurnQc: speakerTurn,
       poseMotionQc: poseMotion,
+      qcApplicability: applicability,
       failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
       failureStatus,
     };
