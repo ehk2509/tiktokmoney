@@ -85,7 +85,13 @@ The manifest records:
 - provider task count
 - provider-reported USD cost or credits when the API exposes them
 
-Billing values are never guessed. If a provider task response contains no explicit cost or credit field, spend remains `null` / `unavailable`.
+Billing values are never guessed. The harness records observed provider spend separately from complete spend. A USD total is authoritative only when every observed audiovisual-provider task reports USD billing and there are no configured paid full-stack components outside benchmark instrumentation. Partial billing stays visible as observed spend, but `totalProviderSpendUsd` and cost-per-publishable remain `null`.
+
+Full-stack runs can also use paid LLM, transcription, realism, lip-sync or speaker-turn services. Until those components expose benchmark billing telemetry, the manifest lists them as untracked cost components and does not claim a complete full-stack cost.
+
+## Final-render requirement
+
+Paid evidence runs require final rendering. `--no-render` is rejected because the full-stack arm can contain multiple accepted scenes; rating only the first scene would make the blinded comparison non-equivalent to the complete baseline video.
 
 ## Outputs and crash recovery
 
@@ -118,7 +124,7 @@ The `review/sample_###.mp4` names hide whether a clip is baseline or full-stack.
 - `motionFidelityScore`: 1–5
 - `notes`: optional text
 
-Use `null` only when a score is genuinely not applicable. A failed generation counts against publishability even though there is no artifact to rate.
+Use `null` only when a score is genuinely not applicable. Missing dimensions remain excluded from averages rather than being coerced to zero. Scores must be integers from 1 to 5, `publishable` must be boolean or null, sample IDs and case/arm ratings must be unique, and rating files must match the benchmark run ID. A failed generation counts against publishability even though there is no artifact to rate.
 
 After review:
 

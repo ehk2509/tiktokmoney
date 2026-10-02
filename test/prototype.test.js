@@ -3092,8 +3092,114 @@ test('audiovisual pipeline skips visual speech QC for an off-screen voiceover na
     assert.equal(project.scenes[0].qcApplicability.lipSync.applicable, false);
     assert.equal(project.scenes[0].qcApplicability.lipSync.reason, 'offscreen-voiceover');
     assert.equal(project.scenes[0].qcApplicability.poseMotion.reason, 'no-visible-human');
-    assert.match(prompts[0], /VOICEOVER: the dialogue is off-screen narration/);
+    assert.match(prompts[0], /VOICEOVER: all dialogue is off-screen narration/);
     assert.doesNotMatch(prompts[0], /synchronize the visible speaker/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('Runway mixed visible and off-screen dialogue prompt keeps voice ownership non-contradictory', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-mixed-voiceover-'));
+  let prompt = '';
+  const provider = new RunwayAudiovisualProvider({
+    apiKey: 'runway-key',
+    assetDir: dir,
+    dialogueMode: 'native',
+    pollIntervalMs: 0,
+    maxPolls: 2,
+    sleepImpl: async () => {},
+    fetchImpl: async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith('/text_to_video')) {
+        prompt = JSON.parse(options.body).promptText;
+        return jsonResponse({ id: 'mixed-task' });
+      }
+      if (target.endsWith('/tasks/mixed-task')) {
+        return jsonResponse({
+          id: 'mixed-task',
+          status: 'SUCCEEDED',
+          output: ['https://cdn.example/mixed.mp4'],
+        });
+      }
+      if (target === 'https://cdn.example/mixed.mp4') {
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new TextEncoder().encode('mixed').buffer,
+        };
+      }
+      throw new Error(`unexpected request: ${target}`);
+    },
+  });
+
+  const productionScript = {
+    characters: [
+      {
+        id: 'host',
+        name: 'Host',
+        description: 'Visible presenter.',
+        physicalTraits: 'Natural appearance.',
+        wardrobe: 'Neutral shirt.',
+        onScreen: true,
+        voice: { description: 'clear host', delivery: 'natural' },
+      },
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        description: 'Unseen narrator.',
+        physicalTraits: '',
+        wardrobe: '',
+        onScreen: false,
+        voice: { description: 'documentary voice', delivery: 'calm' },
+      },
+    ],
+    locations: [{
+      id: 'room',
+      name: 'Room',
+      description: 'A real room.',
+      lighting: 'Daylight.',
+      fixedElements: ['table'],
+    }],
+    visualStyle: {
+      description: 'Photorealistic.',
+      cameraRules: 'Natural camera.',
+      lightingRules: 'Stable exposure.',
+    },
+    audioDirection: {
+      mix: 'Clear dialogue.',
+      musicPolicy: 'No music.',
+    },
+  };
+  const segment = {
+    index: 0,
+    purpose: 'explain',
+    durationSeconds: 6,
+    speakerCharacterId: 'host',
+    characterIds: ['host', 'narrator'],
+    locationId: 'room',
+    dialogue: 'Look here. Notice what changes next.',
+    dialogueTurns: [
+      { turnIndex: 0, speakerCharacterId: 'host', text: 'Look here.' },
+      { turnIndex: 1, speakerCharacterId: 'narrator', text: 'Notice what changes next.' },
+    ],
+    action: 'The host gestures, then the camera stays on the demonstration.',
+    camera: 'Medium shot.',
+    ambience: 'Quiet room.',
+    soundEffects: [],
+    music: '',
+    editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+  };
+
+  try {
+    await provider.generateSegment({ segment, productionScript, projectId: 'mixed-voiceover' });
+
+    assert.match(prompt, /MIXED DIALOGUE:/);
+    assert.match(prompt, /Off-screen narrator turns must remain disembodied voiceover/i);
+    assert.doesNotMatch(prompt, /assign each audible voice to the matching visible character/i);
+    assert.doesNotMatch(prompt, /ONLY the named active visible speaker talks/i);
+    assert.doesNotMatch(prompt, /VOICEOVER: all dialogue is off-screen narration/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3867,7 +3973,7 @@ test('Runway audiovisual provider composes distinct speaker voices into one WAN 
           assert.match(body.promptText, /MULTI-SPEAKER DIALOGUE BLOCKING/);
           assert.match(body.promptText, /ALEX says exactly/);
           assert.match(body.promptText, /MAYA says exactly/);
-          assert.match(body.promptText, /ONLY the named active speaker talks/i);
+          assert.match(body.promptText, /ONLY the named active visible speaker talks/i);
           return jsonResponse({ id: 'video-task' });
         }
         if (target.endsWith('/tasks/video-task')) {

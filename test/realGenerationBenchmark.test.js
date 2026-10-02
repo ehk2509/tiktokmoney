@@ -127,6 +127,34 @@ test('full-stack metric extraction records retries and independent QC signals', 
   assert.equal(metrics.realismScore, 85);
 });
 
+test('benchmark metrics ignore missing values instead of coercing null to zero', () => {
+  const metrics = extractFullStackMetrics({
+    status: 'RENDERED',
+    publishability: { passed: true },
+    scenes: [
+      {
+        visualQcHistory: [{ passed: true, realism: { overallScore: 90 } }],
+        dialogueVerification: null,
+        deepLipSyncQc: null,
+        lipSyncQc: null,
+        poseMotionQc: null,
+      },
+      {
+        visualQcHistory: [{ passed: true, realism: { overallScore: 94 } }],
+        dialogueVerification: { wer: 0.1 },
+        deepLipSyncQc: null,
+        lipSyncQc: { score: 0.8 },
+        poseMotionQc: { overallScore: 88 },
+      },
+    ],
+  });
+
+  assert.equal(metrics.dialogueWer, 0.1);
+  assert.equal(metrics.lipSyncScore, 0.8);
+  assert.equal(metrics.poseFidelity, 88);
+  assert.equal(metrics.realismScore, 92);
+});
+
 test('benchmark summary combines failures, human ratings and actual spend conservatively', () => {
   const run = {
     runId: 'test-run',
@@ -138,13 +166,13 @@ test('benchmark summary combines failures, human ratings and actual spend conser
           success: true,
           artifactPath: 'a-baseline.mp4',
           latencyMs: 100,
-          spend: { costUsd: 1 },
+          spend: { costUsd: 1, costUsdObserved: 1, costUsdComplete: true },
         },
         full: {
           success: true,
           artifactPath: 'a-full.mp4',
           latencyMs: 200,
-          spend: { costUsd: 2 },
+          spend: { costUsd: 2, costUsdObserved: 2, costUsdComplete: true },
           metrics: { firstPassSuccess: true, finalSuccess: true, retryCount: 0 },
         },
       },
@@ -154,13 +182,13 @@ test('benchmark summary combines failures, human ratings and actual spend conser
           success: false,
           artifactPath: null,
           latencyMs: 120,
-          spend: { costUsd: 1 },
+          spend: { costUsd: 1, costUsdObserved: 1, costUsdComplete: true },
         },
         full: {
           success: true,
           artifactPath: 'b-full.mp4',
           latencyMs: 250,
-          spend: { costUsd: 2 },
+          spend: { costUsd: 2, costUsdObserved: 2, costUsdComplete: true },
           metrics: { firstPassSuccess: false, finalSuccess: true, retryCount: 1 },
         },
       },
@@ -197,6 +225,95 @@ test('benchmark summary combines failures, human ratings and actual spend conser
   assert.equal(summary.full.costPerHumanPublishableVideoUsd, 2);
   assert.equal(summary.ratings.expected, 3);
   assert.equal(summary.ratings.complete, true);
+});
+
+test('benchmark summary rejects invalid or duplicate human ratings', () => {
+  const run = {
+    runId: 'rating-validation',
+    pairs: [{
+      caseId: 'a',
+      baseline: { success: true, artifactPath: 'a-baseline.mp4', latencyMs: 10 },
+      full: {
+        success: true,
+        artifactPath: 'a-full.mp4',
+        latencyMs: 10,
+        metrics: { firstPassSuccess: true, finalSuccess: true, retryCount: 0 },
+      },
+    }],
+  };
+
+  assert.throws(
+    () => summarizeBenchmarkRun(run, {
+      ratings: [{
+        caseId: 'a',
+        arm: 'baseline',
+        publishable: true,
+        realismScore: 99,
+        identityConsistencyScore: null,
+        dialogueAccuracyScore: 4,
+        motionFidelityScore: 3,
+      }],
+    }),
+    /realismScore must be an integer from 1 to 5 or null/,
+  );
+
+  const duplicate = {
+    caseId: 'a',
+    arm: 'baseline',
+    publishable: true,
+    realismScore: 4,
+    identityConsistencyScore: null,
+    dialogueAccuracyScore: 4,
+    motionFidelityScore: 3,
+  };
+  assert.throws(
+    () => summarizeBenchmarkRun(run, { ratings: [duplicate, { ...duplicate }] }),
+    /duplicate rating/,
+  );
+});
+
+test('benchmark summary keeps genuinely inapplicable human dimensions null', () => {
+  const run = {
+    runId: 'null-human-score',
+    pairs: [{
+      caseId: 'a',
+      baseline: { success: true, artifactPath: 'a-baseline.mp4', latencyMs: 10 },
+      full: {
+        success: true,
+        artifactPath: 'a-full.mp4',
+        latencyMs: 10,
+        metrics: { firstPassSuccess: true, finalSuccess: true, retryCount: 0 },
+      },
+    }],
+  };
+  const summary = summarizeBenchmarkRun(run, {
+    ratings: [{
+      caseId: 'a',
+      arm: 'full',
+      publishable: true,
+      realismScore: 5,
+      identityConsistencyScore: null,
+      dialogueAccuracyScore: 5,
+      motionFidelityScore: null,
+    }],
+  });
+
+  assert.equal(summary.full.humanRealismScore, 5);
+  assert.equal(summary.full.humanIdentityConsistencyScore, null);
+  assert.equal(summary.full.humanMotionFidelityScore, null);
+});
+
+test('live evidence benchmark refuses partial-scene no-render review artifacts', async () => {
+  await assert.rejects(
+    runRealGenerationBenchmark({
+      suitePath,
+      app: { mode: 'audiovisual' },
+      confirmSpend: true,
+      render: false,
+      limit: 1,
+    }),
+    /requires final rendering/,
+  );
 });
 
 test('live benchmark emits blinded review aliases and keeps arm identity in a separate key', async () => {
@@ -244,7 +361,7 @@ test('live benchmark emits blinded review aliases and keeps arm identity in a se
           id,
           status: 'SUCCEEDED',
           output: ['https://example.invalid/' + id + '.mp4'],
-          usage: { costUsd: 0.5 },
+          ...(String(id).includes('unbilled') ? {} : { usage: { costUsd: 0.5 } }),
         };
       },
       async download(_url, destination) {
@@ -259,6 +376,7 @@ test('live benchmark emits blinded review aliases and keeps arm identity in a se
         audiovisual: provider,
         async generate() {
           await provider.wait('full-task');
+          await provider.wait('full-unbilled-task');
           await writeFile(fullArtifact, 'full');
           return {
             id: 'vid-test',
@@ -294,6 +412,12 @@ test('live benchmark emits blinded review aliases and keeps arm identity in a se
     assert.ok(blind.samples.every((sample) => !Object.hasOwn(sample, 'arm')));
     assert.deepEqual(new Set(key.samples.map((item) => item.arm)), new Set(['baseline', 'full']));
     assert.ok(blind.samples.every((sample) => path.basename(sample.artifactPath).startsWith('sample_')));
+    assert.equal(result.run.pairs[0].baseline.spend.costUsdComplete, true);
+    assert.equal(result.run.pairs[0].full.spend.costUsdComplete, false);
+    assert.equal(result.run.pairs[0].full.spend.costUsd, null);
+    assert.equal(result.run.pairs[0].full.spend.costUsdObserved, 0.5);
+    assert.equal(result.run.summary.full.totalProviderSpendUsd, null);
+    assert.ok(result.run.summary.full.observedProviderSpendUsd > 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
