@@ -14,3 +14,20 @@ jobs:
         with:
           node-version: 22
       - run: npm test
+
+  pose-sidecar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r scripts/pose-sidecar-requirements.txt
+      - run: python -m py_compile scripts/mediapipe_pose_extractor.py
+      - run: |
+          python scripts/mediapipe_pose_extractor.py \
+            --download-model-only \
+            --model /tmp/pose_landmarker_full.task
+          python scripts/mediapipe_pose_extractor.py \
+            --check \
+            --model /tmp/pose_landmarker_full.task
