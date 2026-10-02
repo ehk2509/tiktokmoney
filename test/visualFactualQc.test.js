@@ -103,6 +103,36 @@ test('visual factual QC passes ambiguous or generic footage without pretending i
   assert.deepEqual(result.issues, []);
 });
 
+test('visual factual QC treats a low score with no contradictions as a warning only', async () => {
+  const provider = providerReturning({
+    applicable: true,
+    uncertain: false,
+    score: 72,
+    contradictions: [],
+    summary: 'The clip shows smoke streamlines adhering smoothly to the upper surface of the airfoil. The narration previews what breaks when angle increases, which is not shown yet.',
+  });
+
+  const result = await provider.evaluate(
+    { localPath: '/fake/airfoil.mp4', durationSeconds: 6 },
+    {
+      narration: 'Watch this airflow cling to the wing—then see what breaks when angle increases.',
+      action: 'Smoke streamlines adhere smoothly to the upper surface of an airfoil inside a wind tunnel.',
+      purpose: 'hook',
+      onScreenLabels: [
+        { text: 'AIRFLOW' },
+        { text: 'ANGLE INCREASES' },
+      ],
+    },
+  );
+
+  assert.equal(result.passed, true);
+  assert.equal(result.score, 72);
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, 'visual-factual-consistency-low');
+  assert.equal(result.regenerationGuidance, '');
+});
+
 test('visual factual QC ignores low-confidence speculative contradictions', async () => {
   const provider = providerReturning({
     applicable: true,
