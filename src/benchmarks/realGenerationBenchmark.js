@@ -99,6 +99,19 @@ export async function runRealGenerationBenchmark({
     startedAt: now().toISOString(),
     finishedAt: null,
     render,
+    runtime: {
+      packageVersion: process.env.npm_package_version || null,
+      nodeVersion: process.version,
+      pipelineMode: app.mode,
+      audiovisualProvider: provider.constructor?.name || null,
+      audiovisualModel: provider.model || null,
+      audiovisualRatio: provider.ratio || null,
+      dialogueMode: provider.dialogueMode || null,
+      llmModel: process.env.LLM_MODEL || null,
+      creativeJudgeModel: process.env.CREATIVE_JUDGE_MODEL || null,
+      realismQcModel: process.env.REALISM_QC_MODEL || null,
+      gitCommit: process.env.TIKTOKMONEY_COMMIT || process.env.GITHUB_SHA || null,
+    },
     pairs: [],
   };
 
@@ -526,6 +539,7 @@ async function createBlindedReviewPack({ run, runDir }) {
       candidates.push({
         caseId: pair.caseId,
         category: pair.category,
+        topic: pair.topic,
         arm,
         artifactPath: result.artifactPath,
         sortKey: crypto.createHash('sha256')
@@ -554,6 +568,7 @@ async function createBlindedReviewPack({ run, runDir }) {
     samples.push({
       sampleId,
       category: candidate.category,
+      topic: candidate.topic,
       artifactPath: reviewPath,
       publishable: null,
       realismScore: null,
