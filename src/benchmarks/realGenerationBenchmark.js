@@ -219,6 +219,9 @@ export async function summarizeBenchmarkFiles({
   if (ratingsPath) {
     const parsed = JSON.parse(await readFile(ratingsPath, 'utf8'));
     if (Array.isArray(parsed.ratings)) {
+      if (parsed.runId !== run.runId) {
+        throw new Error('ratings runId does not match benchmark manifest');
+      }
       ratings = parsed.ratings;
     } else if (Array.isArray(parsed.samples)) {
       const keyPath = ratingKeyPath || path.join(path.dirname(ratingsPath), 'rating-key.json');
