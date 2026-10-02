@@ -257,6 +257,7 @@ export class OpenAICompatibleLlmProvider {
       '- No meta-language such as "a strong explanation should" or "the viewer should".',
       '- Keep each segment between 4 and 15 seconds so exact dialogue audio can be used as a model reference.',
       '- Prefer 3-5 segments for a 30-45 second video.',
+      '- Spoken audio must fit inside its segment: across all dialogueTurns, use at most 2 words per second of durationSeconds (an 8 second segment allows at most 16 words), and count pauses toward the budget.',
       '- A segment may contain 1-3 speaking characters and at most 5 ordered dialogueTurns.',
       '- Use dialogueTurns for multi-speaker exchanges. Each turn must name a valid character id and contain exact spoken words.',
       '- dialogue is only the combined backward-compatible text; dialogueTurns are authoritative for speaker ownership.',
