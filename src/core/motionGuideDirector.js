@@ -1,3 +1,5 @@
+import { poseSummaryToPrompt } from './poseMotion.js';
+
 const ACTION_RULES = [
   ['running', /\brun(?:s|ning)?\b|\bsprint(?:s|ing)?\b|\bjog(?:s|ging)?\b/i],
   ['walking', /\bwalk(?:s|ing)?\b|\bstep(?:s|ping)?\b/i],
@@ -208,7 +210,10 @@ export function buildMotionGuidePromptBlock(segment) {
     'Do NOT copy the reference performer identity, face, apparent age, body appearance, clothing, location, lighting, background, color palette or camera styling unless those already match the canonical scene.',
     'Canonical character identity, wardrobe, location, keyframes, dialogue and visual style remain authoritative.',
     'Match important contact events and body timing from the reference while respecting the scene-specific motion-region locks.',
-  ].join(' ');
+    segment.motionGuideDirection?.poseSummary
+      ? `POSE/SKELETON ABSTRACTION: ${poseSummaryToPrompt(segment.motionGuideDirection.poseSummary)}`
+      : '',
+  ].filter(Boolean).join(' ');
 }
 
 export function buildMotionGuideQcContract(scene, asset) {
