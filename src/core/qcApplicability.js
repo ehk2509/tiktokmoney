@@ -51,6 +51,16 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
     && allSpeakingCharactersKnown
     && offScreenSpeakerIds.length === 0;
   const visibleSpeakerCount = new Set(visibleSpeakerIds).size;
+  const timedTurns = turns.filter((turn) => {
+    const start = Number(turn.start);
+    const end = Number(turn.end);
+    return Number.isFinite(start) && Number.isFinite(end) && end > start;
+  });
+  const timedVisibleSpeakerCount = new Set(
+    timedTurns
+      .map((turn) => turn.speakerCharacterId)
+      .filter((id) => visibleSpeakerIds.includes(id)),
+  ).size;
   const segmentCharacterIds = Array.isArray(segment?.characterIds)
     ? segment.characterIds
     : [];
@@ -60,6 +70,8 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
   });
   const hasVisibleHuman = visibleCharacterIds.length > 0
     || visibleSpeakerIds.length > 0;
+  const hasMotionReference = asset?.motionGuideMode === 'reference-video'
+    && Boolean(asset?.motionGuide?.localPath);
 
   const visualSpeechReason = !hasDialogue
     ? 'no-dialogue'
@@ -79,6 +91,9 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
       offScreenSpeakerIds,
       unknownSpeakerIds,
       visibleCharacterIds,
+      timedTurnCount: timedTurns.length,
+      timedVisibleSpeakerCount,
+      hasMotionReference,
     },
     realism: contract(true),
     dialogue: contract(hasDialogue, 'no-dialogue'),
@@ -86,14 +101,25 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
     deepLipSync: contract(allSpeakersVisible && hasDialogue, visualSpeechReason),
     phonemeViseme: contract(allSpeakersVisible && hasDialogue, visualSpeechReason),
     speakerTurn: contract(
-      hasDialogue && visibleSpeakerCount > 1 && allSpeakersVisible,
+      hasDialogue
+        && visibleSpeakerCount > 1
+        && allSpeakersVisible
+        && timedTurns.length >= 2
+        && timedVisibleSpeakerCount > 1,
       !hasDialogue
         ? 'no-dialogue'
         : !allSpeakersVisible
           ? visualSpeechReason
-          : 'fewer-than-two-visible-speakers',
-      { visibleSpeakerCount },
+          : visibleSpeakerCount < 2
+            ? 'fewer-than-two-visible-speakers'
+            : timedTurns.length < 2 || timedVisibleSpeakerCount < 2
+              ? 'speaker-turn-timing-missing'
+              : null,
+      { visibleSpeakerCount, timedTurnCount: timedTurns.length, timedVisibleSpeakerCount },
     ),
-    poseMotion: contract(hasVisibleHuman, 'no-visible-human'),
+    poseMotion: contract(
+      hasVisibleHuman && hasMotionReference,
+      !hasVisibleHuman ? 'no-visible-human' : 'no-motion-reference',
+    ),
   };
 }
