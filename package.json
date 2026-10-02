@@ -21,4 +21,4 @@
     "benchmark:real": "node --env-file-if-exists=.env src/cli.js benchmark-real",
     "benchmark:summary": "node --env-file-if-exists=.env src/cli.js benchmark-summary"
   }
-}\n
+}
