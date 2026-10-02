@@ -116,7 +116,7 @@ try {
       '  run-plan --id "plan_..."',
       '  plans',
       '  benchmark-real [--case talking-head-01] [--limit 3]',
-      '  benchmark-real --confirm-spend [--case talking-head-01] [--no-render]',
+      '  benchmark-real --confirm-spend [--case talking-head-01]',
       '  benchmark-summary --run ./outputs/benchmarks/<run>/manifest.json [--ratings ./ratings-blind.json]',
       '  motion-library-build --input ./clip.mp4 --license "owned footage" --rights-confirmed [--action squat]',
       '  motion-library',

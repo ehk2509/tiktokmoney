@@ -76,6 +76,9 @@ export async function runRealGenerationBenchmark({
   if (!app || app.mode !== 'audiovisual') {
     throw new Error('live benchmark requires VIDEO_PIPELINE_MODE=audiovisual');
   }
+  if (!render) {
+    throw new Error('live evidence benchmark requires final rendering; --no-render would rate only partial scene artifacts');
+  }
   const provider = app.pipeline && app.pipeline.audiovisual;
   if (!provider || typeof provider.createTask !== 'function'
       || typeof provider.wait !== 'function' || typeof provider.download !== 'function') {
@@ -137,7 +140,10 @@ export async function runRealGenerationBenchmark({
               model: asset.model,
             };
           });
-          baseline.spend = summarizeUsage(probe.snapshot());
+          baseline.spend = summarizeUsage(probe.snapshot(), {
+            scope: 'audiovisual-provider',
+            untrackedComponents: [],
+          });
         } else {
           full = await timedArm(async () => {
             const project = await app.pipeline.generate({
@@ -148,17 +154,19 @@ export async function runRealGenerationBenchmark({
               researchPacket: null,
             });
             const metrics = extractFullStackMetrics(project);
+            const artifactPath = project.render?.outputPath || null;
             return {
-              success: metrics.finalSuccess,
-              artifactPath: project.render && project.render.outputPath
-                ? project.render.outputPath
-                : firstScenePath(project.scenes),
+              success: metrics.finalSuccess && Boolean(artifactPath),
+              artifactPath,
               projectId: project.id || null,
               status: project.status || null,
               metrics,
             };
           });
-          full.spend = summarizeUsage(probe.snapshot());
+          full.spend = summarizeUsage(probe.snapshot(), {
+            scope: 'full-stack-provider-observation',
+            untrackedComponents: detectUntrackedCostComponents(app.pipeline),
+          });
         }
       }
 
@@ -210,10 +218,14 @@ export async function summarizeBenchmarkFiles({
   if (ratingsPath) {
     const parsed = JSON.parse(await readFile(ratingsPath, 'utf8'));
     if (Array.isArray(parsed.ratings)) {
+      if (parsed.runId !== run.runId) {
+        throw new Error('ratings runId does not match benchmark manifest');
+      }
       ratings = parsed.ratings;
     } else if (Array.isArray(parsed.samples)) {
       const keyPath = ratingKeyPath || path.join(path.dirname(ratingsPath), 'rating-key.json');
       const key = JSON.parse(await readFile(keyPath, 'utf8'));
+      validateBlindRatings({ run, ratingSheet: parsed, ratingKey: key });
       const keyBySample = new Map(
         (key.samples || []).map((item) => [String(item.sampleId), item]),
       );
@@ -242,6 +254,7 @@ export async function summarizeBenchmarkFiles({
 }
 
 export function summarizeBenchmarkRun(run, { ratings = [] } = {}) {
+  validateNormalizedRatings(run, ratings);
   const completedRatings = ratings.filter(
     (rating) => rating && typeof rating.publishable === 'boolean',
   );
@@ -298,7 +311,7 @@ export function summarizeBenchmarkRun(run, { ratings = [] } = {}) {
         && completedRatings.length === countRateableArtifacts(run),
     },
     notes: [
-      'Provider spend is treated as actual only when the provider task response exposes explicit USD cost or credits.',
+      'Provider spend is treated as complete only when every observed provider task reports billing and no configured paid component is outside benchmark instrumentation.',
       'Human ratings stay separate from TikTokMoney internal QC to avoid self-grading bias.',
       'Only compare runs with the same frozen suite hash.',
     ],
@@ -439,14 +452,29 @@ function instrumentProviderWait(provider, now) {
   let events = [];
   provider.wait = async (...args) => {
     const startedAt = now();
-    const task = await original(...args);
-    const usage = extractProviderUsage(task) || {};
-    events.push({
-      ...usage,
-      startedAt: startedAt.toISOString(),
-      finishedAt: now().toISOString(),
-    });
-    return task;
+    try {
+      const task = await original(...args);
+      const usage = extractProviderUsage(task) || {};
+      events.push({
+        ...usage,
+        startedAt: startedAt.toISOString(),
+        finishedAt: now().toISOString(),
+      });
+      return task;
+    } catch (error) {
+      events.push({
+        taskId: args[0] || null,
+        status: 'ERROR',
+        model: null,
+        costUsd: null,
+        credits: null,
+        providerReported: false,
+        error: error.message,
+        startedAt: startedAt.toISOString(),
+        finishedAt: now().toISOString(),
+      });
+      throw error;
+    }
   };
   return {
     reset() { events = []; },
@@ -470,15 +498,42 @@ async function timedArm(fn) {
   }
 }
 
-function summarizeUsage(events) {
+function summarizeUsage(events, {
+  scope = 'provider',
+  untrackedComponents = [],
+} = {}) {
   const cost = events.map((event) => event.costUsd).filter(Number.isFinite);
   const credits = events.map((event) => event.credits).filter(Number.isFinite);
+  const costUsdObserved = cost.length
+    ? round(cost.reduce((sum, value) => sum + value, 0), 6)
+    : null;
+  const creditsObserved = credits.length
+    ? round(credits.reduce((sum, value) => sum + value, 0), 6)
+    : null;
+  const costUsdComplete = events.length > 0
+    && cost.length === events.length
+    && untrackedComponents.length === 0;
+  const creditsComplete = events.length > 0
+    && credits.length === events.length
+    && untrackedComponents.length === 0;
   return {
+    scope,
     taskCount: events.length,
     providerReportedTaskCount: events.filter((event) => event.providerReported).length,
-    costUsd: cost.length ? round(cost.reduce((sum, value) => sum + value, 0), 6) : null,
-    credits: credits.length ? round(credits.reduce((sum, value) => sum + value, 0), 6) : null,
-    source: cost.length || credits.length ? 'provider-reported' : 'unavailable',
+    usdReportedTaskCount: cost.length,
+    creditReportedTaskCount: credits.length,
+    costUsdObserved,
+    costUsdComplete,
+    costUsd: costUsdComplete ? costUsdObserved : null,
+    creditsObserved,
+    creditsComplete,
+    credits: creditsComplete ? creditsObserved : null,
+    untrackedComponents: [...untrackedComponents],
+    source: costUsdComplete || creditsComplete
+      ? 'provider-reported-complete'
+      : cost.length || credits.length
+        ? 'provider-reported-partial'
+        : 'unavailable',
     events,
   };
 }
@@ -488,9 +543,18 @@ function aggregateArm(rows, isFull) {
   const ratings = rows.map((row) => row.rating).filter(Boolean);
   const rateable = rows.filter((row) => row.success && row.artifactPath).length;
   const publishable = ratings.filter((rating) => rating.publishable === true).length;
-  const costs = rows.map((row) => row.spend && row.spend.costUsd).filter(Number.isFinite);
-  const totalCost = costs.length === count && count
-    ? round(costs.reduce((sum, value) => sum + value, 0), 6)
+  const completeCosts = rows
+    .filter((row) => row.spend?.costUsdComplete === true)
+    .map((row) => row.spend.costUsd)
+    .filter(Number.isFinite);
+  const observedCosts = rows
+    .map((row) => row.spend?.costUsdObserved ?? row.spend?.costUsd)
+    .filter(Number.isFinite);
+  const totalCost = completeCosts.length === count && count
+    ? round(completeCosts.reduce((sum, value) => sum + value, 0), 6)
+    : null;
+  const observedCost = observedCosts.length
+    ? round(observedCosts.reduce((sum, value) => sum + value, 0), 6)
     : null;
   return {
     caseCount: count,
@@ -504,7 +568,9 @@ function aggregateArm(rows, isFull) {
     averageRetries: isFull ? average(rows.map((row) => row.metrics && row.metrics.retryCount)) : 0,
     averageLatencyMs: average(rows.map((row) => row.latencyMs)),
     totalProviderSpendUsd: totalCost,
-    spendCoverageRate: rate(costs.length, count),
+    observedProviderSpendUsd: observedCost,
+    spendCoverageRate: rate(completeCosts.length, count),
+    observedSpendCoverageRate: rate(observedCosts.length, count),
     humanRatingCoverageRate: rate(ratings.length, rateable),
     humanPublishableRate: rate(publishable, count),
     humanRealismScore: average(ratings.map((rating) => rating.realismScore)),
@@ -619,6 +685,98 @@ async function createBlindedReviewPack({ run, runDir }) {
   };
 }
 
+function detectUntrackedCostComponents(pipeline) {
+  const components = [];
+  const llm = pipeline?.productionScriptGenerator?.llm;
+  if (llm && llm.constructor?.name !== 'TemplateLlmProvider') components.push('llm');
+  if (pipeline?.realismQc) components.push('realism-qc');
+  if (pipeline?.dialogueQc) components.push('dialogue-qc');
+  if (pipeline?.lipSyncQc) components.push('lip-sync-qc');
+  if (pipeline?.speakerTurnQc) components.push('speaker-turn-qc');
+  if (pipeline?.visual) components.push('visual-reference-provider');
+  return [...new Set(components)];
+}
+
+function validateBlindRatings({ run, ratingSheet, ratingKey }) {
+  if (ratingSheet?.runId !== run?.runId) {
+    throw new Error('ratings runId does not match benchmark manifest');
+  }
+  if (ratingKey?.runId !== run?.runId) {
+    throw new Error('rating-key runId does not match benchmark manifest');
+  }
+  const samples = Array.isArray(ratingSheet?.samples) ? ratingSheet.samples : [];
+  const keySamples = Array.isArray(ratingKey?.samples) ? ratingKey.samples : [];
+  const keyBySample = new Map();
+  const validPairs = new Set();
+  for (const pair of run?.pairs || []) {
+    if (pair.baseline?.success && pair.baseline?.artifactPath) validPairs.add(pair.caseId + ':baseline');
+    if (pair.full?.success && pair.full?.artifactPath) validPairs.add(pair.caseId + ':full');
+  }
+  if (keySamples.length !== validPairs.size) {
+    throw new Error('rating-key sample count does not match rateable benchmark artifacts');
+  }
+  const seenPairs = new Set();
+  for (const item of keySamples) {
+    const sampleId = String(item?.sampleId || '');
+    if (!sampleId) throw new Error('rating-key contains a sample without sampleId');
+    if (keyBySample.has(sampleId)) throw new Error('duplicate rating-key sampleId: ' + sampleId);
+    if (!['baseline', 'full'].includes(item.arm)) throw new Error('invalid rating-key arm: ' + item.arm);
+    const pairKey = String(item.caseId) + ':' + item.arm;
+    if (!validPairs.has(pairKey)) throw new Error('rating-key points to a non-rateable artifact: ' + pairKey);
+    if (seenPairs.has(pairKey)) throw new Error('duplicate rating-key case/arm: ' + pairKey);
+    seenPairs.add(pairKey);
+    keyBySample.set(sampleId, item);
+  }
+  const seen = new Set();
+  for (const sample of samples) {
+    const sampleId = String(sample?.sampleId || '');
+    if (!sampleId || !keyBySample.has(sampleId)) {
+      throw new Error('unknown rating sampleId: ' + sampleId);
+    }
+    if (seen.has(sampleId)) throw new Error('duplicate rating sampleId: ' + sampleId);
+    seen.add(sampleId);
+    validateRatingValues(sample);
+  }
+}
+
+function validateNormalizedRatings(run, ratings) {
+  if (!Array.isArray(ratings)) throw new Error('ratings must be an array');
+  const validPairs = new Set();
+  for (const pair of run?.pairs || []) {
+    if (pair.baseline?.success && pair.baseline?.artifactPath) validPairs.add(pair.caseId + ':baseline');
+    if (pair.full?.success && pair.full?.artifactPath) validPairs.add(pair.caseId + ':full');
+  }
+  const seen = new Set();
+  for (const rating of ratings) {
+    if (!rating || typeof rating !== 'object') throw new Error('rating must be an object');
+    if (!['baseline', 'full'].includes(rating.arm)) throw new Error('invalid rating arm: ' + rating.arm);
+    const key = String(rating.caseId) + ':' + rating.arm;
+    if (!validPairs.has(key)) throw new Error('rating does not match a rateable artifact: ' + key);
+    if (seen.has(key)) throw new Error('duplicate rating for ' + key);
+    seen.add(key);
+    validateRatingValues(rating);
+  }
+}
+
+function validateRatingValues(rating) {
+  if (rating.publishable !== null && rating.publishable !== undefined
+      && typeof rating.publishable !== 'boolean') {
+    throw new Error('publishable must be boolean or null');
+  }
+  for (const field of [
+    'realismScore',
+    'identityConsistencyScore',
+    'dialogueAccuracyScore',
+    'motionFidelityScore',
+  ]) {
+    const value = rating[field];
+    if (value == null) continue;
+    if (!Number.isInteger(value) || value < 1 || value > 5) {
+      throw new Error(field + ' must be an integer from 1 to 5 or null');
+    }
+  }
+}
+
 function countRateableArtifacts(run) {
   let count = 0;
   for (const pair of run.pairs || []) {
@@ -629,7 +787,10 @@ function countRateableArtifacts(run) {
 }
 
 function average(values) {
-  const finite = values.map(Number).filter(Number.isFinite);
+  const finite = values
+    .filter((value) => value !== null && value !== undefined && value !== '')
+    .map(Number)
+    .filter(Number.isFinite);
   if (!finite.length) return null;
   return round(finite.reduce((sum, value) => sum + value, 0) / finite.length, 6);
 }
