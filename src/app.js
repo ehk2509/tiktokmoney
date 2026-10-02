@@ -5,6 +5,9 @@ import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
 import { DailyPlanStore } from './storage/dailyPlanStore.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
+import { MotionReferenceStore } from './storage/motionReferenceStore.js';
+import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
+import { PoseMotionExtractor } from './services/poseMotionExtractor.js';
 import { VideoPipeline } from './core/pipeline.js';
 import { AudiovisualPipeline } from './core/audiovisualPipeline.js';
 import {
@@ -35,6 +38,13 @@ export function createApp(overrides = {}) {
     process.env.DAILY_PLAN_PATH || './data/daily-plans.json',
   );
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
+  const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
+    process.env.MOTION_REFERENCE_LIBRARY_PATH || './data/motion-references.json',
+  );
+  const motionLibraryBuilder = overrides.motionLibraryBuilder || new MotionLibraryBuilder({
+    store: motionReferenceStore,
+    extractor: overrides.motionLibraryPoseExtractor || new PoseMotionExtractor(),
+  });
 
   let pipeline;
   const capabilities = {
@@ -124,6 +134,8 @@ export function createApp(overrides = {}) {
     pipeline,
     dailyPlanner,
     capabilities,
+    motionReferenceStore,
+    motionLibraryBuilder,
     async opportunities() {
       const items = await trends.list();
       return trendIntelligence ? items : rankOpportunities(items);
@@ -146,6 +158,12 @@ export function createApp(overrides = {}) {
     },
     async listPlans(options = {}) {
       return dailyPlanStore.listPlans(options);
+    },
+    async listMotionLibrary() {
+      return motionReferenceStore.list();
+    },
+    async buildMotionLibrary(options = {}) {
+      return motionLibraryBuilder.build(options);
     },
   };
 }
