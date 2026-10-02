@@ -59,7 +59,10 @@ export class OpenRouterRealismQcProvider {
       ? await this.frameSampler.sampleComparison(previousAsset.localPath, { durationSeconds: previousDuration })
       : [];
 
-    const motionRegionContract = buildMotionRegionQcContract(scene);
+    const motionRegionContract = asset.motionControlMode
+      && asset.motionControlMode !== 'off'
+      ? buildMotionRegionQcContract(scene)
+      : null;
     const prompt = buildPrompt({
       scene,
       asset,
@@ -187,6 +190,14 @@ export class OpenRouterRealismQcProvider {
       && motionRegionPassed
       && !criticalFailure;
 
+    const deterministicMotionGuidance = motionRegionVerified && !motionRegionPassed
+      ? buildMotionRegionGuidance(
+        motionRegionContract,
+        motionRegionScores,
+        this.motionRegionThreshold,
+      )
+      : '';
+
     return {
       provider: 'openrouter',
       model: this.model,
@@ -216,13 +227,17 @@ export class OpenRouterRealismQcProvider {
       temporalIssues,
       summary: stringOrEmpty(parsed?.summary),
       temporalSummary: stringOrEmpty(parsed?.temporalSummary),
-      regenerationGuidance: stringOrEmpty(parsed?.regenerationGuidance)
+      regenerationGuidance: [
+        stringOrEmpty(parsed?.regenerationGuidance),
+        deterministicMotionGuidance,
+      ].filter(Boolean).join(' ')
         || buildGuidance(
           allIssues,
           scores,
           temporalScores,
           motionRegionContract,
           motionRegionScores,
+          this.motionRegionThreshold,
         ),
       sampledFrames: frames.map(({ index, timestamp }) => ({ index, timestamp })),
       temporalFrames: temporalFrames.map(({ index, timestamp }) => ({ index, timestamp })),
@@ -459,6 +474,7 @@ function buildGuidance(
   temporalScores,
   motionRegionContract = null,
   motionRegionScores = null,
+  motionRegionThreshold = 84,
 ) {
   const severe = issues
     .filter((issue) => ['high', 'critical'].includes(issue.severity))
@@ -471,7 +487,7 @@ function buildGuidance(
 
   if (motionRegionContract && motionRegionScores) {
     const weakMotion = Object.entries(motionRegionScores)
-      .filter(([, score]) => score < 84)
+      .filter(([, score]) => score < motionRegionThreshold)
       .sort((a, b) => a[1] - b[1])
       .slice(0, 2)
       .map(([name]) => name);
@@ -493,6 +509,33 @@ function buildGuidance(
   const targets = [...weakestStatic, ...weakestTemporal].filter(Boolean);
 
   return `Improve ${targets.join(', ') || 'photorealism and temporal stability'} while preserving the scene content and canonical continuity.`;
+}
+
+function buildMotionRegionGuidance(contract, scores, threshold) {
+  if (!contract) return '';
+  const weak = Object.entries(scores || {})
+    .filter(([, score]) => score < threshold)
+    .sort((a, b) => a[1] - b[1])
+    .map(([name]) => name);
+  if (!weak.length) return '';
+
+  const locked = contract.lockedRegions
+    .map((item) => item.region)
+    .slice(0, 5)
+    .join(', ');
+  const allowed = contract.allowedMotion
+    .map((item) => item.region)
+    .slice(0, 5)
+    .join(', ');
+
+  return [
+    `MOTION REGION CORRECTION: fix ${weak.join(', ')}.`,
+    locked ? `Keep these regions stable: ${locked}.` : '',
+    allowed ? `Visible subject/environment motion is allowed only in: ${allowed}.` : '',
+    contract.cameraMoving
+      ? 'Preserve rigid scene geometry; allow only physically correct camera parallax outside moving regions.'
+      : 'Keep background anchors screen-space stable with no breathing, sliding, warping or decorative motion.',
+  ].filter(Boolean).join(' ');
 }
 
 function weakestNames(scores, count) {
