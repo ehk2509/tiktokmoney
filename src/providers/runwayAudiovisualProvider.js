@@ -6,6 +6,8 @@ import { buildRealismPromptBlock } from '../core/realismDirector.js';
 import { buildKeyframePrompts } from '../core/keyframeDirector.js';
 import { buildMotionRegionPromptBlock } from '../core/motionRegionDirector.js';
 import { buildMotionGuidePromptBlock } from '../core/motionGuideDirector.js';
+import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
+import { summarizePoseSequence } from '../core/poseMotion.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -27,6 +29,7 @@ export class RunwayAudiovisualProvider {
     pollIntervalMs = Number(process.env.RUNWAY_POLL_INTERVAL_MS || 2500),
     maxPolls = Number(process.env.RUNWAY_MAX_POLLS || 120),
     dialogueComposer = null,
+    poseExtractor = null,
     ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
     ffprobeBin = process.env.FFPROBE_BIN || 'ffprobe',
     fetchImpl = globalThis.fetch,
@@ -51,6 +54,7 @@ export class RunwayAudiovisualProvider {
     this.maxPolls = maxPolls;
     this.fetch = fetchImpl;
     this.sleep = sleepImpl;
+    this.poseExtractor = poseExtractor || new PoseMotionExtractor();
     this.dialogueComposer = dialogueComposer || new DialogueAudioComposer({
       ffmpegBin,
       ffprobeBin,
@@ -180,7 +184,13 @@ export class RunwayAudiovisualProvider {
     }
 
     const promptSegment = motionGuide
-      ? segment
+      ? {
+        ...segment,
+        motionGuideDirection: {
+          ...(segment.motionGuideDirection || {}),
+          poseSummary: motionGuide.poseSummary || null,
+        },
+      }
       : {
         ...segment,
         motionGuideDirection: {
@@ -331,10 +341,34 @@ export class RunwayAudiovisualProvider {
       await this.download(selected.url, localPath);
     }
 
+    let poseExtraction = null;
+    if (selected.poseSequence || this.poseExtractor?.available) {
+      try {
+        poseExtraction = await this.poseExtractor.extract(localPath, {
+          durationSeconds: selected.durationSeconds,
+          embeddedPoseSequence: selected.poseSequence || null,
+        });
+      } catch (error) {
+        poseExtraction = {
+          source: 'failed',
+          extractor: this.poseExtractor?.command || null,
+          sequence: null,
+          error: error.message,
+        };
+      }
+    }
+    const poseSummary = poseExtraction?.sequence?.frames?.length
+      ? summarizePoseSequence(poseExtraction.sequence)
+      : null;
+
     return {
       actionClass: segment.motionGuideDirection.actionClass,
       selectedReference: selected,
       localPath,
+      poseSource: poseExtraction?.source || 'none',
+      poseExtractor: poseExtraction?.extractor || null,
+      poseSummary,
+      poseError: poseExtraction?.error || null,
       projectId,
       segmentIndex: segment.index,
     };
