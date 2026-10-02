@@ -186,6 +186,7 @@ export class AudiovisualPipeline {
         phonemeVisemeQc: generated.phonemeVisemeQc,
         speakerTurnQc: generated.speakerTurnQc,
         poseMotionQc: generated.poseMotionQc,
+        qcApplicability: generated.qcApplicability || null,
       });
 
       if (generated.failure) {
@@ -502,6 +503,7 @@ async function generateWithQc({
       phonemeVisemeQc: phonemeViseme,
       speakerTurnQc: speakerTurn,
       poseMotionQc: poseMotion,
+      qcApplicability: applicability,
       failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
       failureStatus,
     };
