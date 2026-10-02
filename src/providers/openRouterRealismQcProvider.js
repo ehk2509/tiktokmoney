@@ -153,10 +153,14 @@ export class OpenRouterRealismQcProvider {
     const continuityPassed = identityContinuityPassed && locationContinuityPassed;
     const hasFirstKeyframe = Boolean(asset.keyframes?.first?.url);
     const hasLastKeyframe = Boolean(asset.keyframes?.last?.url);
+    const explicitKeyframeStartScore = parsed?.scores?.keyframeStartMatch;
+    const explicitKeyframeEndScore = parsed?.scores?.keyframeEndMatch;
     const keyframeStartPassed = !hasFirstKeyframe
-      || scores.keyframeStartMatch >= this.keyframeThreshold;
+      || (Number.isFinite(Number(explicitKeyframeStartScore))
+        && clampScore(explicitKeyframeStartScore) >= this.keyframeThreshold);
     const keyframeEndPassed = !hasLastKeyframe
-      || scores.keyframeEndMatch >= this.keyframeThreshold;
+      || (Number.isFinite(Number(explicitKeyframeEndScore))
+        && clampScore(explicitKeyframeEndScore) >= this.keyframeThreshold);
     const keyframeAdherencePassed = keyframeStartPassed && keyframeEndPassed;
     const passed = staticPassed
       && temporalPassed
@@ -276,8 +280,8 @@ function buildPrompt({
     '- materialRealism: skin, fabric, hair, metal, glass and surfaces have believable non-waxy texture and specular response.',
     '- cameraPhysics: lens perspective, handheld inertia, focus behavior and camera path feel physically operated rather than floating or impossible.',
     '- lightingNaturalism: illumination has believable source direction/falloff, natural exposure behavior and no uniform glossy AI sheen.',
-    '- keyframeStartMatch: when a FIRST KEYFRAME is supplied, the generated opening preserves its identity, pose/object state, framing, geometry and lighting.',
-    '- keyframeEndMatch: when a LAST KEYFRAME is supplied, the generated ending reaches that physically plausible state without identity/location drift.',
+    '- keyframeStartMatch: when a FIRST KEYFRAME is supplied, the generated opening preserves its identity, pose/object state, framing, geometry and lighting. If no first keyframe is supplied, score 100.',
+    '- keyframeEndMatch: when a LAST KEYFRAME is supplied, the generated ending reaches that physically plausible state without identity/location drift. If no last keyframe is supplied, score 100.',
     ...(temporalEnabled ? [
       '',
       `TEMPORAL sequence contains ${temporalFrameCount} ordered frames. Score each from 0 to 100:`,
