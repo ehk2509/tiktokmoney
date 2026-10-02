@@ -38,6 +38,15 @@ import {
 import { RunwayAudiovisualProvider } from '../src/providers/runwayAudiovisualProvider.js';
 import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
 import { AudiovisualRenderer } from '../src/renderers/audiovisualRenderer.js';
+import {
+  RealismDirector,
+  directSegment,
+  buildRealismPromptBlock,
+} from '../src/core/realismDirector.js';
+import {
+  AntiPlasticPostProcessor,
+  shouldApplySyntheticMotionBlur,
+} from '../src/services/antiPlasticPostProcessor.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 import {
@@ -4919,4 +4928,197 @@ test('creative tournament accepts planner candidate-count and variant overrides'
   assert.equal(judgedInput.variantIndex, 1);
   assert.equal(result.requestedCandidateCount, 7);
   assert.equal(result.variantIndex, 1);
+});
+
+
+test('realism director assigns action-aware capture profile and high-risk shot budget', () => {
+  const director = new RealismDirector({
+    enabled: true,
+    defaultProfile: 'auto',
+    maxShotsPerAct: 3,
+  });
+
+  const result = director.direct({
+    topic: 'strength training in your thirties',
+    synopsis: 'A gym explanation.',
+    visualStyle: {
+      description: 'hyperrealistic 4K masterpiece documentary',
+      cameraRules: 'smooth cinematic movement',
+      lightingRules: 'perfect lighting',
+    },
+    segments: [{
+      index: 0,
+      durationSeconds: 9,
+      speakerMode: 'single-speaker',
+      dialogueTurns: [{ speakerCharacterId: 'alex', text: 'Train consistently.' }],
+      characterIds: ['alex'],
+      action: 'Alex picks up a dumbbell and performs a squat while talking.',
+      camera: '360 orbit with rapid zoom around Alex.',
+      ambience: 'real gym with daylight window',
+      editing: { allowInternalCuts: false, allowDissolves: true, shotCount: 1 },
+    }],
+  });
+
+  assert.equal(result.realismDirection.profile, 'fitness-action');
+  assert.equal(result.realismDirection.outputFrameRate, 30);
+  assert.doesNotMatch(result.visualStyle.description, /hyperrealistic|4K|masterpiece/i);
+
+  const scene = result.segments[0];
+  assert.equal(scene.realismDirection.complexInteraction, true);
+  assert.equal(scene.realismDirection.complexCamera, true);
+  assert.equal(scene.realismDirection.actionHeavy, true);
+  assert.ok(scene.realismDirection.riskScore >= 70);
+  assert.equal(scene.realismDirection.stableShotSeconds, 2.2);
+  assert.equal(scene.editing.allowInternalCuts, true);
+  assert.equal(scene.editing.allowDissolves, false);
+  assert.equal(scene.editing.shotCount, 3);
+  assert.ok(scene.realismDirection.soundscape.foley.some((item) => /foot|weight|object/i.test(item)));
+});
+
+test('realism director keeps simple talking scene restrained instead of over-editing it', () => {
+  const scene = directSegment({
+    index: 0,
+    durationSeconds: 5,
+    speakerMode: 'single-speaker',
+    dialogueTurns: [{ speakerCharacterId: 'maya', text: 'Here is the key point.' }],
+    characterIds: ['maya'],
+    action: 'Maya stands naturally and turns her head slightly toward camera.',
+    camera: 'medium close-up, subtle push in',
+    ambience: 'quiet indoor room with window light',
+    editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+  });
+
+  assert.ok(scene.realismDirection.riskScore < 50);
+  assert.equal(scene.editing.allowInternalCuts, false);
+  assert.equal(scene.editing.shotCount, 1);
+  assert.match(scene.realismDirection.camera.movement, /push-in/i);
+  assert.ok(scene.realismDirection.microMotion.some((item) => /breathing/i.test(item)));
+});
+
+test('anti-plastic prompt block adds physical camera, micro-motion and psychoacoustic sound cues', () => {
+  const scene = directSegment({
+    durationSeconds: 5,
+    characterIds: ['alex'],
+    action: 'Alex walks through a city street.',
+    camera: 'follow shot',
+    ambience: 'outdoor city street with traffic and light wind',
+    editing: { allowInternalCuts: false, shotCount: 1 },
+  }, {
+    profile: 'organic-smartphone',
+  });
+
+  const block = buildRealismPromptBlock(scene);
+  assert.match(block, /Physical camera/i);
+  assert.match(block, /Environmental micro-motion/i);
+  assert.match(block, /ROOM TONE/i);
+  assert.match(block, /SYNCED FOLEY/i);
+  assert.match(block, /waxy texture/i);
+  assert.match(block, /perfect stabilization/i);
+});
+
+test('anti-plastic post processor applies only bounded optical degradation', () => {
+  const post = new AntiPlasticPostProcessor({
+    enabled: true,
+    softnessMaxSigma: 0.35,
+    grainMaxStrength: 2.2,
+  });
+
+  const filter = post.buildVideoFilter({
+    baseFilter: 'scale=1080:1920,setsar=1',
+    profile: {
+      opticalSoftness: 0.9,
+      saturation: 0.4,
+      contrast: 1.8,
+      grainStrength: 9,
+    },
+    frameRate: 24,
+  });
+
+  assert.match(filter, /gblur=sigma=0.35/);
+  assert.match(filter, /eq=saturation=0.85:contrast=1.06/);
+  assert.match(filter, /noise=alls=2.2/);
+  assert.match(filter, /fps=24/);
+  assert.doesNotMatch(filter, /rgbashift|tmix|minterpolate/i);
+});
+
+test('synthetic motion blur is rejected for morphing but can be considered for pure judder', () => {
+  assert.equal(shouldApplySyntheticMotionBlur({
+    temporalIssues: [{
+      code: 'face-morph',
+      evidence: 'face geometry melts between frames',
+    }],
+  }), false);
+
+  assert.equal(shouldApplySyntheticMotionBlur({
+    temporalIssues: [{
+      code: 'judder',
+      evidence: 'otherwise stable motion has visible frame skip',
+    }],
+  }), true);
+});
+
+test('audiovisual renderer respects realism-selected project frame rate and optical post filter', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-antiplastic-render-'));
+  const calls = [];
+  try {
+    const renderer = new AudiovisualRenderer({
+      outputDir: dir,
+      runCommand: async (_command, args) => {
+        calls.push(args);
+      },
+      audioInspector: {
+        inspect: async () => ({
+          passed: true,
+          issues: [],
+          integratedLufs: -14,
+          truePeakDbtp: -1.5,
+        }),
+      },
+      antiPlasticPostProcessor: new AntiPlasticPostProcessor({ enabled: true }),
+    });
+
+    const result = await renderer.render({
+      id: 'anti-plastic-test',
+      productionScript: {
+        realismDirection: {
+          profile: 'organic-documentary',
+          outputFrameRate: 24,
+          postProfile: {
+            opticalSoftness: 0.22,
+            saturation: 0.95,
+            contrast: 0.99,
+            grainStrength: 1.4,
+          },
+        },
+      },
+      scenes: [{
+        index: 0,
+        duration: 3,
+        production: {
+          realismDirection: {
+            post: {
+              opticalSoftness: 0.22,
+              saturation: 0.95,
+              contrast: 0.99,
+              grainStrength: 1.4,
+            },
+          },
+        },
+        asset: { localPath: '/fake/act.mp4' },
+      }],
+      subtitles: { enabled: false, events: [], layout: { passed: true, violations: [] } },
+    });
+
+    const normalizeCall = calls.find((args) => args.includes('/fake/act.mp4'));
+    const vfIndex = normalizeCall.indexOf('-vf');
+    const filter = normalizeCall[vfIndex + 1];
+
+    assert.match(filter, /gblur=sigma=0.22/);
+    assert.match(filter, /noise=alls=1.4/);
+    assert.match(filter, /fps=24/);
+    assert.equal(result.frameRate, 24);
+    assert.equal(result.antiPlasticPost.profile, 'organic-documentary');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
