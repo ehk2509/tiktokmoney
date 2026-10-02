@@ -11,6 +11,7 @@ const RUNWAY_VOICE_BY_LOWER = new Map(
   RUNWAY_VOICE_PRESETS.map((preset) => [preset.toLowerCase(), preset]),
 );
 const FALLBACK_VOICES = ['Bernard', 'Maya', 'Arjun', 'Serene', 'Eleanor', 'Vincent'];
+const SHOT_TYPES = ['wide-establishing', 'close-up', 'medium', 'macro-detail', 'tracking', 'overhead', 'pov'];
 
 export class ProductionScriptGenerator {
   constructor({ llm }) {
@@ -76,6 +77,7 @@ function normalizeProductionScript(value, context) {
   if (!rawSegments.length) throw new Error('production script requires at least one audiovisual segment');
 
   let cursor = 0;
+  let previousShotType = null;
   const segments = rawSegments.slice(0, 8).map((segment, index) => {
     const duration = clamp(Number(segment.durationSeconds) || 8, 4, 15);
     const legacySpeakerId = characterIds.has(safeId(segment.speakerCharacterId))
@@ -99,6 +101,8 @@ function normalizeProductionScript(value, context) {
       boundCharacters.unshift(speakerCharacterId);
     }
     const dialogue = dialogueTurns.map((turn) => turn.text).filter(Boolean).join(' ').trim();
+    const shotType = distinctShotType(segment.shotType, previousShotType, index);
+    previousShotType = shotType;
 
     const normalized = {
       index,
@@ -114,10 +118,12 @@ function normalizeProductionScript(value, context) {
         ? safeId(segment.locationId)
         : locations[0].id,
       dialogue,
-      startState: clean(segment.startState || '', 900),
-      endState: clean(segment.endState || '', 900),
-      action: clean(segment.action || '', 1000),
-      camera: clean(segment.camera || '', 700),
+      startState: stripTextDirections(clean(segment.startState || '', 900)),
+      endState: stripTextDirections(clean(segment.endState || '', 900)),
+      action: stripTextDirections(clean(segment.action || '', 1000)),
+      shotType,
+      camera: stripTextDirections(clean(segment.camera || '', 700)),
+      onScreenLabels: normalizeLabels(segment.onScreenLabels, { dialogue, duration }),
       ambience: clean(segment.ambience || '', 500),
       soundEffects: Array.isArray(segment.soundEffects)
         ? segment.soundEffects.map((item) => clean(item, 180)).filter(Boolean).slice(0, 8)
@@ -350,6 +356,43 @@ function fallbackProductionScript({ topic, audience, durationSeconds, creativeBr
 
 function safeId(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+function distinctShotType(requested, previous, index) {
+  const value = String(requested || '').toLowerCase().trim();
+  const wanted = SHOT_TYPES.includes(value) ? value : SHOT_TYPES[index % SHOT_TYPES.length];
+  if (wanted !== previous) return wanted;
+  return SHOT_TYPES.find((type) => type !== previous && type !== wanted);
+}
+
+// Video models render requested labels as garbled, unverifiable text; drop any
+// sentence that asks for written content. Labels go through onScreenLabels instead.
+const TEXT_DIRECTION = /\b(label(?:s|ed|led|ing)?|caption(?:s|ed)?|callouts?|lettering|written|text|typography|title card|signage|reads?|reading)\b/i;
+
+export function stripTextDirections(value) {
+  const sentences = String(value || '').match(/[^.!?]+[.!?]*\s*/g) || [];
+  return sentences.filter((sentence) => !TEXT_DIRECTION.test(sentence)).join('').trim();
+}
+
+function normalizeLabels(labels, { dialogue, duration }) {
+  if (!Array.isArray(labels)) return [];
+  const spoken = ` ${tokenKey(dialogue)} `;
+  return labels
+    .map((label) => ({
+      text: clean(label?.text || '', 24),
+      atSeconds: round(clamp(Number(label?.atSeconds) || 0, 0, Math.max(0, duration - 1))),
+      durationSeconds: round(clamp(Number(label?.durationSeconds) || 2.5, 1, 4)),
+    }))
+    // A label may only name something the narration says, so it cannot introduce new claims.
+    .filter((label) => label.text && spoken.includes(` ${tokenKey(label.text)} `))
+    .slice(0, 2);
+}
+
+function tokenKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
 }
 
 function clean(value, max) {

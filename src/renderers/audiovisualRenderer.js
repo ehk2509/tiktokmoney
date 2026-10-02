@@ -108,7 +108,10 @@ export class AudiovisualRenderer {
       );
     }
 
-    const hasSubtitles = Boolean(project.subtitles?.enabled && project.subtitles.events?.length);
+    const hasSubtitles = Boolean(
+      project.subtitles?.enabled
+        && (project.subtitles.events?.length || project.subtitles.labels?.length),
+    );
     if (hasSubtitles) {
       await writeFile(subtitleAssPath, renderAssDocument(project.subtitles));
       await writeFile(subtitleSrtPath, renderSrtDocument(project.subtitles));

@@ -654,6 +654,7 @@ function buildAudiovisualPrompt({
     castLines.length ? `CAST: ${castLines.join(' | ')}` : '',
     location ? `LOCATION: ${location.name}. ${location.description}. Lighting: ${location.lighting}. Fixed elements: ${location.fixedElements.join(', ')}.` : '',
     `ACTION: ${segment.action}.`,
+    segment.shotType ? `SHOT TYPE: ${segment.shotType}.` : '',
     `CAMERA: ${segment.camera}.`,
     buildRealismPromptBlock(segment),
     buildMotionRegionPromptBlock(segment),

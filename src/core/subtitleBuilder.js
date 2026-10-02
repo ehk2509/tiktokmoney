@@ -98,6 +98,7 @@ export function estimateRenderedWidth(text, fontSize = DEFAULTS.fontSize) {
 export function renderAssDocument(subtitles) {
   const style = subtitles?.style || subtitleStyle(DEFAULTS);
   const events = Array.isArray(subtitles?.events) ? subtitles.events : [];
+  const labels = Array.isArray(subtitles?.labels) ? subtitles.labels : [];
 
   const header = [
     '[Script Info]',
@@ -134,6 +135,32 @@ export function renderAssDocument(subtitles) {
       style.marginV,
       '1',
     ].join(','),
+    // Deterministic title cards for named on-screen subjects: boxed, top-center.
+    [
+      'Style: Label',
+      style.fontName,
+      Math.round(style.fontSize * 0.75),
+      '&H00FFFFFF',
+      '&H00FFFFFF',
+      '&H00101010',
+      '&H99000000',
+      '-1',
+      '0',
+      '0',
+      '0',
+      '100',
+      '100',
+      '2',
+      '0',
+      '3',
+      '18',
+      '0',
+      '8',
+      '110',
+      '110',
+      '300',
+      '1',
+    ].join(','),
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
@@ -151,8 +178,20 @@ export function renderAssDocument(subtitles) {
     '',
     event.assText,
   ].join(','));
+  const labelLines = labels.map((label) => [
+    'Dialogue: 1',
+    formatAssTime(label.start),
+    formatAssTime(label.end),
+    'Label',
+    '',
+    '0',
+    '0',
+    '0',
+    '',
+    `{\\fad(150,150)}${escapeAssText(String(label.text).toUpperCase())}`,
+  ].join(','));
 
-  return [...header, ...lines, ''].join('\n');
+  return [...header, ...lines, ...labelLines, ''].join('\n');
 }
 
 export function renderSrtDocument(subtitles) {

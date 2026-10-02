@@ -212,6 +212,7 @@ export class AudiovisualPipeline {
       scenes: project.scenes,
       config: this.subtitleConfig,
     });
+    project.subtitles.labels = collectSceneLabels(project.scenes);
 
     project.publishability = evaluateAudiovisualPublishability({
       productionScript,
@@ -597,6 +598,18 @@ function collectVerifiedWordTimings(scenes) {
       // Never let a caption run across a cut.
       boundary: index === words.length - 1,
     }));
+  });
+}
+
+export function collectSceneLabels(scenes) {
+  return scenes.flatMap((scene) => {
+    const start = Number(scene.start) || 0;
+    const sceneEnd = start + (Number(scene.duration) || 0);
+    return (scene.production?.onScreenLabels || []).map((label) => ({
+      text: label.text,
+      start: roundTime(start + label.atSeconds),
+      end: roundTime(Math.min(sceneEnd, start + label.atSeconds + label.durationSeconds)),
+    })).filter((label) => label.end > label.start);
   });
 }
 
