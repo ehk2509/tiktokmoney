@@ -147,6 +147,7 @@ export class MotionLibraryBuilder {
     const accepted = [];
     const duplicates = [];
     const rejected = [];
+    let comparisonPool = [...existingReferences];
 
     for (let index = 0; index < windows.length; index += 1) {
       const window = windows[index];
@@ -219,7 +220,7 @@ export class MotionLibraryBuilder {
         createdAt: new Date().toISOString(),
       };
 
-      const duplicate = findDuplicate(reference, existingReferences, this.dedupeThreshold);
+      const duplicate = findDuplicate(reference, comparisonPool, this.dedupeThreshold);
       if (duplicate && Number(duplicate.reference.qualityScore || 0) >= quality.score) {
         duplicates.push({
           candidateId: id,
@@ -243,6 +244,10 @@ export class MotionLibraryBuilder {
         reference,
         replacesId: duplicate?.reference.id || null,
       });
+      comparisonPool = comparisonPool.filter(
+        (item) => item.id !== duplicate?.reference.id,
+      );
+      comparisonPool.push(reference);
     }
 
     return { accepted, duplicates, rejected };
