@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import {
   mkdir,
-  readFile,
   readdir,
   stat,
   writeFile,
