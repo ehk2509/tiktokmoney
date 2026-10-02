@@ -21,6 +21,7 @@ export class MotionGuideDirector {
     minRiskScore = Number(process.env.MOTION_GUIDE_MIN_RISK_SCORE || 50),
     minSelectionScore = Number(process.env.MOTION_GUIDE_MIN_SELECTION_SCORE || 0.55),
     maxReferenceSeconds = Number(process.env.MOTION_GUIDE_MAX_REFERENCE_SECONDS || 15),
+    requireRightsConfirmed = envBool(process.env.MOTION_GUIDE_REQUIRE_RIGHTS_CONFIRMED, true),
   } = {}) {
     this.store = store;
     this.enabled = Boolean(enabled);
@@ -28,6 +29,7 @@ export class MotionGuideDirector {
     this.minRiskScore = clamp(minRiskScore, 0, 100, 50);
     this.minSelectionScore = clamp(minSelectionScore, 0, 1, 0.55);
     this.maxReferenceSeconds = clamp(maxReferenceSeconds, 1, 15, 15);
+    this.requireRightsConfirmed = Boolean(requireRightsConfirmed);
   }
 
   async direct(script) {
@@ -43,6 +45,7 @@ export class MotionGuideDirector {
         minRiskScore: this.minRiskScore,
         minSelectionScore: this.minSelectionScore,
         maxReferenceSeconds: this.maxReferenceSeconds,
+        requireRightsConfirmed: this.requireRightsConfirmed,
       })
     ));
 
@@ -52,6 +55,10 @@ export class MotionGuideDirector {
         enabled: this.enabled,
         mode: this.mode,
         librarySize: references.length,
+        requireRightsConfirmed: this.requireRightsConfirmed,
+        usableLibrarySize: references.filter((reference) => (
+          !this.requireRightsConfirmed || reference.rightsConfirmed
+        )).length,
         selectedActs: segments.filter((segment) => segment.motionGuideDirection?.selectedReference).length,
         eligibleWithoutReference: segments.filter((segment) => (
           segment.motionGuideDirection?.eligible
@@ -69,6 +76,7 @@ export function directMotionGuide(segment, references = [], {
   minRiskScore = 50,
   minSelectionScore = 0.55,
   maxReferenceSeconds = 15,
+  requireRightsConfirmed = true,
 } = {}) {
   const normalizedMode = normalizeMode(mode);
   const riskScore = Number(segment.realismDirection?.riskScore) || 0;
@@ -104,6 +112,7 @@ export function directMotionGuide(segment, references = [], {
   const scored = (references || [])
     .filter((reference) => (
       reference?.verifiedHumanMotion !== false
+      && (!requireRightsConfirmed || reference?.rightsConfirmed === true)
       && Number(reference?.durationSeconds) > 0
       && Number(reference?.durationSeconds) <= maxReferenceSeconds
     ))
