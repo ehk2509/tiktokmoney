@@ -17,6 +17,7 @@ import { PhonemeVisemeQcProvider } from './phonemeVisemeQcProvider.js';
 import { OpenRouterSpeakerTurnQcProvider } from './openRouterSpeakerTurnQcProvider.js';
 import { PoseMotionQcProvider } from './poseMotionQcProvider.js';
 import { OpenRouterTextArtifactQcProvider } from './openRouterTextArtifactQcProvider.js';
+import { OpenRouterVisualFactualQcProvider } from './openRouterVisualFactualQcProvider.js';
 import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
 import { YouTubeTrendProvider } from './youtubeTrendProvider.js';
 import { RedditTrendProvider } from './redditTrendProvider.js';
@@ -482,6 +483,39 @@ function isEnabled(value) {
 function isEnabledDefaultTrue(value) {
   if (value == null || value === '') return true;
   return isEnabled(value);
+}
+
+export function createVisualFactualQcProvider(env = process.env) {
+  const enabled = env.VISUAL_FACT_QC_ENABLED == null
+    ? false
+    : isEnabled(env.VISUAL_FACT_QC_ENABLED);
+
+  if (!enabled) return null;
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required when VISUAL_FACT_QC_ENABLED=true');
+  }
+  if (!env.VISUAL_FACT_QC_MODEL && !env.REALISM_QC_MODEL) {
+    throw new Error('VISUAL_FACT_QC_MODEL or REALISM_QC_MODEL is required when VISUAL_FACT_QC_ENABLED=true');
+  }
+
+  return new OpenRouterVisualFactualQcProvider({
+    apiKey: env.OPENROUTER_API_KEY,
+    baseUrl: env.OPENROUTER_BASE_URL,
+    model: env.VISUAL_FACT_QC_MODEL || env.REALISM_QC_MODEL,
+    threshold: env.VISUAL_FACT_QC_THRESHOLD
+      ? Number(env.VISUAL_FACT_QC_THRESHOLD)
+      : undefined,
+    minBlockingConfidence: env.VISUAL_FACT_QC_MIN_BLOCKING_CONFIDENCE
+      ? Number(env.VISUAL_FACT_QC_MIN_BLOCKING_CONFIDENCE)
+      : undefined,
+    frames: env.VISUAL_FACT_QC_FRAMES ? Number(env.VISUAL_FACT_QC_FRAMES) : undefined,
+    frameWidth: env.VISUAL_FACT_QC_FRAME_WIDTH
+      ? Number(env.VISUAL_FACT_QC_FRAME_WIDTH)
+      : undefined,
+    maxRegenerations: env.VISUAL_FACT_QC_MAX_REGENERATIONS
+      ? Number(env.VISUAL_FACT_QC_MAX_REGENERATIONS)
+      : undefined,
+  });
 }
 
 export function createTextArtifactQcProvider(env = process.env) {
