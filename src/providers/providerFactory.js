@@ -487,7 +487,9 @@ function isEnabledDefaultTrue(value) {
 
 export function createVisualFactualQcProvider(env = process.env) {
   const enabled = env.VISUAL_FACT_QC_ENABLED == null
-    ? false
+    ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
+      && Boolean(env.OPENROUTER_API_KEY)
+      && Boolean(env.VISUAL_FACT_QC_MODEL || env.REALISM_QC_MODEL)
     : isEnabled(env.VISUAL_FACT_QC_ENABLED);
 
   if (!enabled) return null;
