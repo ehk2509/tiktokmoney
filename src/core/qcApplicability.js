@@ -46,6 +46,10 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
     String(segment?.dialogue || '').trim()
       || turns.some((turn) => String(turn.text || turn.dialogue || '').trim()),
   );
+  const hasVisualFactualContext = Boolean(
+    String(segment?.dialogue || '').trim()
+      || String(segment?.action || '').trim(),
+  );
   const allSpeakingCharactersKnown = unknownSpeakerIds.length === 0;
   const allSpeakersVisible = speakingCharacterIds.length > 0
     && allSpeakingCharactersKnown
@@ -86,6 +90,7 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
   return {
     context: {
       hasDialogue,
+      hasVisualFactualContext,
       speakingCharacterIds,
       visibleSpeakerIds,
       offScreenSpeakerIds,
@@ -97,6 +102,7 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
     },
     realism: contract(true),
     textArtifact: contract(true),
+    visualFactual: contract(hasVisualFactualContext, 'no-visual-factual-context'),
     dialogue: contract(hasDialogue, 'no-dialogue'),
     lipSync: contract(allSpeakersVisible && hasDialogue, visualSpeechReason),
     deepLipSync: contract(allSpeakersVisible && hasDialogue, visualSpeechReason),
