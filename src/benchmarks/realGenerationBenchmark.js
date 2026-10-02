@@ -499,7 +499,7 @@ function aggregateArm(rows, isFull) {
     humanIdentityConsistencyScore: average(ratings.map((rating) => rating.identityConsistencyScore)),
     humanDialogueAccuracyScore: average(ratings.map((rating) => rating.dialogueAccuracyScore)),
     humanMotionFidelityScore: average(ratings.map((rating) => rating.motionFidelityScore)),
-    costPerHumanPublishableVideoUsd: totalCost != null && ratings.length === count && publishable > 0
+    costPerHumanPublishableVideoUsd: totalCost != null && ratings.length === rateable && publishable > 0
       ? round(totalCost / publishable, 6)
       : null,
   };
