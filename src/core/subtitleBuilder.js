@@ -221,6 +221,7 @@ function normalizeWordTimings(items) {
       word: String(item.word).trim(),
       start: Math.max(0, Number(item.start) || 0),
       end: Math.max(Number(item.start) || 0, Number(item.end) || Number(item.start) || 0),
+      boundary: Boolean(item.boundary),
     }))
     // Keep zero-length words (Whisper emits them); highlight events enforce a minimum duration.
     .sort((a, b) => a.start - b.start);
@@ -256,6 +257,8 @@ function groupWords(words, options) {
         || text.length > options.maxCharsPerCue
         || gap > options.maxGapSeconds
         || sentenceBoundary(previous?.word)
+        || clauseBoundary(previous?.word)
+        || previous?.boundary
         || !fitsLayout(next, options)
       )
     ) {
@@ -346,6 +349,40 @@ function tokenize(text) {
 
 function sentenceBoundary(word = '') {
   return /[.!?…]["')\]]?$/.test(word);
+}
+
+function clauseBoundary(word = '') {
+  return /[,;:]["')\]]?$/.test(word);
+}
+
+/**
+ * Transcription word timings usually lack punctuation, which the cue grouping
+ * needs to avoid cues like "connected The". Copy trailing punctuation from the
+ * verified script text onto the matching timed words.
+ */
+export function punctuateWordsFromScript(words = [], scriptText = '') {
+  const tokens = String(scriptText || '')
+    .replace(/\s*[—–]\s*/g, ', ')
+    .replace(/(\p{L})-(\p{L})/gu, '$1 $2')
+    .split(/\s+/)
+    .filter((token) => normalizeToken(token));
+  let cursor = 0;
+
+  return words.map((item) => {
+    const key = normalizeToken(item.word);
+    for (let index = cursor; key && index < Math.min(tokens.length, cursor + 4); index += 1) {
+      if (normalizeToken(tokens[index]) !== key) continue;
+      cursor = index + 1;
+      const punctuation = tokens[index].match(/[.,!?;:…]+["')\]]*$/)?.[0] || '';
+      const bare = String(item.word).replace(/[.,!?;:…]+["')\]]*$/, '');
+      return { ...item, word: bare + punctuation };
+    }
+    return item;
+  });
+}
+
+function normalizeToken(value) {
+  return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 function escapeAssText(value) {

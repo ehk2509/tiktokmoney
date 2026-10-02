@@ -26,6 +26,7 @@ import { VideoModelRouter, classifyScene } from '../src/providers/videoModelRout
 import { ProviderStatsStore } from '../src/storage/providerStatsStore.js';
 import {
   buildSubtitles,
+  punctuateWordsFromScript,
   renderAssDocument,
   renderSrtDocument,
   evaluateSubtitleLayout,
@@ -1649,6 +1650,44 @@ test('router records QC outcomes into persistent provider statistics', async () 
   }
 });
 
+
+test('subtitle cues follow script punctuation and never cross scene boundaries', () => {
+  const words = punctuateWordsFromScript([
+    { word: 'Those', start: 0, end: 0.3 },
+    { word: 'facts', start: 0.3, end: 0.6 },
+    { word: 'are', start: 0.6, end: 0.8 },
+    { word: 'connected', start: 0.8, end: 1.3 },
+    { word: 'Hemocyanin', start: 1.5, end: 2.1 },
+    { word: 'a', start: 2.2, end: 2.3 },
+    { word: 'copper', start: 2.3, end: 2.6 },
+    { word: 'based', start: 2.6, end: 2.9 },
+    { word: 'molecule', start: 2.9, end: 3.4 },
+  ], 'Those facts are connected. Hemocyanin, a copper-based molecule.');
+
+  assert.deepEqual(words.map((item) => item.word), [
+    'Those', 'facts', 'are', 'connected.', 'Hemocyanin,', 'a', 'copper', 'based', 'molecule.',
+  ]);
+
+  const subtitles = buildSubtitles({
+    voice: {
+      wordTimings: [
+        { word: 'blood', start: 0, end: 0.4 },
+        { word: 'onward', start: 0.4, end: 0.9, boundary: true },
+        { word: 'next', start: 1, end: 1.3 },
+      ],
+    },
+    config: { maxWordsPerCue: 5, maxCharsPerCue: 40 },
+  });
+  assert.deepEqual(subtitles.cues.map((cue) => cue.text), ['blood onward', 'next']);
+
+  const clauses = buildSubtitles({
+    voice: { wordTimings: words },
+    config: { maxWordsPerCue: 5, maxCharsPerCue: 40 },
+  });
+  assert.deepEqual(clauses.cues.map((cue) => cue.text), [
+    'Those facts are connected.', 'Hemocyanin,', 'a copper based molecule.',
+  ]);
+});
 
 test('subtitle builder keeps zero-length transcription words', () => {
   const subtitles = buildSubtitles({

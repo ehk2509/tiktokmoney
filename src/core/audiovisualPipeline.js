@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { ProductionScriptGenerator, productionScriptToStoryBible } from './productionScriptGenerator.js';
-import { buildSubtitles } from './subtitleBuilder.js';
+import { buildSubtitles, punctuateWordsFromScript } from './subtitleBuilder.js';
 import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
 import { CreativeTournament } from './creativeTournament.js';
 import { RealismDirector } from './realismDirector.js';
@@ -569,10 +569,16 @@ function collectVerifiedWordTimings(scenes) {
     const verification = scene.dialogueVerification;
     if (!verification?.passed || !Array.isArray(verification.transcription?.words)) return [];
 
-    return verification.transcription.words.map((word) => ({
+    const words = punctuateWordsFromScript(
+      verification.transcription.words,
+      verification.expectedText || scene.narration,
+    );
+    return words.map((word, index) => ({
       word: word.word,
       start: roundTime((Number(scene.start) || 0) + (Number(word.start) || 0)),
       end: roundTime((Number(scene.start) || 0) + (Number(word.end) || 0)),
+      // Never let a caption run across a cut.
+      boundary: index === words.length - 1,
     }));
   });
 }
