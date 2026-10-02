@@ -65,7 +65,7 @@ Live benchmark construction disables trend research so the same frozen topic is 
 
 ## What is compared
 
-Each case has two arms.
+Each case has two arms. Execution order alternates by case (baseline→full, then full→baseline) so provider drift or time-of-run effects do not systematically favor one arm.
 
 **Baseline** calls the configured Runway audiovisual model directly with one frozen photorealistic prompt. It does not use TikTokMoney's screenplay generation, keyframes, motion guides, continuity system, QC gates or regeneration loop.
 
