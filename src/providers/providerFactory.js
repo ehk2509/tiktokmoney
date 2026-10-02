@@ -15,6 +15,8 @@ import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
 import { DeepLipSyncQcProvider } from './deepLipSyncQcProvider.js';
 import { PhonemeVisemeQcProvider } from './phonemeVisemeQcProvider.js';
 import { OpenRouterSpeakerTurnQcProvider } from './openRouterSpeakerTurnQcProvider.js';
+import { PoseMotionQcProvider } from './poseMotionQcProvider.js';
+import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
 import { YouTubeTrendProvider } from './youtubeTrendProvider.js';
 import { RedditTrendProvider } from './redditTrendProvider.js';
 import { RssTrendProvider, parseFeeds } from './rssTrendProvider.js';
@@ -233,6 +235,39 @@ export function createRealismQcProvider(env = process.env) {
   });
 }
 
+export function createPoseMotionQcProvider(env = process.env) {
+  const enabled = env.POSE_MOTION_QC_ENABLED == null
+    ? Boolean(env.POSE_EXTRACTOR_COMMAND)
+    : isEnabled(env.POSE_MOTION_QC_ENABLED);
+  if (!enabled) return null;
+  if (!env.POSE_EXTRACTOR_COMMAND) {
+    throw new Error('POSE_EXTRACTOR_COMMAND is required when POSE_MOTION_QC_ENABLED=true');
+  }
+
+  return new PoseMotionQcProvider({
+    extractor: new PoseMotionExtractor({
+      command: env.POSE_EXTRACTOR_COMMAND,
+      args: env.POSE_EXTRACTOR_ARGS ? JSON.parse(env.POSE_EXTRACTOR_ARGS) : undefined,
+      sampleFps: env.POSE_EXTRACTOR_FPS ? Number(env.POSE_EXTRACTOR_FPS) : undefined,
+      timeoutMs: env.POSE_EXTRACTOR_TIMEOUT_MS
+        ? Number(env.POSE_EXTRACTOR_TIMEOUT_MS)
+        : undefined,
+    }),
+    threshold: env.POSE_MOTION_QC_THRESHOLD
+      ? Number(env.POSE_MOTION_QC_THRESHOLD)
+      : undefined,
+    minCoverage: env.POSE_MOTION_QC_MIN_COVERAGE
+      ? Number(env.POSE_MOTION_QC_MIN_COVERAGE)
+      : undefined,
+    maxRegenerations: env.POSE_MOTION_QC_MAX_REGENERATIONS
+      ? Number(env.POSE_MOTION_QC_MAX_REGENERATIONS)
+      : undefined,
+    failClosed: env.POSE_MOTION_QC_FAIL_CLOSED == null
+      ? undefined
+      : isEnabled(env.POSE_MOTION_QC_FAIL_CLOSED),
+  });
+}
+
 export function createAudiovisualProvider(env = process.env) {
   if (!env.RUNWAYML_API_SECRET) return null;
 
@@ -253,6 +288,14 @@ export function createAudiovisualProvider(env = process.env) {
     motionGuideFailOpen: env.MOTION_GUIDE_FAIL_OPEN == null
       ? undefined
       : isEnabled(env.MOTION_GUIDE_FAIL_OPEN),
+    poseExtractor: new PoseMotionExtractor({
+      command: env.POSE_EXTRACTOR_COMMAND,
+      args: env.POSE_EXTRACTOR_ARGS ? JSON.parse(env.POSE_EXTRACTOR_ARGS) : undefined,
+      sampleFps: env.POSE_EXTRACTOR_FPS ? Number(env.POSE_EXTRACTOR_FPS) : undefined,
+      timeoutMs: env.POSE_EXTRACTOR_TIMEOUT_MS
+        ? Number(env.POSE_EXTRACTOR_TIMEOUT_MS)
+        : undefined,
+    }),
     assetDir: env.ASSET_DIR,
     pollIntervalMs: env.RUNWAY_POLL_INTERVAL_MS ? Number(env.RUNWAY_POLL_INTERVAL_MS) : undefined,
     maxPolls: env.RUNWAY_MAX_POLLS ? Number(env.RUNWAY_MAX_POLLS) : undefined,

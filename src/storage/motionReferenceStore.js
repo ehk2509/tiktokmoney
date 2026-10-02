@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { normalizePoseSequence } from '../core/poseMotion.js';
 
 export class MotionReferenceStore {
   constructor(filePath = process.env.MOTION_REFERENCE_LIBRARY_PATH || './data/motion-references.json') {
@@ -37,6 +38,13 @@ export function normalizeReference(input) {
     .filter(Boolean))]
     .slice(0, 20);
 
+  const poseSequence = input.poseSequence
+    ? normalizePoseSequence({
+      ...input.poseSequence,
+      durationSeconds: input.poseSequence.durationSeconds || durationSeconds,
+    })
+    : null;
+
   return {
     id: String(input.id || `${actionClass}-${url.slice(-18)}`).slice(0, 120),
     actionClass,
@@ -50,6 +58,11 @@ export function normalizeReference(input) {
     notes: String(input.notes || '').slice(0, 500),
     verifiedHumanMotion: input.verifiedHumanMotion !== false,
     rightsConfirmed: input.rightsConfirmed === true,
+    poseSequence: poseSequence?.frames?.length ? {
+      ...poseSequence,
+      frames: poseSequence.frames.slice(0, 300),
+      contacts: poseSequence.contacts.slice(0, 32),
+    } : null,
   };
 }
 

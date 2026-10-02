@@ -11,7 +11,8 @@
       "source": "Replace with a real HTTPS or Runway-hosted motion clip",
       "license": "Record or document the usage rights here",
       "verifiedHumanMotion": true,
-      "rightsConfirmed": false
+      "rightsConfirmed": false,
+      "poseSequence": null
     }
   ]
 }
