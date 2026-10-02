@@ -631,7 +631,13 @@ function buildAudiovisualPrompt({
     segment.editing?.allowDissolves
       ? 'A motivated dissolve is allowed only if explicitly required by the action.'
       : 'Dissolves and crossfades are forbidden.',
-    multiSpeaker ? 'MULTI-SPEAKER DIALOGUE BLOCKING:' : 'EXACT SPOKEN DIALOGUE:',
+    multiSpeaker
+      ? voiceoverOnly
+        ? 'MULTI-VOICE VOICEOVER PLAN:'
+        : mixedSpeakerVisibility
+          ? 'MIXED ON-CAMERA / VOICEOVER PLAN:'
+          : 'MULTI-SPEAKER DIALOGUE BLOCKING:'
+      : 'EXACT SPOKEN DIALOGUE:',
     ...turnPlan,
     multiSpeaker && visibleSpeakersOnly
       ? 'Turn-taking is strict and non-overlapping. During each line, ONLY the named active visible speaker talks and moves their mouth as speech. Other visible characters listen/react silently with closed or naturally resting mouths. Never swap speakers, voices, faces, or lines.'
