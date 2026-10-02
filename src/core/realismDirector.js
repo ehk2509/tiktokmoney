@@ -196,14 +196,24 @@ export function buildRealismPromptBlock(segment) {
   const micro = direction.microMotion || [];
   const soundscape = direction.soundscape || {};
 
+  const camera = direction.camera || {};
+  const humanMotion = direction.humanMotion || {};
+  const lighting = direction.lighting || {};
+
   return [
     'ANTI-PLASTIC REALISM DIRECTION:',
-    `Capture profile: ${direction.profile}.`,
-    `Physical camera: ${direction.camera.fieldOfView}; ${direction.camera.apertureLook}; ${direction.camera.support}.`,
-    `Camera move: ${direction.camera.movement}. ${direction.camera.operatorImperfection}.`,
-    `Human motion: ${direction.humanMotion.rule}.`,
+    direction.profile ? `Capture profile: ${direction.profile}.` : '',
+    [camera.fieldOfView, camera.apertureLook, camera.support].filter(Boolean).length
+      ? `Physical camera: ${[camera.fieldOfView, camera.apertureLook, camera.support].filter(Boolean).join('; ')}.`
+      : '',
+    [camera.movement, camera.operatorImperfection].filter(Boolean).length
+      ? `Camera move: ${[camera.movement, camera.operatorImperfection].filter(Boolean).join(' ')}.`
+      : '',
+    humanMotion.rule ? `Human motion: ${humanMotion.rule}.` : '',
     micro.length ? `Environmental micro-motion: ${micro.join('; ')}.` : '',
-    `Lighting: ${direction.lighting.direction}; ${direction.lighting.imperfection}.`,
+    [lighting.direction, lighting.imperfection].filter(Boolean).length
+      ? `Lighting: ${[lighting.direction, lighting.imperfection].filter(Boolean).join('; ')}.`
+      : '',
     direction.editingNote || '',
     soundscape.roomTone ? `ROOM TONE: ${soundscape.roomTone}.` : '',
     soundscape.foley?.length ? `SYNCED FOLEY: ${soundscape.foley.join('; ')}.` : '',
