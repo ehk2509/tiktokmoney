@@ -664,7 +664,7 @@ function parseVideoDuration(asset) {
   const direct = Number(asset?.durationSeconds);
   if (Number.isFinite(direct) && direct > 0) return direct;
   const match = String(asset?.generatedDuration || '').match(/([0-9]+(?:\.[0-9]+)?)/);
-  return match ? Number(match[1]) : 0;
+  return match ? Number(match[1]) : 15;
 }
 
 function supportsMotionGuide(model) {
