@@ -2869,6 +2869,82 @@ test('audiovisual pipeline blocks an act that fails lip-sync timing after retry 
   assert.match(project.error, /failed QC/i);
 });
 
+test('audiovisual pipeline skips visual speech QC for an off-screen voiceover narrator', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-voiceover-'));
+  const prompts = [];
+  const audiovisual = new RunwayAudiovisualProvider({
+    apiKey: 'runway-key',
+    assetDir: dir,
+    dialogueMode: 'native',
+    pollIntervalMs: 0,
+    maxPolls: 2,
+    sleepImpl: async () => {},
+    fetchImpl: async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith('/text_to_video')) {
+        prompts.push(JSON.parse(options.body).promptText);
+        return jsonResponse({ id: 'wan-task' });
+      }
+      if (target.endsWith('/tasks/wan-task')) {
+        return jsonResponse({ id: 'wan-task', status: 'SUCCEEDED', output: ['https://cdn.example/av.mp4'] });
+      }
+      if (target === 'https://cdn.example/av.mp4') {
+        return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('native-av').buffer };
+      }
+      throw new Error(`unexpected request: ${target}`);
+    },
+  });
+  const llm = {
+    generateProductionScript: async (input) => {
+      const script = await new TemplateLlmProvider().generateProductionScript(input);
+      return {
+        ...script,
+        characters: [{
+          id: 'narrator',
+          name: 'Science Narrator',
+          description: 'An unseen documentary narrator.',
+          onScreen: false,
+          voice: { presetId: 'Bernard' },
+        }],
+        segments: [{
+          durationSeconds: 6,
+          purpose: 'hook',
+          speakerCharacterId: 'narrator',
+          characterIds: ['narrator'],
+          dialogue: 'An octopus has three hearts.',
+          action: 'An octopus rests beside reef rock.',
+        }],
+      };
+    },
+  };
+  let lipSyncCalls = 0;
+  const pipeline = new AudiovisualPipeline({
+    llm,
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    lipSyncQc: {
+      maxRegenerations: 0,
+      evaluate: async () => {
+        lipSyncCalls += 1;
+        return { passed: false, score: 52, issues: [], regenerationGuidance: '' };
+      },
+    },
+  });
+
+  try {
+    const project = await pipeline.generate({ topic: 'octopus hearts', durationSeconds: 6, render: false });
+
+    assert.equal(project.status, 'READY');
+    assert.equal(lipSyncCalls, 0);
+    assert.equal(project.productionScript.characters[0].onScreen, false);
+    assert.match(prompts[0], /VOICEOVER: the dialogue is off-screen narration/);
+    assert.doesNotMatch(prompts[0], /synchronize the visible speaker/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 
 test('deep lip-sync normalization converts frame offset to milliseconds and passes stable sync', () => {
   const result = normalizeDeepLipSyncResult({

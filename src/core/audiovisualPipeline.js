@@ -316,6 +316,8 @@ async function generateWithQc({
     const speaker = productionScript.characters.find(
       (character) => character.id === segment.speakerCharacterId,
     ) || null;
+    // An unseen voiceover narrator has no mouth on screen, so visual speech checks do not apply.
+    const visibleSpeech = speaker?.onScreen !== false;
 
     const dialogue = dialogueQc
       ? await dialogueQc.evaluate(asset, {
@@ -324,7 +326,7 @@ async function generateWithQc({
       })
       : null;
 
-    const lipSync = lipSyncQc
+    const lipSync = lipSyncQc && visibleSpeech
       ? dialogue?.transcription
         ? await lipSyncQc.evaluate(asset, {
           transcription: dialogue.transcription,
@@ -345,7 +347,7 @@ async function generateWithQc({
         }
       : null;
 
-    const deepLipSync = deepLipSyncQc
+    const deepLipSync = deepLipSyncQc && visibleSpeech
       ? await deepLipSyncQc.evaluate(asset, {
         transcription: dialogue?.transcription || null,
         expectedText: segment.dialogue,
@@ -357,7 +359,8 @@ async function generateWithQc({
       : [];
     const speakerTurn = speakerTurnQc && new Set(
       speakerTurns.map((turn) => turn.speakerCharacterId),
-    ).size > 1
+    ).size > 1 && speakerTurns.every((turn) => productionScript.characters
+      .find((character) => character.id === turn.speakerCharacterId)?.onScreen !== false)
       ? await speakerTurnQc.evaluate(asset, {
         dialogueTurns: speakerTurns,
         characters: productionScript.characters,
@@ -368,7 +371,7 @@ async function generateWithQc({
       ? await poseMotionQc.evaluate(asset, { segment })
       : null;
 
-    const phonemeViseme = phonemeVisemeQc
+    const phonemeViseme = phonemeVisemeQc && visibleSpeech
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
           transcription: dialogue.transcription,

@@ -589,9 +589,13 @@ function buildAudiovisualPrompt({
   const multiSpeaker = new Set(
     dialogueTurns.map((turn) => turn.speakerCharacterId),
   ).size > 1;
+  const voiceoverOnly = timedTurns.length > 0 && timedTurns.every((turn) => (
+    characters.find((character) => character.id === turn.speakerCharacterId)?.onScreen === false
+  ));
   const castLines = characters.length
-    ? characters.map((character) => (
-      `${character.id.toUpperCase()} = ${character.name}. ${character.description}. Physical traits: ${character.physicalTraits}. Exact wardrobe: ${character.wardrobe}. Voice: ${character.voice?.description || ''}; delivery: ${character.voice?.delivery || ''}.`
+    ? characters.map((character) => (character.onScreen === false
+      ? `${character.id.toUpperCase()} = ${character.name}, an unseen voiceover narrator who never appears in frame. Voice: ${character.voice?.description || ''}; delivery: ${character.voice?.delivery || ''}.`
+      : `${character.id.toUpperCase()} = ${character.name}. ${character.description}. Physical traits: ${character.physicalTraits}. Exact wardrobe: ${character.wardrobe}. Voice: ${character.voice?.description || ''}; delivery: ${character.voice?.delivery || ''}.`
     ))
     : primaryCharacter
       ? [`${primaryCharacter.id.toUpperCase()} = ${primaryCharacter.name}. ${primaryCharacter.description}. Physical traits: ${primaryCharacter.physicalTraits}. Exact wardrobe: ${primaryCharacter.wardrobe}.`]
@@ -627,10 +631,15 @@ function buildAudiovisualPrompt({
     multiSpeaker
       ? 'Turn-taking is strict and non-overlapping. During each line, ONLY the named active speaker talks and moves their mouth as speech. Other characters listen/react silently with closed or naturally resting mouths. Never swap speakers, voices, faces, or lines.'
       : '',
+    voiceoverOnly
+      ? 'VOICEOVER: the dialogue is off-screen narration. No visible person speaks or lip-syncs; keep the picture on the described action.'
+      : '',
     dialogueTrack
       ? multiSpeaker
         ? 'The supplied audio reference is the exact composed dialogue master containing the named characters in the exact turn order above. Treat it as the timing master. Preserve every word and assign each audible voice to the matching visible character.'
-        : 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
+        : voiceoverOnly
+          ? 'The supplied audio reference contains the exact voiceover performance. Preserve those words verbatim as off-screen narration.'
+          : 'The supplied audio reference contains the exact spoken dialogue performance. Preserve those words verbatim and synchronize the visible speaker naturally to that performance.'
       : 'Generate natural synchronized speech using the exact dialogue turns above. Do not paraphrase, omit, summarize, add words, swap voices, or create crosstalk.',
     `AMBIENCE: ${segment.ambience}.`,
     segment.soundEffects.length ? `SOUND EFFECTS: ${segment.soundEffects.join('; ')}.` : '',

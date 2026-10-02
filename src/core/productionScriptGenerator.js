@@ -40,7 +40,7 @@ export class ProductionScriptGenerator {
 
 export function productionScriptToStoryBible(script) {
   return {
-    characters: script.characters.map((character) => ({
+    characters: script.characters.filter((character) => character.onScreen !== false).map((character) => ({
       id: character.id,
       name: character.name,
       description: character.description,
@@ -229,6 +229,7 @@ function normalizeCharacters(items) {
       description: clean(character.description || '', 600),
       physicalTraits: clean(character.physicalTraits || '', 500),
       wardrobe: clean(character.wardrobe || '', 400),
+      onScreen: character.onScreen !== false,
       voice: {
         presetId,
         description: clean(character.voice?.description || 'natural conversational voice', 250),
@@ -245,6 +246,7 @@ function normalizeCharacters(items) {
       description: 'A believable adult presenter appropriate for the topic.',
       physicalTraits: 'Natural realistic appearance and proportions.',
       wardrobe: 'Simple neutral clothing appropriate for the location.',
+      onScreen: true,
       voice: {
         presetId: 'Bernard',
         description: 'natural conversational narrator',
