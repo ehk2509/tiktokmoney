@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { renderAssDocument, renderSrtDocument } from '../core/subtitleBuilder.js';
 import { AudioQualityInspector } from '../services/audioQualityInspector.js';
+import { AntiPlasticPostProcessor } from '../services/antiPlasticPostProcessor.js';
 
 export class AudiovisualRenderer {
   constructor({
@@ -13,6 +14,7 @@ export class AudiovisualRenderer {
     audioLra = Number(process.env.AUDIO_TARGET_LRA || 7),
     runCommand = run,
     audioInspector = null,
+    antiPlasticPostProcessor = null,
   } = {}) {
     this.ffmpegBin = ffmpegBin;
     this.outputDir = outputDir;
@@ -20,6 +22,7 @@ export class AudiovisualRenderer {
     this.audioTruePeakDbtp = Number.isFinite(audioTruePeakDbtp) ? audioTruePeakDbtp : -1;
     this.audioLra = Number.isFinite(audioLra) ? audioLra : 7;
     this.runCommand = runCommand;
+    this.postProcessor = antiPlasticPostProcessor || new AntiPlasticPostProcessor();
     this.audioInspector = audioInspector || new AudioQualityInspector({
       ffmpegBin,
       targetLufs: this.audioTargetLufs,
@@ -45,16 +48,27 @@ export class AudiovisualRenderer {
     }
 
     const normalized = [];
+    const outputFrameRate = Number(
+      project.productionScript?.realismDirection?.outputFrameRate,
+    ) || 30;
     for (const scene of project.scenes) {
       if (!scene.asset?.localPath) {
         throw new Error(`audiovisual scene ${scene.index} is missing a generated asset`);
       }
       const clipPath = path.join(workDir, `act-${String(scene.index).padStart(3, '0')}.mp4`);
+      const antiPlasticProfile = scene.production?.realismDirection?.post
+        || project.productionScript?.realismDirection?.postProfile
+        || null;
+      const sceneVideoFilter = this.postProcessor.buildVideoFilter({
+        baseFilter: 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1',
+        profile: antiPlasticProfile,
+        frameRate: outputFrameRate,
+      });
       await this.runCommand(this.ffmpegBin, [
         '-y',
         '-i', scene.asset.localPath,
         '-t', String(Math.max(0.5, Number(scene.duration) || 1)),
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30',
+        '-vf', sceneVideoFilter,
         '-c:v', 'libx264',
         '-preset', 'veryfast',
         '-crf', '18',
@@ -147,6 +161,11 @@ export class AudiovisualRenderer {
       },
       width: 1080,
       height: 1920,
+      frameRate: outputFrameRate,
+      antiPlasticPost: {
+        enabled: this.postProcessor.enabled,
+        profile: project.productionScript?.realismDirection?.profile || null,
+      },
     };
   }
 }
