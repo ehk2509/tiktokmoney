@@ -275,7 +275,15 @@ export function captureProfile(name) {
 }
 
 function chooseCaptureProfile(script, requested) {
-  if (requested && requested !== 'auto') return captureProfile(requested) ? requested : 'organic-documentary';
+  const validProfiles = new Set([
+    'organic-smartphone',
+    'fitness-action',
+    'cinematic',
+    'organic-documentary',
+  ]);
+  if (requested && requested !== 'auto') {
+    return validProfiles.has(requested) ? requested : 'organic-documentary';
+  }
   const haystack = [
     script.topic,
     script.synopsis,
