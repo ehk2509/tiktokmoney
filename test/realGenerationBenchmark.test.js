@@ -207,14 +207,24 @@ test('live benchmark emits blinded review aliases and keeps arm identity in a se
       name: 'test-suite',
       version: '1.0.0',
       description: 'one-case live harness test',
-      cases: [{
-        id: 'case-01',
-        category: 'static-camera',
-        topic: 'A test topic',
-        audience: 'testers',
-        durationSeconds: 4,
-        baselinePrompt: 'A plain photorealistic test video.',
-      }],
+      cases: [
+        {
+          id: 'case-01',
+          category: 'static-camera',
+          topic: 'A test topic',
+          audience: 'testers',
+          durationSeconds: 4,
+          baselinePrompt: 'A plain photorealistic test video.',
+        },
+        {
+          id: 'case-02',
+          category: 'walking',
+          topic: 'A second test topic',
+          audience: 'testers',
+          durationSeconds: 4,
+          baselinePrompt: 'A second plain photorealistic test video.',
+        },
+      ],
     };
     suite.frozenHash = computeSuiteHash(suite);
     const localSuitePath = path.join(dir, 'suite.json');
@@ -277,8 +287,10 @@ test('live benchmark emits blinded review aliases and keeps arm identity in a se
     const blind = JSON.parse(await readFile(result.blindRatingsPath, 'utf8'));
     const key = JSON.parse(await readFile(result.ratingKeyPath, 'utf8'));
     assert.equal(blind.blinded, true);
-    assert.equal(blind.samples.length, 2);
-    assert.equal(key.samples.length, 2);
+    assert.equal(blind.samples.length, 4);
+    assert.equal(key.samples.length, 4);
+    assert.deepEqual(result.run.pairs[0].executionOrder, ['baseline', 'full']);
+    assert.deepEqual(result.run.pairs[1].executionOrder, ['full', 'baseline']);
     assert.ok(blind.samples.every((sample) => !Object.hasOwn(sample, 'arm')));
     assert.deepEqual(new Set(key.samples.map((item) => item.arm)), new Set(['baseline', 'full']));
     assert.ok(blind.samples.every((sample) => path.basename(sample.artifactPath).startsWith('sample_')));
