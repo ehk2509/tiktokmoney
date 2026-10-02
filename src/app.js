@@ -18,6 +18,7 @@ import {
   createDeepLipSyncQcProvider,
   createPhonemeVisemeQcProvider,
   createSpeakerTurnQcProvider,
+  createPoseMotionQcProvider,
   createTrendIntelligence,
 } from './providers/providerFactory.js';
 
@@ -58,6 +59,9 @@ export function createApp(overrides = {}) {
     const speakerTurnQc = Object.prototype.hasOwnProperty.call(overrides, 'speakerTurnQc')
       ? overrides.speakerTurnQc
       : createSpeakerTurnQcProvider();
+    const poseMotionQc = Object.prototype.hasOwnProperty.call(overrides, 'poseMotionQc')
+      ? overrides.poseMotionQc
+      : createPoseMotionQcProvider();
 
     pipeline = new AudiovisualPipeline({
       llm,
@@ -71,6 +75,7 @@ export function createApp(overrides = {}) {
       deepLipSyncQc,
       phonemeVisemeQc,
       speakerTurnQc,
+      poseMotionQc,
       subtitleConfig: overrides.subtitleConfig,
       creativeTournament: overrides.creativeTournament,
       trendIntelligence,
