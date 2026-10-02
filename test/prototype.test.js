@@ -52,6 +52,12 @@ import {
   selectKeyframePolicy,
   buildKeyframePrompts,
 } from '../src/core/keyframeDirector.js';
+import {
+  MotionRegionDirector,
+  directMotionRegions,
+  buildMotionRegionPromptBlock,
+  buildMotionRegionQcContract,
+} from '../src/core/motionRegionDirector.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 import {
@@ -5574,5 +5580,471 @@ test('realism QC rejects a generated act that misses its explicit last keyframe'
   assert.ok(content.some(
     (part) => part.type === 'image_url'
       && part.image_url.url === 'https://cdn.example/last.jpg',
+  ));
+});
+
+
+test('motion region director isolates speech motion and stabilizes face/body/background', () => {
+  const directed = directMotionRegions({
+    index: 0,
+    dialogue: 'Here is the key point.',
+    dialogueTurns: [{
+      speakerCharacterId: 'maya',
+      text: 'Here is the key point.',
+    }],
+    speakerMode: 'single-speaker',
+    characterIds: ['maya'],
+    action: 'Maya stands naturally and speaks to camera.',
+    realismDirection: {
+      complexInteraction: false,
+      actionHeavy: false,
+      camera: { axis: 'locked' },
+      microMotion: ['subtle breathing and posture micro-adjustments'],
+    },
+  });
+
+  assert.equal(directed.motionRegionDirection.enabled, true);
+  assert.equal(directed.motionRegionDirection.nativeSpatialMask, false);
+  assert.equal(directed.motionRegionDirection.cameraMoving, false);
+  assert.ok(directed.motionRegionDirection.allowedRegionIds.includes('speech-mouth-jaw'));
+  assert.ok(directed.motionRegionDirection.allowedRegionIds.includes('posture-micro-motion'));
+  assert.ok(directed.motionRegionDirection.lockedRegionIds.includes('face-identity'));
+  assert.ok(directed.motionRegionDirection.lockedRegionIds.includes('environment-anchors'));
+
+  const background = directed.motionRegionDirection.lockedRegions
+    .find((item) => item.id === 'environment-anchors');
+  assert.equal(background.tolerance, 'locked');
+  assert.match(background.rule, /screen-space position stable/i);
+});
+
+test('motion region director allows only hands and primary prop for object interaction', () => {
+  const directed = directMotionRegions({
+    index: 0,
+    dialogue: '',
+    dialogueTurns: [],
+    speakerMode: 'single-speaker',
+    characterIds: ['alex'],
+    action: 'Alex picks up one dumbbell from the rack.',
+    realismDirection: {
+      complexInteraction: true,
+      actionHeavy: false,
+      camera: { axis: 'locked' },
+      microMotion: ['clothing settles naturally'],
+    },
+  });
+
+  const handRegion = directed.motionRegionDirection.allowedMotion
+    .find((item) => item.id === 'hands-primary-prop');
+  assert.ok(handRegion);
+  assert.match(handRegion.region, /hands, wrists, forearms/i);
+  assert.match(handRegion.behavior, /single planned object interaction/i);
+
+  const bodyLock = directed.motionRegionDirection.lockedRegions
+    .find((item) => item.id === 'body-shape');
+  assert.ok(bodyLock);
+  assert.match(bodyLock.region, /torso, hips and legs/i);
+});
+
+test('motion region director preserves camera parallax for tracking shots instead of freezing pixels', () => {
+  const directed = directMotionRegions({
+    index: 0,
+    dialogue: '',
+    characterIds: ['runner'],
+    action: 'Runner moves through the gym.',
+    realismDirection: {
+      complexInteraction: false,
+      actionHeavy: true,
+      camera: { axis: 'tracking' },
+      microMotion: [],
+    },
+  });
+
+  assert.equal(directed.motionRegionDirection.cameraMoving, true);
+  assert.ok(directed.motionRegionDirection.allowedRegionIds.includes('body-action-chain'));
+
+  const environment = directed.motionRegionDirection.lockedRegions
+    .find((item) => item.id === 'environment-anchors');
+  assert.equal(environment.tolerance, 'parallax-only');
+  assert.match(environment.rule, /correct camera parallax/i);
+});
+
+test('motion region prompt block explicitly separates allowed motion from locked regions', () => {
+  const directed = directMotionRegions({
+    dialogue: 'Move carefully.',
+    characterIds: ['alex'],
+    action: 'Alex picks up a cup.',
+    realismDirection: {
+      complexInteraction: true,
+      actionHeavy: false,
+      camera: { axis: 'locked' },
+      microMotion: ['light wind affects loose hair and fabric'],
+    },
+  });
+
+  const block = buildMotionRegionPromptBlock(directed);
+  assert.match(block, /MOTION REGION CONTROL/i);
+  assert.match(block, /ALLOWED TO MOVE/i);
+  assert.match(block, /active speaker mouth and jaw/i);
+  assert.match(block, /hands, wrists, forearms/i);
+  assert.match(block, /LOCKED \/ STABILIZE/i);
+  assert.match(block, /walls, doors, windows, furniture/i);
+  assert.match(block, /Do not animate the entire image/i);
+
+  const contract = buildMotionRegionQcContract(directed);
+  assert.equal(contract.cameraMoving, false);
+  assert.ok(contract.allowedMotion.length >= 2);
+  assert.ok(contract.lockedRegions.length >= 2);
+});
+
+test('motion region director handles multi-speaker blocking by locking inactive speakers', () => {
+  const director = new MotionRegionDirector({
+    enabled: true,
+    mode: 'semantic',
+  });
+  const script = director.direct({
+    segments: [{
+      index: 0,
+      speakerMode: 'multi-speaker',
+      dialogue: 'Question. Answer.',
+      dialogueTurns: [
+        { speakerCharacterId: 'host', text: 'Question.' },
+        { speakerCharacterId: 'expert', text: 'Answer.' },
+      ],
+      characterIds: ['host', 'expert'],
+      action: 'Host asks a question; expert answers.',
+      realismDirection: {
+        camera: { axis: 'locked' },
+        microMotion: [],
+        complexInteraction: false,
+        actionHeavy: false,
+      },
+    }],
+  });
+
+  const plan = script.segments[0].motionRegionDirection;
+  assert.ok(plan.lockedRegionIds.includes('inactive-speakers'));
+  const inactive = plan.lockedRegions.find((item) => item.id === 'inactive-speakers');
+  assert.match(inactive.rule, /mouth closed\/resting/i);
+  assert.equal(script.motionRegionDirection.actsControlled, 1);
+});
+
+test('Runway audiovisual prompt records semantic region control without inventing a native mask field', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-motion-region-provider-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueMode: 'native',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 1,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, body });
+
+        if (target.endsWith('/text_to_video')) {
+          return jsonResponse({ id: 'motion-region-video' });
+        }
+        if (target.endsWith('/tasks/motion-region-video')) {
+          return jsonResponse({
+            id: 'motion-region-video',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/motion-region.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/motion-region.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('motion-region').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const segment = directMotionRegions({
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 5,
+      dialogue: 'Only my mouth should move while I speak.',
+      dialogueTurns: [{
+        speakerCharacterId: 'p',
+        text: 'Only my mouth should move while I speak.',
+      }],
+      speakerCharacterId: 'p',
+      speakerMode: 'single-speaker',
+      characterIds: ['p'],
+      locationId: 'room',
+      action: 'Presenter stands and speaks.',
+      camera: 'Locked medium shot.',
+      ambience: 'Quiet room tone.',
+      soundEffects: [],
+      music: '',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+      realismDirection: {
+        camera: { axis: 'locked' },
+        microMotion: [],
+        complexInteraction: false,
+        actionHeavy: false,
+      },
+      keyframeDirection: { enabled: false, policy: 'off' },
+    });
+
+    const script = {
+      characters: [{
+        id: 'p',
+        name: 'Presenter',
+        description: 'adult presenter',
+        physicalTraits: 'stable natural face',
+        wardrobe: 'neutral shirt',
+        voice: { presetId: 'Bernard', languageCode: 'en' },
+      }],
+      locations: [{
+        id: 'room',
+        name: 'Room',
+        description: 'real room',
+        lighting: 'window daylight',
+        fixedElements: ['desk', 'window'],
+      }],
+      visualStyle: {
+        description: 'natural documentary',
+        cameraRules: 'locked physical camera',
+        lightingRules: 'motivated daylight',
+      },
+      audioDirection: { mix: 'clear speech', musicPolicy: 'none' },
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript: script,
+      projectId: 'motion-region',
+    });
+
+    const request = requests.find((item) => item.target.endsWith('/text_to_video'));
+    assert.match(request.body.promptText, /MOTION REGION CONTROL/i);
+    assert.match(request.body.promptText, /ALLOWED TO MOVE/i);
+    assert.match(request.body.promptText, /LOCKED \/ STABILIZE/i);
+    assert.equal(request.body.motionMask, undefined);
+    assert.equal(request.body.mask, undefined);
+    assert.equal(asset.motionControlMode, 'semantic-region-prompt');
+    assert.equal(asset.nativeMotionMask, false);
+    assert.equal(asset.motionRegionDirection.enabled, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('realism QC rejects background drift even when overall realism and temporal score are high', async () => {
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    threshold: 82,
+    temporalThreshold: 80,
+    motionRegionThreshold: 84,
+    temporalEnabled: true,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,STATIC' },
+      ],
+      sampleTemporal: async () => [
+        { index: 0, timestamp: 0.2, dataUrl: 'data:image/jpeg;base64,T0' },
+        { index: 1, timestamp: 1.0, dataUrl: 'data:image/jpeg;base64,T1' },
+      ],
+    },
+    fetchImpl: async () => jsonResponse({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            overallScore: 94,
+            temporalScore: 92,
+            scores: {
+              photorealism: 94,
+              anatomy: 94,
+              geometry: 92,
+              physics: 92,
+              motionConsistency: 92,
+              continuity: 94,
+              identityContinuity: 94,
+              locationContinuity: 94,
+              sceneRelevance: 94,
+              artifactFreedom: 94,
+              materialRealism: 94,
+              cameraPhysics: 92,
+              lightingNaturalism: 93,
+              keyframeStartMatch: 100,
+              keyframeEndMatch: 100,
+            },
+            temporalScores: {
+              identityStability: 93,
+              objectPersistence: 92,
+              geometryStability: 91,
+              motionPlausibility: 92,
+              cameraContinuity: 94,
+              flickerFreedom: 92,
+              temporalArtifactFreedom: 91,
+              actionContinuity: 93,
+            },
+            motionRegionScores: {
+              motionRegionCompliance: 62,
+              lockedRegionStability: 58,
+              intendedMotionCompliance: 91,
+              backgroundDriftFreedom: 49,
+            },
+            issues: [],
+            temporalIssues: [{
+              code: 'background-breathing',
+              severity: 'high',
+              evidence: 'Desk edge and wall subtly warp while the locked camera remains static.',
+            }],
+            summary: 'Looks realistic in isolated frames.',
+            temporalSummary: 'Unintended background drift violates the motion plan.',
+            regenerationGuidance: '',
+          }),
+        },
+      }],
+    }),
+  });
+
+  const scene = {
+    narration: 'Presenter speaks to camera.',
+    duration: 5,
+    continuity: { characterIds: ['p'], locationId: 'room' },
+    motionRegionDirection: directMotionRegions({
+      dialogue: 'Presenter speaks.',
+      action: 'Presenter stands and speaks.',
+      realismDirection: {
+        camera: { axis: 'locked' },
+        complexInteraction: false,
+        actionHeavy: false,
+        microMotion: [],
+      },
+    }).motionRegionDirection,
+  };
+
+  const result = await qc.evaluateScene(scene, {
+    localPath: '/fake/motion-regions.mp4',
+    generatedDuration: '5s',
+    prompt: 'locked presenter shot',
+    motionControlMode: 'semantic-region-prompt',
+  });
+
+  assert.equal(result.staticPassed, true);
+  assert.equal(result.temporalPassed, true);
+  assert.equal(result.motionRegionVerified, true);
+  assert.equal(result.motionRegionPassed, false);
+  assert.equal(result.passed, false);
+  assert.equal(result.motionRegionScores.backgroundDriftFreedom, 49);
+  assert.match(result.regenerationGuidance, /MOTION REGION CORRECTION/i);
+  assert.match(result.regenerationGuidance, /background|walls|furniture/i);
+});
+
+test('realism QC does not require motion-region scores when provider did not apply region control', async () => {
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    temporalEnabled: true,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 1, dataUrl: 'data:image/jpeg;base64,STATIC' },
+      ],
+      sampleTemporal: async () => [
+        { index: 0, timestamp: 0.2, dataUrl: 'data:image/jpeg;base64,T0' },
+      ],
+    },
+    fetchImpl: async () => jsonResponse({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            overallScore: 93,
+            temporalScore: 91,
+            scores: {
+              photorealism: 93,
+              anatomy: 93,
+              geometry: 93,
+              physics: 93,
+              motionConsistency: 93,
+              continuity: 93,
+              identityContinuity: 93,
+              locationContinuity: 93,
+              sceneRelevance: 93,
+              artifactFreedom: 93,
+              materialRealism: 93,
+              cameraPhysics: 93,
+              lightingNaturalism: 93,
+              keyframeStartMatch: 100,
+              keyframeEndMatch: 100,
+            },
+            temporalScores: {
+              identityStability: 91,
+              objectPersistence: 91,
+              geometryStability: 91,
+              motionPlausibility: 91,
+              cameraContinuity: 91,
+              flickerFreedom: 91,
+              temporalArtifactFreedom: 91,
+              actionContinuity: 91,
+            },
+            issues: [],
+            temporalIssues: [],
+          }),
+        },
+      }],
+    }),
+  });
+
+  const result = await qc.evaluateScene({
+    narration: 'Legacy provider scene.',
+    duration: 5,
+    continuity: { characterIds: [], locationId: null },
+    motionRegionDirection: {
+      enabled: true,
+      allowedMotion: [],
+      lockedRegions: [],
+    },
+  }, {
+    localPath: '/fake/legacy-provider.mp4',
+    generatedDuration: '5s',
+    prompt: 'legacy',
+    motionControlMode: 'off',
+  });
+
+  assert.equal(result.motionRegionVerified, false);
+  assert.equal(result.motionRegionPassed, true);
+  assert.equal(result.passed, true);
+});
+
+test('audiovisual pipeline persists project-wide motion-region provenance', async () => {
+  const pipeline = new AudiovisualPipeline({
+    llm: new TemplateLlmProvider(),
+    audiovisual: {
+      generateSegment: async ({ segment }) => ({
+        type: 'ai-video',
+        localPath: `/fake/motion-plan-${segment.index}.mp4`,
+        generationId: `motion-plan-${segment.index}`,
+        prompt: segment.dialogue,
+        audioMode: 'native',
+        motionControlMode: segment.motionRegionDirection?.enabled
+          ? 'semantic-region-prompt'
+          : 'off',
+      }),
+    },
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc: null,
+  });
+
+  const project = await pipeline.generate({
+    topic: 'natural speaking and movement',
+    durationSeconds: 20,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(project.motionRegionDirection.enabled, true);
+  assert.ok(project.productionScript.segments.every(
+    (segment) => segment.motionRegionDirection?.enabled,
   ));
 });
