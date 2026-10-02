@@ -61,6 +61,23 @@
 - [x] Timed composed dialogue master
 - [x] Speaker attribution / turn-taking QC
 
+## M1.9 - Anti-plastic realism
+
+- [x] Action/camera complexity risk scoring
+- [x] Physical camera capture profiles
+- [x] Automatic 24/30 fps profile selection
+- [x] Stable-shot duration targets by risk
+- [x] Prompt cleanup for synthetic quality keywords
+- [x] Motivated imperfect lighting direction
+- [x] Environmental micro-motion direction
+- [x] Room-tone / foley soundscape direction
+- [x] Material/camera/lighting realism QC
+- [x] Bounded optical softness / saturation / contrast / grain post
+- [x] Motion-blur safety guard against morphing defects
+- [ ] First/last-frame constrained generation where provider supports it
+- [ ] Motion-mask / motion-brush provider integrations
+- [ ] Video-to-video motion guidance
+
 ## M2 - Trend intelligence
 
 - [x] Pluggable trend ingestion (YouTube, Reddit, RSS/Atom)
