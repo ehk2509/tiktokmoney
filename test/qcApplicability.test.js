@@ -250,3 +250,135 @@ test('inapplicable QC modules do not grant extra regeneration attempts', async (
   assert.equal(project.scenes[0].visualQcHistory[0].retryBudget, 0);
   assert.equal(project.scenes[0].qcApplicability.poseMotion.reason, 'no-motion-reference');
 });
+
+
+test('each QC stage keeps its own retry allowance after another stage already retried', async () => {
+  let generations = 0;
+  let realismCalls = 0;
+  let dialogueCalls = 0;
+  const llm = {
+    async generateProductionScript() {
+      return {
+        title: 'Sequential QC retries',
+        characters: [{
+          id: 'host',
+          name: 'Host',
+          description: 'Visible presenter.',
+          physicalTraits: 'Natural appearance.',
+          wardrobe: 'Neutral shirt.',
+          voice: { presetId: 'Bernard', languageCode: 'en' },
+        }],
+        locations: [{
+          id: 'room',
+          name: 'Room',
+          description: 'Simple room.',
+          lighting: 'Daylight.',
+          fixedElements: ['table'],
+        }],
+        visualStyle: {
+          description: 'Photorealistic.',
+          cameraRules: 'Stable camera.',
+          lightingRules: 'Natural light.',
+        },
+        audioDirection: {
+          mix: 'Clear dialogue.',
+          musicPolicy: 'No music.',
+        },
+        segments: [{
+          durationSeconds: 6,
+          purpose: 'hook',
+          speakerCharacterId: 'host',
+          characterIds: ['host'],
+          locationId: 'room',
+          dialogue: 'A short exact line.',
+          dialogueTurns: [{ speakerCharacterId: 'host', text: 'A short exact line.' }],
+          action: 'Host speaks to camera.',
+          camera: 'Medium close-up.',
+          ambience: 'Quiet room.',
+          soundEffects: [],
+          music: '',
+        }],
+      };
+    },
+  };
+  const audiovisual = {
+    async generateSegment({ segment, regeneration }) {
+      generations += 1;
+      return {
+        type: 'ai-video',
+        localPath: `/fake/sequential-${generations}.mp4`,
+        generationId: `sequential-${generations}`,
+        prompt: segment.dialogue,
+        regeneration,
+      };
+    },
+  };
+  const realismQc = {
+    maxRegenerations: 1,
+    async evaluateScene() {
+      realismCalls += 1;
+      return realismCalls === 1
+        ? {
+          passed: false,
+          issues: [{ code: 'realism', severity: 'high', evidence: 'first attempt' }],
+          regenerationGuidance: 'Fix realism.',
+        }
+        : { passed: true, issues: [], regenerationGuidance: '' };
+    },
+  };
+  const dialogueQc = {
+    maxRegenerations: 1,
+    async evaluate() {
+      dialogueCalls += 1;
+      return dialogueCalls === 2
+        ? {
+          passed: false,
+          issues: [{ code: 'dialogue', severity: 'high', evidence: 'second attempt' }],
+          regenerationGuidance: 'Fix dialogue.',
+          transcription: { text: 'wrong', words: [] },
+        }
+        : {
+          passed: true,
+          issues: [],
+          regenerationGuidance: '',
+          transcription: { text: 'A short exact line.', words: [] },
+        };
+    },
+  };
+
+  const pipeline = new AudiovisualPipeline({
+    llm,
+    audiovisual,
+    renderer: null,
+    store: { saveProject: async () => {} },
+    realismQc,
+    dialogueQc,
+  });
+  const project = await pipeline.generate({
+    topic: 'sequential retry accounting',
+    durationSeconds: 6,
+    render: false,
+  });
+
+  assert.equal(project.status, 'READY');
+  assert.equal(generations, 3);
+  assert.equal(project.scenes[0].visualQcHistory.length, 3);
+  assert.deepEqual(project.scenes[0].visualQcHistory[0].retryUsage, {
+    realism: 0,
+    dialogue: 0,
+    lipSync: 0,
+    deepLipSync: 0,
+    phonemeViseme: 0,
+    speakerTurn: 0,
+    poseMotion: 0,
+  });
+  assert.deepEqual(project.scenes[0].asset.qc.retryUsage, {
+    realism: 1,
+    dialogue: 1,
+    lipSync: 0,
+    deepLipSync: 0,
+    phonemeViseme: 0,
+    speakerTurn: 0,
+    poseMotion: 0,
+  });
+});
