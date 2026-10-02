@@ -12,7 +12,7 @@
     "generate": "node --env-file-if-exists=.env src/cli.js generate",
     "opportunities": "node --env-file-if-exists=.env src/cli.js opportunities",
     "test": "node --test",
-    "check": "node --check src/cli.js && node --check src/server.js && node --test",
+    "check": "node --check src/cli.js && node --check src/server.js && node --check scripts/setup-pose-sidecar.mjs && node --test",
     "plan": "node --env-file-if-exists=.env src/cli.js plan",
     "run-plan": "node --env-file-if-exists=.env src/cli.js run-plan",
     "setup:pose": "node scripts/setup-pose-sidecar.mjs"
