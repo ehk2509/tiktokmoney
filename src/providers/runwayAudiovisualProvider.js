@@ -167,7 +167,7 @@ export class RunwayAudiovisualProvider {
 
     let keyframes = null;
     let keyframeError = null;
-    if (segment.keyframeDirection?.enabled) {
+    if (segment.keyframeDirection?.enabled && supportsWanKeyframes(this.model)) {
       try {
         keyframes = await this.generateKeyframes({
           segment,
@@ -181,6 +181,10 @@ export class RunwayAudiovisualProvider {
         if (!this.keyframeFailOpen) throw error;
         keyframeError = error.message;
       }
+    }
+
+    if (segment.keyframeDirection?.enabled && !supportsWanKeyframes(this.model)) {
+      keyframeError = `keyframe mode is not enabled for audiovisual model ${this.model}`;
     }
 
     const duration = clamp(Math.round(segment.durationSeconds), 4, 15);
@@ -615,6 +619,10 @@ function safe(value) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function supportsWanKeyframes(model) {
+  return ['wan3', 'wan3_prime'].includes(String(model || '').toLowerCase());
 }
 
 function parseBoolean(value, fallback) {
