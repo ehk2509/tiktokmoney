@@ -91,31 +91,13 @@ export class OpenAiTranscriptionProvider {
 
   async transcribe(localPath, { language = null } = {}) {
     const bytes = await readFile(localPath);
-    const form = new FormData();
-    form.append(
-      'file',
-      new Blob([bytes], { type: mediaTypeFor(localPath) }),
-      path.basename(localPath),
-    );
-    form.append('model', this.model);
-    form.append('response_format', 'verbose_json');
-    form.append('timestamp_granularities[]', 'word');
-    form.append('timestamp_granularities[]', 'segment');
-    if (language) form.append('language', String(language).slice(0, 12));
+    let { response, payload } = await this.requestTranscription(localPath, bytes, { language });
 
-    const response = await this.fetch(`${this.baseUrl}/audio/transcriptions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-      },
-      body: form,
-    });
-
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new Error('transcription provider returned a non-JSON response');
+    // Newer transcription models only accept json/text; retry without word timestamps.
+    if (!response.ok && this.supportsVerboseJson !== false
+      && /verbose_json/i.test(payload?.error?.message || '')) {
+      this.supportsVerboseJson = false;
+      ({ response, payload } = await this.requestTranscription(localPath, bytes, { language }));
     }
 
     if (!response.ok) {
@@ -131,6 +113,38 @@ export class OpenAiTranscriptionProvider {
       segments: normalizeSegments(payload?.segments),
       usage: payload?.usage || null,
     };
+  }
+
+  async requestTranscription(localPath, bytes, { language }) {
+    const form = new FormData();
+    form.append(
+      'file',
+      new Blob([bytes], { type: mediaTypeFor(localPath) }),
+      path.basename(localPath),
+    );
+    form.append('model', this.model);
+    if (this.supportsVerboseJson === false) {
+      form.append('response_format', 'json');
+    } else {
+      form.append('response_format', 'verbose_json');
+      form.append('timestamp_granularities[]', 'word');
+      form.append('timestamp_granularities[]', 'segment');
+    }
+    if (language) form.append('language', String(language).slice(0, 12));
+
+    const response = await this.fetch(`${this.baseUrl}/audio/transcriptions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+      },
+      body: form,
+    });
+
+    try {
+      return { response, payload: await response.json() };
+    } catch {
+      throw new Error('transcription provider returned a non-JSON response');
+    }
   }
 }
 

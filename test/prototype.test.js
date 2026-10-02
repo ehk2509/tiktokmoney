@@ -2564,6 +2564,43 @@ test('OpenAI transcription provider requests verbose word timestamps and passes 
   }
 });
 
+test('OpenAI transcription provider falls back to json when the model rejects verbose_json', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-transcription-json-'));
+  try {
+    const filePath = path.join(dir, 'act.mp4');
+    await writeFile(filePath, 'fake-video');
+    const formats = [];
+
+    const provider = new OpenAiTranscriptionProvider({
+      apiKey: 'openai-key',
+      model: 'gpt-transcribe',
+      fetchImpl: async (url, options) => {
+        const format = options.body.get('response_format');
+        formats.push(format);
+        if (format === 'verbose_json') {
+          return {
+            ok: false,
+            status: 400,
+            statusText: 'Bad Request',
+            json: async () => ({ error: { message: "response_format 'verbose_json' is not compatible with model 'gpt-transcribe'. Use 'json' or 'text' instead." } }),
+          };
+        }
+        assert.equal(options.body.getAll('timestamp_granularities[]').length, 0);
+        return jsonResponse({ text: 'Octopuses have three hearts.' });
+      },
+    });
+
+    const first = await provider.evaluate({ localPath: filePath }, { expectedText: 'Octopuses have three hearts.' });
+    await provider.evaluate({ localPath: filePath }, { expectedText: 'Octopuses have three hearts.' });
+
+    assert.equal(first.passed, true);
+    assert.deepEqual(first.transcription.words, []);
+    assert.deepEqual(formats, ['verbose_json', 'json', 'json']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('dialogue QC rejects paraphrased generated speech and returns targeted guidance', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-transcription-drift-'));
   try {
