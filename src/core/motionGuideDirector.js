@@ -122,7 +122,10 @@ export function directMotionGuide(segment, references = [], {
       reference,
       score: scoreReference(segment, reference, actionClass),
     }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => (
+      (b.score - a.score)
+      || (Number(b.reference.qualityScore || 0) - Number(a.reference.qualityScore || 0))
+    ));
 
   const winner = scored[0];
   const selectedReference = winner && winner.score >= minSelectionScore
