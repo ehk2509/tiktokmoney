@@ -165,16 +165,60 @@ export class RunwayAudiovisualProvider {
       previousAsset,
     });
 
-    const task = await this.createTask('/text_to_video', {
-      model: this.model,
-      promptText,
-      audio: true,
-      duration: clamp(Math.round(segment.durationSeconds), 4, 15),
-      ratio: this.ratio,
-      ...(references.length ? { references } : {}),
-      ...(referenceVideos.length ? { referenceVideos } : {}),
-      ...(referenceAudio.length ? { referenceAudio } : {}),
-    });
+    let keyframes = null;
+    let keyframeError = null;
+    if (segment.keyframeDirection?.enabled) {
+      try {
+        keyframes = await this.generateKeyframes({
+          segment,
+          productionScript,
+          storyBible,
+          previousAsset,
+          regeneration,
+          projectId,
+        });
+      } catch (error) {
+        if (!this.keyframeFailOpen) throw error;
+        keyframeError = error.message;
+      }
+    }
+
+    const duration = clamp(Math.round(segment.durationSeconds), 4, 15);
+    const keyframePromptImages = [];
+    if (keyframes?.first?.url) {
+      keyframePromptImages.push({
+        uri: keyframes.first.url,
+        position: 'first',
+      });
+    }
+    if (keyframes?.last?.url) {
+      keyframePromptImages.push({
+        uri: keyframes.last.url,
+        position: 'last',
+      });
+    }
+
+    const task = keyframePromptImages.length
+      ? await this.createTask('/image_to_video', {
+        model: this.model,
+        promptImage: keyframePromptImages,
+        promptText,
+        audio: true,
+        duration,
+        ratio: this.keyframeVideoRatio,
+        ...(referenceVideos.length ? { referenceVideos } : {}),
+        ...(referenceAudio.length ? { referenceAudio } : {}),
+      })
+      : await this.createTask('/text_to_video', {
+        model: this.model,
+        promptText,
+        audio: true,
+        duration,
+        ratio: this.ratio,
+        ...(references.length ? { references } : {}),
+        ...(referenceVideos.length ? { referenceVideos } : {}),
+        ...(referenceAudio.length ? { referenceAudio } : {}),
+      });
     const completed = await this.wait(task.id);
     const sourceUrl = firstOutputUrl(completed);
     if (!sourceUrl) throw new Error('Runway audiovisual task completed without output');
@@ -211,7 +255,95 @@ export class RunwayAudiovisualProvider {
       referenceImageCount: references.length,
       referenceVideoCount: referenceVideos.length,
       referenceAudioCount: referenceAudio.length,
+      keyframeMode: keyframes?.last?.url
+        ? 'first-last'
+        : keyframes?.first?.url
+          ? 'first'
+          : 'off',
+      keyframes,
+      keyframeError,
+      referenceImageUrl: keyframes?.first?.url || references[0]?.uri || null,
+      referenceEndImageUrl: keyframes?.last?.url || null,
       previousGenerationId: previousAsset?.generationId || null,
+    };
+  }
+
+  async generateKeyframes({
+    segment,
+    productionScript,
+    storyBible = null,
+    previousAsset = null,
+    regeneration = null,
+    projectId = 'project',
+  }) {
+    const prompts = buildKeyframePrompts({
+      segment,
+      productionScript,
+      storyBible,
+      previousAsset,
+      regeneration,
+    });
+    if (!prompts.first) return null;
+
+    const references = collectKeyframeReferences(segment, storyBible, previousAsset);
+    const first = await this.generateKeyframeImage({
+      prompt: prompts.first,
+      references,
+      projectId,
+      segmentIndex: segment.index,
+      position: 'first',
+    });
+
+    let last = null;
+    if (prompts.last) {
+      const lastReferences = uniqueTaggedReferences([
+        { uri: first.url, tag: 'first_frame' },
+        ...references,
+      ]).slice(0, 6);
+      last = await this.generateKeyframeImage({
+        prompt: prompts.last,
+        references: lastReferences,
+        projectId,
+        segmentIndex: segment.index,
+        position: 'last',
+      });
+    }
+
+    return {
+      policy: segment.keyframeDirection?.policy || (last ? 'first-last' : 'first'),
+      provider: 'runway',
+      imageModel: this.imageModel,
+      first,
+      last,
+    };
+  }
+
+  async generateKeyframeImage({
+    prompt,
+    references = [],
+    projectId = 'project',
+    segmentIndex = 0,
+    position = 'first',
+  }) {
+    const task = await this.createTask('/text_to_image', {
+      model: this.imageModel,
+      promptText: prompt,
+      ratio: this.keyframeImageRatio,
+      ...(references.length ? { referenceImages: references } : {}),
+    });
+    const completed = await this.wait(task.id);
+    const url = firstOutputUrl(completed);
+    if (!url) {
+      throw new Error(`Runway ${position} keyframe task completed without output`);
+    }
+
+    return {
+      generationId: task.id,
+      url,
+      prompt,
+      position,
+      projectId,
+      segmentIndex,
     };
   }
 
@@ -408,6 +540,31 @@ function normalizedDialogueTurns(segment, productionScript) {
   }];
 }
 
+function collectKeyframeReferences(segment, storyBible, previousAsset) {
+  const refs = [];
+  let characterIndex = 0;
+  for (const characterId of segment.characterIds || []) {
+    for (const image of storyBible?.references?.characters?.[characterId]?.images || []) {
+      if (image.url) {
+        refs.push({
+          uri: image.url,
+          tag: `character_${characterIndex++}`,
+        });
+      }
+    }
+  }
+
+  const location = storyBible?.references?.locations?.[segment.locationId];
+  if (location?.url) refs.push({ uri: location.url, tag: 'location' });
+
+  const previousEnd = previousAsset?.keyframes?.last?.url
+    || previousAsset?.referenceEndImageUrl
+    || previousAsset?.referenceImageUrl;
+  if (previousEnd) refs.push({ uri: previousEnd, tag: 'previous_act' });
+
+  return uniqueTaggedReferences(refs).slice(0, 6);
+}
+
 function collectImageReferences(segment, storyBible, previousAsset) {
   const refs = [];
   for (const characterId of segment.characterIds || []) {
@@ -425,6 +582,15 @@ function uniqueByUri(items) {
   const seen = new Set();
   return items.filter((item) => {
     if (!item.uri || seen.has(item.uri)) return false;
+    seen.add(item.uri);
+    return true;
+  });
+}
+
+function uniqueTaggedReferences(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (!item?.uri || seen.has(item.uri)) return false;
     seen.add(item.uri);
     return true;
   });
@@ -449,6 +615,11 @@ function safe(value) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function parseBoolean(value, fallback) {
+  if (value == null || value === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
 
 async function fileExists(file) {
