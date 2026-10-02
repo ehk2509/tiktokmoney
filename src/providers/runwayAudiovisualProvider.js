@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 import { buildRealismPromptBlock } from '../core/realismDirector.js';
@@ -25,6 +25,7 @@ export class RunwayAudiovisualProvider {
     keyframeVideoRatio = process.env.KEYFRAME_VIDEO_RATIO || 'auto_720p',
     keyframeFailOpen = parseBoolean(process.env.KEYFRAME_FAIL_OPEN, true),
     motionGuideFailOpen = parseBoolean(process.env.MOTION_GUIDE_FAIL_OPEN, true),
+    motionGuideMaxDataUriBytes = Number(process.env.MOTION_GUIDE_MAX_DATA_URI_BYTES || 3600000),
     assetDir = process.env.ASSET_DIR || './outputs/assets',
     pollIntervalMs = Number(process.env.RUNWAY_POLL_INTERVAL_MS || 2500),
     maxPolls = Number(process.env.RUNWAY_MAX_POLLS || 120),
@@ -49,6 +50,10 @@ export class RunwayAudiovisualProvider {
     this.keyframeVideoRatio = keyframeVideoRatio;
     this.keyframeFailOpen = Boolean(keyframeFailOpen);
     this.motionGuideFailOpen = Boolean(motionGuideFailOpen);
+    this.motionGuideMaxDataUriBytes = Math.max(
+      500000,
+      Math.min(3900000, Number(motionGuideMaxDataUriBytes) || 3600000),
+    );
     this.assetDir = assetDir;
     this.pollIntervalMs = pollIntervalMs;
     this.maxPolls = maxPolls;
@@ -330,15 +335,29 @@ export class RunwayAudiovisualProvider {
     projectId = 'project',
   }) {
     const selected = segment.motionGuideDirection?.selectedReference;
-    if (!selected?.url) return null;
+    if (!selected?.url && !selected?.localPath) return null;
 
     await mkdir(this.assetDir, { recursive: true });
-    const localPath = path.join(
-      this.assetDir,
-      `motion-guide-${safe(selected.id)}-${fingerprint(selected.url)}.mp4`,
-    );
-    if (!(await fileExists(localPath))) {
-      await this.download(selected.url, localPath);
+    let localPath;
+    let providerUri;
+    if (selected.localPath) {
+      localPath = path.resolve(selected.localPath);
+      if (!(await fileExists(localPath))) {
+        throw new Error(`local motion reference is missing: ${localPath}`);
+      }
+      providerUri = await videoFileToDataUri(
+        localPath,
+        this.motionGuideMaxDataUriBytes,
+      );
+    } else {
+      localPath = path.join(
+        this.assetDir,
+        `motion-guide-${safe(selected.id)}-${fingerprint(selected.url)}.mp4`,
+      );
+      if (!(await fileExists(localPath))) {
+        await this.download(selected.url, localPath);
+      }
+      providerUri = selected.url;
     }
 
     let poseExtraction = null;
@@ -364,6 +383,7 @@ export class RunwayAudiovisualProvider {
     return {
       actionClass: segment.motionGuideDirection.actionClass,
       selectedReference: selected,
+      providerUri,
       localPath,
       poseSource: poseExtraction?.source || 'none',
       poseExtractor: poseExtraction?.extractor || null,
@@ -654,10 +674,10 @@ export function buildVideoReferencePlan({
   maxCombinedSeconds = 15,
 } = {}) {
   const candidates = [];
-  if (motionGuide?.selectedReference?.url) {
+  if (motionGuide?.providerUri) {
     candidates.push({
       role: 'motion-guide',
-      uri: motionGuide.selectedReference.url,
+      uri: motionGuide.providerUri,
       durationSeconds: Number(motionGuide.selectedReference.durationSeconds) || 0,
     });
   }
@@ -699,6 +719,22 @@ function parseVideoDuration(asset) {
   if (Number.isFinite(direct) && direct > 0) return direct;
   const match = String(asset?.generatedDuration || '').match(/([0-9]+(?:\.[0-9]+)?)/);
   return match ? Number(match[1]) : 15;
+}
+
+async function videoFileToDataUri(filePath, maxSourceBytes) {
+  const info = await stat(filePath);
+  if (info.size > maxSourceBytes) {
+    throw new Error(
+      `local motion reference is ${info.size} bytes; exceeds safe data-URI source budget ${maxSourceBytes}`,
+    );
+  }
+  const bytes = await readFile(filePath);
+  const encoded = bytes.toString('base64');
+  const uri = `data:video/mp4;base64,${encoded}`;
+  if (Buffer.byteLength(uri) > 5000000) {
+    throw new Error('encoded local motion reference exceeds Runway 5MB data-URI limit');
+  }
+  return uri;
 }
 
 function supportsMotionGuide(model) {
