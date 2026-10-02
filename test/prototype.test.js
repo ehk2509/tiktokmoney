@@ -47,6 +47,11 @@ import {
   AntiPlasticPostProcessor,
   shouldApplySyntheticMotionBlur,
 } from '../src/services/antiPlasticPostProcessor.js';
+import {
+  KeyframeDirector,
+  selectKeyframePolicy,
+  buildKeyframePrompts,
+} from '../src/core/keyframeDirector.js';
 import { parseEbur128 } from '../src/services/audioQualityInspector.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
 import {
@@ -5121,4 +5126,453 @@ test('audiovisual renderer respects realism-selected project frame rate and opti
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test('keyframe director scales endpoint locking with realism risk', () => {
+  assert.equal(selectKeyframePolicy({
+    riskScore: 20,
+    firstFrameRiskThreshold: 32,
+    lastFrameRiskThreshold: 50,
+  }), 'off');
+  assert.equal(selectKeyframePolicy({
+    riskScore: 38,
+    firstFrameRiskThreshold: 32,
+    lastFrameRiskThreshold: 50,
+  }), 'first');
+  assert.equal(selectKeyframePolicy({
+    riskScore: 72,
+    firstFrameRiskThreshold: 32,
+    lastFrameRiskThreshold: 50,
+  }), 'first-last');
+
+  const director = new KeyframeDirector({
+    enabled: true,
+    mode: 'auto',
+    firstFrameRiskThreshold: 32,
+    lastFrameRiskThreshold: 50,
+  });
+  const directed = director.direct({
+    segments: [
+      { index: 0, action: 'Person talks.', realismDirection: { riskScore: 18 } },
+      {
+        index: 1,
+        action: 'Person walks.',
+        startState: 'Alex stands beside the rack with both hands empty.',
+        realismDirection: { riskScore: 40 },
+      },
+      {
+        index: 2,
+        action: 'Alex picks up one dumbbell and finishes standing upright.',
+        startState: 'Alex stands with the dumbbell on the rack.',
+        endState: 'Alex stands upright holding exactly one dumbbell at his side.',
+        realismDirection: { riskScore: 75 },
+      },
+    ],
+  });
+
+  assert.equal(directed.segments[0].keyframeDirection.policy, 'off');
+  assert.equal(directed.segments[1].keyframeDirection.policy, 'first');
+  assert.equal(directed.segments[2].keyframeDirection.policy, 'first-last');
+  assert.match(directed.segments[2].keyframeDirection.lastFrame.state, /exactly one dumbbell/i);
+  assert.equal(directed.keyframeDirection.firstLastFrameActs, 1);
+});
+
+test('keyframe prompt preserves canonical identity and physically reachable endpoint', () => {
+  const segment = {
+    index: 0,
+    characterIds: ['alex'],
+    locationId: 'gym',
+    action: 'Alex lifts one dumbbell from the rack and settles upright.',
+    camera: 'Medium shot.',
+    startState: 'Alex stands beside the rack with both hands visible and the dumbbell on the rack.',
+    endState: 'Alex stands upright holding the same dumbbell at his right side.',
+    keyframeDirection: {
+      enabled: true,
+      policy: 'first-last',
+      firstFrame: { state: 'Alex stands beside the rack with both hands visible and the dumbbell on the rack.' },
+      lastFrame: { state: 'Alex stands upright holding the same dumbbell at his right side.' },
+    },
+    realismDirection: {
+      camera: {
+        fieldOfView: '35mm field of view',
+        apertureLook: 'moderate depth of field',
+        support: 'handheld camera',
+      },
+    },
+  };
+  const script = {
+    characters: [{
+      id: 'alex',
+      name: 'Alex',
+      description: '34-year-old trainer',
+      physicalTraits: 'short dark hair and light beard',
+      wardrobe: 'white shirt and black shorts',
+    }],
+    locations: [{
+      id: 'gym',
+      name: 'Gym',
+      description: 'brick neighborhood gym',
+      lighting: 'morning window light',
+      fixedElements: ['black dumbbell rack'],
+    }],
+    visualStyle: {
+      description: 'natural documentary image',
+      cameraRules: 'human-operated camera',
+      lightingRules: 'motivated daylight',
+    },
+  };
+
+  const prompts = buildKeyframePrompts({ segment, productionScript: script });
+  assert.match(prompts.first, /FIRST FRAME/i);
+  assert.match(prompts.first, /white shirt and black shorts/i);
+  assert.match(prompts.first, /black dumbbell rack/i);
+  assert.match(prompts.last, /LAST FRAME/i);
+  assert.match(prompts.last, /same dumbbell at his right side/i);
+  assert.match(prompts.last, /physically reachable/i);
+});
+
+test('Runway audiovisual provider uses WAN first-last keyframes while preserving locked reference audio', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-wan-keyframes-'));
+  const requests = [];
+  let imageTask = 0;
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, method: options.method || 'GET', body });
+
+        if (target.endsWith('/text_to_speech') && options.method === 'POST') {
+          return jsonResponse({ id: 'tts-keyframe' });
+        }
+        if (target.endsWith('/tasks/tts-keyframe')) {
+          return jsonResponse({
+            id: 'tts-keyframe',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/keyframe-dialogue.mp3'],
+          });
+        }
+        if (target.endsWith('/text_to_image') && options.method === 'POST') {
+          imageTask += 1;
+          assert.equal(body.model, 'gen4_image');
+          assert.equal(body.ratio, '720:1280');
+          return jsonResponse({ id: imageTask === 1 ? 'first-image' : 'last-image' });
+        }
+        if (target.endsWith('/tasks/first-image')) {
+          return jsonResponse({
+            id: 'first-image',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/first.jpg'],
+          });
+        }
+        if (target.endsWith('/tasks/last-image')) {
+          return jsonResponse({
+            id: 'last-image',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/last.jpg'],
+          });
+        }
+        if (target.endsWith('/image_to_video') && options.method === 'POST') {
+          assert.equal(body.model, 'wan3');
+          assert.equal(body.ratio, 'auto_720p');
+          assert.deepEqual(body.promptImage, [
+            { uri: 'https://cdn.example/first.jpg', position: 'first' },
+            { uri: 'https://cdn.example/last.jpg', position: 'last' },
+          ]);
+          assert.equal(body.referenceAudio[0].uri, 'https://cdn.example/keyframe-dialogue.mp3');
+          assert.equal(body.references, undefined);
+          return jsonResponse({ id: 'wan-keyframe-video' });
+        }
+        if (target.endsWith('/tasks/wan-keyframe-video')) {
+          return jsonResponse({
+            id: 'wan-keyframe-video',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/keyframe-video.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/keyframe-video.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('keyframe-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const script = {
+      characters: [{
+        id: 'alex',
+        name: 'Alex',
+        description: '34-year-old trainer',
+        physicalTraits: 'short dark hair',
+        wardrobe: 'white shirt',
+        voice: { presetId: 'Bernard', languageCode: 'en' },
+      }],
+      locations: [{
+        id: 'gym',
+        name: 'Gym',
+        description: 'real gym',
+        lighting: 'window daylight',
+        fixedElements: ['black rack'],
+      }],
+      visualStyle: {
+        description: 'documentary realism',
+        cameraRules: 'natural camera',
+        lightingRules: 'motivated daylight',
+      },
+      audioDirection: { mix: 'clear dialogue', musicPolicy: 'low music' },
+    };
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 7,
+      speakerCharacterId: 'alex',
+      characterIds: ['alex'],
+      locationId: 'gym',
+      dialogue: 'Start with one controlled movement.',
+      action: 'Alex lifts one dumbbell from the rack.',
+      camera: 'Medium shot.',
+      ambience: 'Gym room tone.',
+      soundEffects: ['dumbbell contact'],
+      music: '',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+      keyframeDirection: {
+        enabled: true,
+        policy: 'first-last',
+        firstFrame: { state: 'Alex stands with the dumbbell on the rack.' },
+        lastFrame: { state: 'Alex stands holding the same dumbbell at his side.' },
+      },
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript: script,
+      storyBible: {
+        visualStyle: script.visualStyle,
+        references: {
+          characters: {
+            alex: {
+              images: [{ url: 'https://cdn.example/alex-reference.jpg' }],
+            },
+          },
+          locations: {
+            gym: { url: 'https://cdn.example/gym-reference.jpg' },
+          },
+        },
+      },
+      projectId: 'keyframe-project',
+    });
+
+    assert.equal(asset.keyframeMode, 'first-last');
+    assert.equal(asset.keyframes.first.url, 'https://cdn.example/first.jpg');
+    assert.equal(asset.keyframes.last.url, 'https://cdn.example/last.jpg');
+    assert.equal(asset.referenceImageUrl, 'https://cdn.example/first.jpg');
+    assert.equal(asset.referenceEndImageUrl, 'https://cdn.example/last.jpg');
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'keyframe-video');
+
+    const lastImageRequest = requests
+      .filter((request) => request.target.endsWith('/text_to_image'))[1];
+    assert.ok(lastImageRequest.body.referenceImages.some(
+      (reference) => reference.uri === 'https://cdn.example/first.jpg'
+        && reference.tag === 'firstframe',
+    ));
+    assert.equal(
+      requests.filter((request) => request.target.endsWith('/text_to_video')).length,
+      0,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Runway keyframe generation fails open to text-to-video when image generation fails', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-keyframe-fail-open-'));
+  const requests = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      dialogueMode: 'native',
+      keyframeFailOpen: true,
+      assetDir: dir,
+      pollIntervalMs: 0,
+      maxPolls: 1,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        const body = options.body ? JSON.parse(options.body) : null;
+        requests.push({ target, body });
+
+        if (target.endsWith('/text_to_image')) {
+          return jsonResponse({ error: 'image generation unavailable' }, 500);
+        }
+        if (target.endsWith('/text_to_video')) {
+          return jsonResponse({ id: 'fallback-video' });
+        }
+        if (target.endsWith('/tasks/fallback-video')) {
+          return jsonResponse({
+            id: 'fallback-video',
+            status: 'SUCCEEDED',
+            output: ['https://cdn.example/fallback-video.mp4'],
+          });
+        }
+        if (target === 'https://cdn.example/fallback-video.mp4') {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new TextEncoder().encode('fallback-video').buffer,
+          };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const segment = {
+      index: 0,
+      purpose: 'hook',
+      durationSeconds: 5,
+      dialogue: 'A short line.',
+      speakerCharacterId: 'p',
+      characterIds: ['p'],
+      locationId: 'room',
+      action: 'Person reaches toward a cup.',
+      camera: 'Medium shot.',
+      ambience: 'Room tone.',
+      soundEffects: [],
+      music: '',
+      keyframeDirection: {
+        enabled: true,
+        policy: 'first-last',
+        firstFrame: { state: 'Hand beside cup.' },
+        lastFrame: { state: 'Hand holds cup.' },
+      },
+    };
+    const script = {
+      characters: [{
+        id: 'p',
+        name: 'Person',
+        description: 'adult',
+        physicalTraits: 'natural',
+        wardrobe: 'neutral',
+        voice: { presetId: 'Bernard', languageCode: 'en' },
+      }],
+      locations: [{
+        id: 'room',
+        name: 'Room',
+        description: 'real room',
+        lighting: 'daylight',
+        fixedElements: ['table'],
+      }],
+      visualStyle: { description: 'real', cameraRules: 'natural', lightingRules: 'daylight' },
+      audioDirection: { mix: 'clear', musicPolicy: 'low' },
+    };
+
+    const asset = await provider.generateSegment({
+      segment,
+      productionScript: script,
+      projectId: 'fail-open',
+    });
+
+    assert.equal(asset.keyframeMode, 'off');
+    assert.match(asset.keyframeError, /Runway request failed/i);
+    assert.equal(requests.some((request) => request.target.endsWith('/text_to_video')), true);
+    assert.equal(requests.some((request) => request.target.endsWith('/image_to_video')), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('realism QC rejects a generated act that misses its explicit last keyframe', async () => {
+  const requests = [];
+  const qc = new OpenRouterRealismQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    temporalEnabled: false,
+    keyframeThreshold: 84,
+    frameSampler: {
+      sample: async () => [
+        { index: 0, timestamp: 0.1, dataUrl: 'data:image/jpeg;base64,OPEN' },
+        { index: 1, timestamp: 4.9, dataUrl: 'data:image/jpeg;base64,CLOSE' },
+      ],
+    },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overallScore: 92,
+              temporalScore: 100,
+              scores: {
+                photorealism: 94,
+                anatomy: 94,
+                geometry: 94,
+                physics: 92,
+                motionConsistency: 92,
+                continuity: 94,
+                identityContinuity: 94,
+                locationContinuity: 94,
+                sceneRelevance: 92,
+                artifactFreedom: 94,
+                materialRealism: 92,
+                cameraPhysics: 91,
+                lightingNaturalism: 93,
+                keyframeStartMatch: 91,
+                keyframeEndMatch: 61,
+              },
+              temporalScores: {},
+              issues: [{
+                code: 'last-keyframe-drift',
+                severity: 'high',
+                evidence: 'Ending pose does not reach the supplied final keyframe.',
+              }],
+              temporalIssues: [],
+              regenerationGuidance: 'Reach the supplied final pose without changing identity or location.',
+            }),
+          },
+        }],
+      });
+    },
+  });
+
+  const result = await qc.evaluateScene(
+    {
+      narration: 'Person completes one movement.',
+      duration: 5,
+      continuity: { characterIds: ['p'], locationId: 'room' },
+    },
+    {
+      localPath: '/fake/keyframed.mp4',
+      generatedDuration: '5s',
+      prompt: 'move naturally',
+      keyframes: {
+        first: { url: 'https://cdn.example/first.jpg' },
+        last: { url: 'https://cdn.example/last.jpg' },
+      },
+    },
+  );
+
+  assert.equal(result.staticPassed, true);
+  assert.equal(result.keyframeStartPassed, true);
+  assert.equal(result.keyframeEndPassed, false);
+  assert.equal(result.keyframeAdherencePassed, false);
+  assert.equal(result.passed, false);
+
+  const content = requests[0].messages[1].content;
+  assert.ok(content.some(
+    (part) => part.type === 'image_url'
+      && part.image_url.url === 'https://cdn.example/first.jpg',
+  ));
+  assert.ok(content.some(
+    (part) => part.type === 'image_url'
+      && part.image_url.url === 'https://cdn.example/last.jpg',
+  ));
 });

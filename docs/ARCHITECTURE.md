@@ -734,3 +734,81 @@ Realism QC includes three additional dimensions:
 - `lightingNaturalism`
 
 Older/mocked QC responses that do not return these fields fall back to the photorealism score, preserving backwards compatibility.
+
+
+## First / last frame control
+
+The keyframe layer runs after RealismDirector because the realism risk score determines how much endpoint control is worth paying for.
+
+```text
+normalized ProductionScript
+  -> RealismDirector
+  -> KeyframeDirector
+       -> off
+       -> first
+       -> first-last
+  -> RunwayAudiovisualProvider
+```
+
+### Script contract
+
+Audiovisual segments may contain:
+
+```json
+{
+  "startState": "exact stable visual state before the main action",
+  "endState": "physically reachable final visual state after the main action"
+}
+```
+
+If the LLM omits either field, KeyframeDirector derives a conservative fallback from the normalized action.
+
+### Adaptive policy
+
+The default thresholds are tied to the existing anti-plastic risk score:
+
+```text
+risk < 32     -> off
+32 <= risk<50 -> first
+risk >= 50    -> first-last
+```
+
+This avoids doubling image-generation cost for simple talking-head acts while applying stronger constraints to hands/objects, action, multiple people and complex camera motion.
+
+### Keyframe generation
+
+Runway `gen4_image` produces the first keyframe from:
+- canonical character images
+- canonical location image
+- previous accepted endpoint when available
+- startState
+- the physical-camera realism profile
+
+The last keyframe also references the newly generated first frame and uses `endState`. This prevents the endpoint generator itself from freely redesigning the subject or location.
+
+### WAN request contract
+
+For supported audiovisual models (`wan3`, `wan3_prime`), a keyframed act uses:
+
+```text
+/image_to_video
+promptImage = [
+  { uri: first, position: "first" },
+  { uri: last,  position: "last"  }
+]
+ratio = auto_720p
+referenceAudio = locked dialogue when configured
+referenceVideos = previous accepted act when available
+```
+
+Image references are not mixed into the WAN keyframe request; they are consumed while generating the first/last images. This respects Runway's distinction between keyframe images and general image references.
+
+Unsupported audiovisual models skip keyframe mode and retain the normal generation path.
+
+### Fail-open policy
+
+Image generation is an additional dependency. By default `KEYFRAME_FAIL_OPEN=true`, so a failed keyframe task records the error and falls back to text-to-video. Production can make keyframes mandatory by setting it to false.
+
+### Verification
+
+Realism QC receives the exact first and last keyframe images alongside sampled generated frames. When keyframes exist it requires explicit `keyframeStartMatch` / `keyframeEndMatch` scores above the configured threshold. Missing scores fail the keyframe gate rather than inheriting the generic photorealism score.

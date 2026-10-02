@@ -114,6 +114,8 @@ function normalizeProductionScript(value, context) {
         ? safeId(segment.locationId)
         : locations[0].id,
       dialogue,
+      startState: clean(segment.startState || '', 900),
+      endState: clean(segment.endState || '', 900),
       action: clean(segment.action || '', 1000),
       camera: clean(segment.camera || '', 700),
       ambience: clean(segment.ambience || '', 500),

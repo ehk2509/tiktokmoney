@@ -74,8 +74,10 @@
 - [x] Material/camera/lighting realism QC
 - [x] Bounded optical softness / saturation / contrast / grain post
 - [x] Motion-blur safety guard against morphing defects
-- [ ] First/last-frame constrained generation where provider supports it
+- [x] First/last-frame constrained generation where provider supports it
 - [ ] Motion-mask / motion-brush provider integrations
+- [x] Risk-adaptive first-only vs first+last keyframe policy
+- [x] Keyframe adherence QC and targeted regeneration
 - [ ] Video-to-video motion guidance
 
 ## M2 - Trend intelligence
