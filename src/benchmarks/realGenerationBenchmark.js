@@ -154,11 +154,10 @@ export async function runRealGenerationBenchmark({
               researchPacket: null,
             });
             const metrics = extractFullStackMetrics(project);
+            const artifactPath = project.render?.outputPath || null;
             return {
-              success: metrics.finalSuccess,
-              artifactPath: project.render && project.render.outputPath
-                ? project.render.outputPath
-                : firstScenePath(project.scenes),
+              success: metrics.finalSuccess && Boolean(artifactPath),
+              artifactPath,
               projectId: project.id || null,
               status: project.status || null,
               metrics,
@@ -453,14 +452,29 @@ function instrumentProviderWait(provider, now) {
   let events = [];
   provider.wait = async (...args) => {
     const startedAt = now();
-    const task = await original(...args);
-    const usage = extractProviderUsage(task) || {};
-    events.push({
-      ...usage,
-      startedAt: startedAt.toISOString(),
-      finishedAt: now().toISOString(),
-    });
-    return task;
+    try {
+      const task = await original(...args);
+      const usage = extractProviderUsage(task) || {};
+      events.push({
+        ...usage,
+        startedAt: startedAt.toISOString(),
+        finishedAt: now().toISOString(),
+      });
+      return task;
+    } catch (error) {
+      events.push({
+        taskId: args[0] || null,
+        status: 'ERROR',
+        model: null,
+        costUsd: null,
+        credits: null,
+        providerReported: false,
+        error: error.message,
+        startedAt: startedAt.toISOString(),
+        finishedAt: now().toISOString(),
+      });
+      throw error;
+    }
   };
   return {
     reset() { events = []; },
@@ -679,6 +693,7 @@ function detectUntrackedCostComponents(pipeline) {
   if (pipeline?.dialogueQc) components.push('dialogue-qc');
   if (pipeline?.lipSyncQc) components.push('lip-sync-qc');
   if (pipeline?.speakerTurnQc) components.push('speaker-turn-qc');
+  if (pipeline?.visual) components.push('visual-reference-provider');
   return [...new Set(components)];
 }
 
@@ -692,11 +707,24 @@ function validateBlindRatings({ run, ratingSheet, ratingKey }) {
   const samples = Array.isArray(ratingSheet?.samples) ? ratingSheet.samples : [];
   const keySamples = Array.isArray(ratingKey?.samples) ? ratingKey.samples : [];
   const keyBySample = new Map();
+  const validPairs = new Set();
+  for (const pair of run?.pairs || []) {
+    if (pair.baseline?.success && pair.baseline?.artifactPath) validPairs.add(pair.caseId + ':baseline');
+    if (pair.full?.success && pair.full?.artifactPath) validPairs.add(pair.caseId + ':full');
+  }
+  if (keySamples.length !== validPairs.size) {
+    throw new Error('rating-key sample count does not match rateable benchmark artifacts');
+  }
+  const seenPairs = new Set();
   for (const item of keySamples) {
     const sampleId = String(item?.sampleId || '');
     if (!sampleId) throw new Error('rating-key contains a sample without sampleId');
     if (keyBySample.has(sampleId)) throw new Error('duplicate rating-key sampleId: ' + sampleId);
     if (!['baseline', 'full'].includes(item.arm)) throw new Error('invalid rating-key arm: ' + item.arm);
+    const pairKey = String(item.caseId) + ':' + item.arm;
+    if (!validPairs.has(pairKey)) throw new Error('rating-key points to a non-rateable artifact: ' + pairKey);
+    if (seenPairs.has(pairKey)) throw new Error('duplicate rating-key case/arm: ' + pairKey);
+    seenPairs.add(pairKey);
     keyBySample.set(sampleId, item);
   }
   const seen = new Set();
