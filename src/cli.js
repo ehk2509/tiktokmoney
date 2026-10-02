@@ -25,6 +25,14 @@ try {
       render: options['no-render'] !== true,
     });
     console.log(JSON.stringify(project, null, 2));
+  } else if (command === 'resume') {
+    const id = options.id || options.project;
+    if (!id) throw new Error('Usage: npm run resume -- --id vid_...');
+    if (typeof app.pipeline.resume !== 'function') {
+      throw new Error('resume requires VIDEO_PIPELINE_MODE=audiovisual');
+    }
+    const project = await app.pipeline.resume(id, { render: options['no-render'] !== true });
+    console.log(JSON.stringify(project, null, 2));
   } else if (command === 'opportunities') {
     console.log(JSON.stringify(await app.opportunities(), null, 2));
   } else if (command === 'research') {
@@ -110,6 +118,7 @@ try {
       '',
       'Commands:',
       '  generate --topic "..." [--duration 35]',
+      '  resume --id "vid_..." [--no-render]   continue a saved video from its first missing act',
       '  opportunities',
       '  research --topic "..."',
       '  plan [--budget 6] [--max-videos 3]',

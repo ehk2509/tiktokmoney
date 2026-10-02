@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { access } from 'node:fs/promises';
 import { ProductionScriptGenerator, productionScriptToStoryBible } from './productionScriptGenerator.js';
 import { buildSubtitles, punctuateWordsFromScript } from './subtitleBuilder.js';
 import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
@@ -152,27 +153,67 @@ export class AudiovisualPipeline {
       }
     }
 
+    return this.produce(project, { render });
+  }
+
+  /**
+   * Continue a saved project from its first missing act. Accepted acts whose
+   * clips still exist on disk are kept, so a QC failure, provider error or
+   * exhausted credits never forces paying for earlier acts again.
+   */
+  async resume(projectId, { render = true } = {}) {
+    if (!this.store?.getProject) throw new Error('a project store is required to resume');
+    if (!this.audiovisual) throw new Error('audiovisual provider is required');
+    const project = await this.store.getProject(projectId);
+    if (project.mode !== 'audiovisual-director' || !project.productionScript?.segments?.length) {
+      throw new Error(`project ${projectId} has no audiovisual production script to resume`);
+    }
+
+    const accepted = [];
+    for (const scene of project.scenes || []) {
+      if (!scene.asset?.localPath || !(await fileExists(scene.asset.localPath))) break;
+      accepted.push(scene);
+    }
+    project.scenes = accepted;
+    project.resumedAt = [...(project.resumedAt || []), new Date().toISOString()];
+    project.resumedFromAct = accepted.length;
+    delete project.error;
+    project.render = null;
+    return this.produce(project, { render });
+  }
+
+  async produce(project, { render = true } = {}) {
+    const { productionScript } = project;
     project.status = 'AUDIOVISUAL_GENERATING';
-    let previousAsset = null;
-    let timelineCursor = 0;
-    for (const segment of productionScript.segments) {
-      const generated = await generateWithQc({
-        provider: this.audiovisual,
-        realismQc: this.realismQc,
-        dialogueQc: this.dialogueQc,
-        lipSyncQc: this.lipSyncQc,
-        deepLipSyncQc: this.deepLipSyncQc,
-        phonemeVisemeQc: this.phonemeVisemeQc,
-        speakerTurnQc: this.speakerTurnQc,
-        poseMotionQc: this.poseMotionQc,
-        textArtifactQc: this.textArtifactQc,
-        visualFactualQc: this.visualFactualQc,
-        segment,
-        productionScript,
-        storyBible: project.storyBible,
-        previousAsset,
-        projectId: id,
-      });
+    let previousAsset = project.scenes.at(-1)?.asset || null;
+    let timelineCursor = project.scenes.reduce((sum, scene) => sum + (Number(scene.duration) || 0), 0);
+    for (const segment of productionScript.segments.slice(project.scenes.length)) {
+      let generated;
+      try {
+        generated = await generateWithQc({
+          provider: this.audiovisual,
+          realismQc: this.realismQc,
+          dialogueQc: this.dialogueQc,
+          lipSyncQc: this.lipSyncQc,
+          deepLipSyncQc: this.deepLipSyncQc,
+          phonemeVisemeQc: this.phonemeVisemeQc,
+          speakerTurnQc: this.speakerTurnQc,
+          poseMotionQc: this.poseMotionQc,
+          textArtifactQc: this.textArtifactQc,
+          visualFactualQc: this.visualFactualQc,
+          segment,
+          productionScript,
+          storyBible: project.storyBible,
+          previousAsset,
+          projectId: project.id,
+        });
+      } catch (error) {
+        // Keep accepted acts so `resume` can continue after provider errors.
+        project.status = 'GENERATION_INTERRUPTED';
+        project.error = error.message;
+        await this.store?.saveProject(project);
+        throw error;
+      }
 
       // Acts may run longer than planned when their dialogue needs more time.
       const sceneDuration = Number(generated.asset?.durationSeconds) || segment.durationSeconds;
@@ -209,6 +250,7 @@ export class AudiovisualPipeline {
 
       previousAsset = generated.asset;
       timelineCursor += sceneDuration;
+      await this.store?.saveProject(project);
     }
 
     const verifiedWordTimings = collectVerifiedWordTimings(project.scenes);
@@ -645,6 +687,15 @@ export function collectSceneLabels(scenes) {
       end: roundTime(Math.min(sceneEnd, start + label.atSeconds + label.durationSeconds)),
     })).filter((label) => label.end > label.start);
   });
+}
+
+async function fileExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function roundTime(value) {
