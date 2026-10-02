@@ -196,6 +196,7 @@ function buildPrompt({
   const location = (storyBible?.locations || [])
     .find((item) => item.id === binding.locationId);
   const style = storyBible?.visualStyle || {};
+  const realismDirection = scene.realismDirection || {};
 
   return [
     'Evaluate ONE AI-generated vertical video scene.',
