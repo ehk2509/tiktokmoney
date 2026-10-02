@@ -149,8 +149,11 @@ export class OpenAiTranscriptionProvider {
 }
 
 export function compareDialogue(expectedText, actualText) {
-  const expectedWords = normalizeWordsForComparison(expectedText);
-  const actualWords = normalizeWordsForComparison(actualText);
+  const rawExpected = normalizeWordsForComparison(expectedText);
+  const rawActual = normalizeWordsForComparison(actualText);
+  // "airflow" vs "air flow" is the same speech; only spelling differs.
+  const expectedWords = joinSplitCompounds(rawExpected, new Set(rawActual));
+  const actualWords = joinSplitCompounds(rawActual, new Set(expectedWords));
   const { distance, edits } = wordAlignment(expectedWords, actualWords);
   const expectedChars = normalizeCharacters(expectedText);
   const actualChars = normalizeCharacters(actualText);
@@ -168,6 +171,20 @@ export function compareDialogue(expectedText, actualText) {
       ? Math.abs(actualWords.length - expectedWords.length) / expectedWords.length
       : (actualWords.length ? 1 : 0),
   };
+}
+
+function joinSplitCompounds(words, reference) {
+  const joined = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const pair = words[index] + (words[index + 1] || '');
+    if (index + 1 < words.length && reference.has(pair) && !reference.has(words[index])) {
+      joined.push(pair);
+      index += 1;
+    } else {
+      joined.push(words[index]);
+    }
+  }
+  return joined;
 }
 
 function wordAlignment(expected, actual) {

@@ -2691,6 +2691,12 @@ test('dialogue comparison measures word-level fidelity and edit types', () => {
   assert.ok(drifted.edits.some((edit) => ['substitute', 'delete', 'insert'].includes(edit.type)));
 });
 
+test('dialogue comparison treats split compound words as the same speech', () => {
+  assert.equal(compareDialogue('Separated airflow causes a stall.', 'Separated air flow causes a stall.').wer, 0);
+  assert.equal(compareDialogue('The air flow separates.', 'The airflow separates.').wer, 0);
+  assert.ok(compareDialogue('Separated airflow causes a stall.', 'Separated air causes a stall.').wer > 0);
+});
+
 test('OpenAI transcription provider requests verbose word timestamps and passes exact dialogue', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-transcription-'));
   try {
