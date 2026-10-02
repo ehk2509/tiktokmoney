@@ -681,3 +681,56 @@ A project ending in `CREATIVE_REJECTED`, QC failure, publishability failure, or 
 ### Budget limitation
 
 The current planner enforces a budget against estimated slot cost. It does not yet aggregate actual provider invoices/tokens/credits. The future cost ledger should record actual spend per LLM, TTS, video generation, regeneration and QC call, then reconcile plan estimate versus realized daily spend.
+
+
+## Anti-plastic realism architecture
+
+`RealismDirector` is a deterministic transformation over the normalized ProductionScript. It does not require another model call.
+
+For each act it derives a risk score from:
+
+- complex hand/object interactions
+- athletic or rapid body motion
+- physically complex camera instructions
+- number of visible characters
+- multi-speaker blocking
+
+The risk score determines a maximum stable-shot target and whether a long act should stay continuous or use a small number of clean cuts.
+
+The director also selects a project-wide capture profile so every normalized act uses the same final frame rate. This avoids concat instability while still supporting style-aware 24 fps versus 30 fps output.
+
+### Prompt realism contract
+
+The generated model prompt now includes physical instead of marketing-style quality language:
+
+- one camera axis at a time
+- human-operated inertia and minor reframing
+- believable focus/exposure settling
+- motivated practical/natural light and falloff
+- breathing, posture correction, clothing/hair motion
+- gravity/contact/body-weight constraints
+- location-specific room tone and synchronized foley
+
+### Bounded optical post
+
+The post stage runs before final concat and uses stable FFmpeg filters only:
+
+```text
+scale/crop
+ -> slight gblur
+ -> small saturation/contrast correction
+ -> low-strength temporal noise/grain
+ -> project frame-rate normalization
+```
+
+No chromatic shift is applied by default. Synthetic motion blur is explicitly gated because it can hide judder but worsen or smear morphing/anatomical defects.
+
+### QC
+
+Realism QC includes three additional dimensions:
+
+- `materialRealism`
+- `cameraPhysics`
+- `lightingNaturalism`
+
+Older/mocked QC responses that do not return these fields fall back to the photorealism score, preserving backwards compatibility.
