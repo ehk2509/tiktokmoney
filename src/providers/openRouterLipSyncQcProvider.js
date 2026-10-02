@@ -10,7 +10,7 @@ export class OpenRouterLipSyncQcProvider {
     threshold = Number(process.env.LIPSYNC_QC_THRESHOLD || 80),
     maxFrames = Number(process.env.LIPSYNC_QC_FRAMES || 10),
     frameWidth = Number(process.env.LIPSYNC_QC_FRAME_WIDTH || 384),
-    maxRegenerations = Number(process.env.LIPSYNC_QC_MAX_REGENERATIONS || 1),
+    maxRegenerations = Number(process.env.LIPSYNC_QC_MAX_REGENERATIONS || 2),
     frameSampler = new FrameSampler(),
     fetchImpl = globalThis.fetch,
   } = {}) {
