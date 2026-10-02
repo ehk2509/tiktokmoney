@@ -23,6 +23,7 @@ export class AudiovisualPipeline {
     deepLipSyncQc = null,
     phonemeVisemeQc = null,
     speakerTurnQc = null,
+    textArtifactQc = null,
     poseMotionQc = null,
     subtitleConfig = null,
     creativeTournament = null,
@@ -51,6 +52,7 @@ export class AudiovisualPipeline {
     this.deepLipSyncQc = deepLipSyncQc;
     this.phonemeVisemeQc = phonemeVisemeQc;
     this.speakerTurnQc = speakerTurnQc;
+    this.textArtifactQc = textArtifactQc;
     this.poseMotionQc = poseMotionQc;
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
@@ -161,6 +163,7 @@ export class AudiovisualPipeline {
         phonemeVisemeQc: this.phonemeVisemeQc,
         speakerTurnQc: this.speakerTurnQc,
         poseMotionQc: this.poseMotionQc,
+        textArtifactQc: this.textArtifactQc,
         segment,
         productionScript,
         storyBible: project.storyBible,
@@ -254,6 +257,7 @@ async function generateWithQc({
   phonemeVisemeQc,
   speakerTurnQc,
   poseMotionQc,
+  textArtifactQc,
   segment,
   productionScript,
   storyBible,
@@ -270,6 +274,7 @@ async function generateWithQc({
     phonemeViseme: 0,
     speakerTurn: 0,
     poseMotion: 0,
+    textArtifact: 0,
   };
   const maxTotalRegenerations = [
     realismQc,
@@ -279,9 +284,11 @@ async function generateWithQc({
     phonemeVisemeQc,
     speakerTurnQc,
     poseMotionQc,
+    textArtifactQc,
   ].reduce((sum, qc) => sum + Math.max(0, Number(qc?.maxRegenerations) || 0), 0);
   const hasQc = Boolean(
-    realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc,
+    realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc
+      || textArtifactQc,
   );
 
   for (let attempt = 0; attempt <= maxTotalRegenerations; attempt += 1) {
@@ -383,6 +390,10 @@ async function generateWithQc({
       ? await poseMotionQc.evaluate(asset, { segment })
       : null;
 
+    const textArtifact = textArtifactQc && applicability.textArtifact.applicable
+      ? await textArtifactQc.evaluate(asset, { durationSeconds: segment.durationSeconds })
+      : null;
+
     const phonemeViseme = phonemeVisemeQc && applicability.phonemeViseme.applicable
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
@@ -411,6 +422,7 @@ async function generateWithQc({
       ['phonemeViseme', phonemeViseme, phonemeVisemeQc],
       ['speakerTurn', speakerTurn, speakerTurnQc],
       ['poseMotion', poseMotion, poseMotionQc],
+      ['textArtifact', textArtifact, textArtifactQc],
     ];
     const passed = checks
       .map(([, result]) => result)
@@ -442,6 +454,7 @@ async function generateWithQc({
         })),
         'pose-motion',
       ),
+      ...prefixIssues(textArtifact?.issues, 'text-artifact'),
     ];
     const regenerationGuidance = [
       realism && !realism.passed ? realism.regenerationGuidance : '',
@@ -451,6 +464,7 @@ async function generateWithQc({
       phonemeViseme && !phonemeViseme.passed ? phonemeViseme.regenerationGuidance : '',
       speakerTurn && !speakerTurn.passed ? speakerTurn.regenerationGuidance : '',
       poseMotion && !poseMotion.passed ? poseMotion.regenerationGuidance : '',
+      textArtifact && !textArtifact.passed ? textArtifact.regenerationGuidance : '',
     ].filter(Boolean).join(' ');
 
     const historyEntry = {
@@ -465,6 +479,7 @@ async function generateWithQc({
       phonemeViseme,
       speakerTurn,
       poseMotion,
+      textArtifact,
       issues,
       regenerationGuidance,
       applicability,
@@ -514,6 +529,8 @@ async function generateWithQc({
 
     const failureStatus = dialogue && !dialogue.passed
       ? 'DIALOGUE_QC_FAILED'
+      : textArtifact && !textArtifact.passed
+        ? 'TEXT_ARTIFACT_QC_FAILED'
       : poseMotion && !poseMotion.passed
         ? 'POSE_MOTION_QC_FAILED'
       : speakerTurn && !speakerTurn.passed

@@ -96,6 +96,7 @@ export function resolveQcApplicability({ segment, productionScript, asset } = {}
       hasMotionReference,
     },
     realism: contract(true),
+    textArtifact: contract(true),
     dialogue: contract(hasDialogue, 'no-dialogue'),
     lipSync: contract(allSpeakersVisible && hasDialogue, visualSpeechReason),
     deepLipSync: contract(allSpeakersVisible && hasDialogue, visualSpeechReason),

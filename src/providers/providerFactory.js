@@ -16,6 +16,7 @@ import { DeepLipSyncQcProvider } from './deepLipSyncQcProvider.js';
 import { PhonemeVisemeQcProvider } from './phonemeVisemeQcProvider.js';
 import { OpenRouterSpeakerTurnQcProvider } from './openRouterSpeakerTurnQcProvider.js';
 import { PoseMotionQcProvider } from './poseMotionQcProvider.js';
+import { OpenRouterTextArtifactQcProvider } from './openRouterTextArtifactQcProvider.js';
 import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
 import { YouTubeTrendProvider } from './youtubeTrendProvider.js';
 import { RedditTrendProvider } from './redditTrendProvider.js';
@@ -481,4 +482,31 @@ function isEnabled(value) {
 function isEnabledDefaultTrue(value) {
   if (value == null || value === '') return true;
   return isEnabled(value);
+}
+
+export function createTextArtifactQcProvider(env = process.env) {
+  const enabled = env.TEXT_ARTIFACT_QC_ENABLED == null
+    ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
+      && Boolean(env.OPENROUTER_API_KEY)
+      && Boolean(env.TEXT_ARTIFACT_QC_MODEL || env.REALISM_QC_MODEL)
+    : isEnabled(env.TEXT_ARTIFACT_QC_ENABLED);
+
+  if (!enabled) return null;
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required when TEXT_ARTIFACT_QC_ENABLED=true');
+  }
+  if (!env.TEXT_ARTIFACT_QC_MODEL && !env.REALISM_QC_MODEL) {
+    throw new Error('TEXT_ARTIFACT_QC_MODEL or REALISM_QC_MODEL is required when TEXT_ARTIFACT_QC_ENABLED=true');
+  }
+
+  return new OpenRouterTextArtifactQcProvider({
+    apiKey: env.OPENROUTER_API_KEY,
+    baseUrl: env.OPENROUTER_BASE_URL,
+    model: env.TEXT_ARTIFACT_QC_MODEL || env.REALISM_QC_MODEL,
+    frames: env.TEXT_ARTIFACT_QC_FRAMES ? Number(env.TEXT_ARTIFACT_QC_FRAMES) : undefined,
+    frameWidth: env.TEXT_ARTIFACT_QC_FRAME_WIDTH ? Number(env.TEXT_ARTIFACT_QC_FRAME_WIDTH) : undefined,
+    maxRegenerations: env.TEXT_ARTIFACT_QC_MAX_REGENERATIONS
+      ? Number(env.TEXT_ARTIFACT_QC_MAX_REGENERATIONS)
+      : undefined,
+  });
 }
