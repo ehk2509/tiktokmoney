@@ -78,6 +78,8 @@ export class OpenRouterVisualFactualQcProvider {
               'Only flag a blocking contradiction when it is clearly visible and you are highly confident.',
               'Generic, decorative, metaphorical, stylized, or insufficiently detailed footage is not a contradiction; mark the check inapplicable or uncertain instead of guessing.',
               'Do not require the video to prove every spoken claim.',
+              'A narration line may preview an event or explanation that occurs in a later clip. If the current frames do not show that later event, treat it as not-yet-visualized evidence, not as a contradiction.',
+              'The numeric score is diagnostic only. A low score without a high-confidence blocking contradiction must not fail the clip.',
               'Return JSON only.',
             ].join(' '),
           },
@@ -130,20 +132,19 @@ export class OpenRouterVisualFactualQcProvider {
       };
     }
 
-    const scoreFailed = !uncertain && score < this.threshold;
-    const passed = blocking.length === 0 && !scoreFailed;
-    const issues = [
-      ...blocking.map((item) => ({
-        code: 'visual-factual-contradiction',
-        severity: item.severity === 'critical' ? 'critical' : 'high',
-        evidence: `Frame ${item.frame}: ${item.evidence}${item.claim ? ` Claim: ${item.claim}` : ''}`,
-      })),
-      ...(scoreFailed && blocking.length === 0 ? [{
+    const passed = blocking.length === 0;
+    const issues = blocking.map((item) => ({
+      code: 'visual-factual-contradiction',
+      severity: item.severity === 'critical' ? 'critical' : 'high',
+      evidence: `Frame ${item.frame}: ${item.evidence}${item.claim ? ` Claim: ${item.claim}` : ''}`,
+    }));
+    const warnings = score < this.threshold && blocking.length === 0
+      ? [{
         code: 'visual-factual-consistency-low',
-        severity: 'high',
-        evidence: `Visual factual-consistency score ${score} is below threshold ${this.threshold}.`,
-      }] : []),
-    ];
+        severity: 'warning',
+        evidence: `Diagnostic visual factual-consistency score ${score} is below warning threshold ${this.threshold}, but no blocking contradiction was found.`,
+      }]
+      : [];
 
     return {
       provider: 'openrouter',
@@ -157,6 +158,7 @@ export class OpenRouterVisualFactualQcProvider {
       score,
       contradictions,
       issues,
+      warnings,
       summary: stringOrEmpty(parsed?.summary),
       regenerationGuidance: passed
         ? ''
@@ -182,8 +184,10 @@ function buildPrompt({ narration, action, purpose, onScreenLabels }) {
     '',
     'Decide applicability first. Set applicable=true only when the frames attempt to depict a concrete factual relationship that could be visually wrong.',
     'Examples of blocking errors: wrong number of organs/parts when the count is visually asserted; anatomically impossible placement presented as a diagram; wrong direction of a mechanism or flow; showing the wrong object/species/place/person for the narrated claim; a specific causal/process depiction that visibly reverses the described relation.',
-    'Non-blocking: artistic glow, simplified styling, missing detail, generic B-roll, or imagery that simply does not prove the narration.',
+    'Non-blocking: artistic glow, simplified styling, missing detail, generic B-roll, imagery that simply does not prove the narration, or narration that previews something intended for a later clip.',
+    'Do not lower the verdict because a future event mentioned in the narration is absent from the current frames. Absence is not contradiction.',
     'If evidence is ambiguous, set uncertain=true and do not invent a contradiction.',
+    'The score is diagnostic. Only explicit high-confidence contradictions should be used to reject footage.',
     'Return exactly this JSON shape:',
     '{"applicable":true,"uncertain":false,"score":92,"contradictions":[{"frame":2,"claim":"short referenced claim","evidence":"specific visible contradiction","severity":"low|medium|high|critical","confidence":0.96}],"summary":"brief visual-factual assessment"}',
   ].filter(Boolean).join('\n');
