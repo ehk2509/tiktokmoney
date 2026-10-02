@@ -83,7 +83,11 @@
 - [x] Motion-reference selection + rights gate
 - [x] Combined reference-video duration budgeting
 - [x] Motion-guide adherence QC + targeted regeneration
-- [ ] Native pose skeleton / mocap transport when providers expose it
+- [x] Provider-neutral normalized pose / skeleton abstraction
+- [x] Pluggable external pose extractor command
+- [x] Deterministic skeleton trajectory / joint-angle / rhythm / contact QC
+- [x] Pose-summary prompt guidance from precomputed or extracted skeletons
+- [ ] Native provider pose skeleton / mocap transport when providers expose it
 
 ## M2 - Trend intelligence
 
