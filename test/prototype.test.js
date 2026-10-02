@@ -4138,7 +4138,7 @@ test('Runway audiovisual provider stretches an act to fit a longer multi-speaker
           assert.match(body.promptText, /MULTI-SPEAKER DIALOGUE BLOCKING/);
           assert.match(body.promptText, /ALEX says exactly/);
           assert.match(body.promptText, /MAYA says exactly/);
-          assert.match(body.promptText, /ONLY the named active speaker talks/i);
+          assert.match(body.promptText, /ONLY the named active visible speaker talks/i);
           return jsonResponse({ id: 'video-task' });
         }
         if (target.endsWith('/tasks/video-task')) {
