@@ -45,7 +45,7 @@
 - [x] Native-speech mode
 - [x] Reuse canonical character/location references
 - [x] Static + temporal QC for audiovisual acts
-- [x] Audio-preserving final composition
+- [x] Trusted native-audio composition + authoritative TTS-only off-screen voiceover
 - [x] Subtitle generation over audiovisual output
 - [x] Dialogue-verbatim transcription QC
 - [x] Cross-act identity / apparent-age / location QC
