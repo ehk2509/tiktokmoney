@@ -130,6 +130,8 @@ export function createApp(overrides = {}) {
       keyframeDirector: overrides.keyframeDirector,
       motionRegionDirector: overrides.motionRegionDirector,
       motionGuideDirector: overrides.motionGuideDirector,
+      preGenerationQualityGate: overrides.preGenerationQualityGate,
+      preGenerationMaxRewrites: overrides.preGenerationMaxRewrites,
     });
   } else {
     const voice = overrides.voice || createVoiceProvider();
