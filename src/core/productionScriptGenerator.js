@@ -28,8 +28,9 @@ export class ProductionScriptGenerator {
     durationSeconds,
     creativeBrief = null,
     researchPacket = null,
+    preflightFeedback: initialPreflightFeedback = '',
   }) {
-    let preflightFeedback = '';
+    let preflightFeedback = String(initialPreflightFeedback || '').trim();
 
     for (let attempt = 0; attempt <= this.preflightMaxRetries; attempt += 1) {
       const raw = this.llm?.generateProductionScript
