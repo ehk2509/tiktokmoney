@@ -47,12 +47,17 @@ export class OpenRouterEditorialVarietyQcProvider {
       || Number(previousSegment.durationSeconds)
       || 5;
     const currentTimes = sampleTimes(currentDuration, this.frames);
-    const previousTimes = sampleTimes(previousDuration, Math.min(2, this.frames));
+    const previousTailTimes = transitionTailTimes(previousDuration);
+    const currentOpeningTimes = transitionOpeningTimes(currentDuration);
 
-    const [previousFrames, currentFrames] = await Promise.all([
-      this.frameSampler.sampleAt(previousAsset.localPath, previousTimes, {
+    const [previousFrames, currentOpeningFrames, currentFrames] = await Promise.all([
+      this.frameSampler.sampleAt(previousAsset.localPath, previousTailTimes, {
         maxWidth: this.frameWidth,
-        prefix: 'editorial-prev',
+        prefix: 'editorial-prev-tail',
+      }),
+      this.frameSampler.sampleAt(asset.localPath, currentOpeningTimes, {
+        maxWidth: this.frameWidth,
+        prefix: 'editorial-current-opening',
       }),
       this.frameSampler.sampleAt(asset.localPath, currentTimes, {
         maxWidth: this.frameWidth,
@@ -90,11 +95,15 @@ export class OpenRouterEditorialVarietyQcProvider {
                 text: buildPrompt({ segment, previousSegment }),
               },
               ...previousFrames.flatMap((frame, index) => ([
-                { type: 'text', text: `PREVIOUS frame ${index + 1} at ${frame.timestamp.toFixed(2)}s` },
+                { type: 'text', text: `PREVIOUS TAIL frame ${index + 1} at ${frame.timestamp.toFixed(2)}s` },
+                { type: 'image_url', image_url: { url: frame.dataUrl } },
+              ])),
+              ...currentOpeningFrames.flatMap((frame, index) => ([
+                { type: 'text', text: `CURRENT OPENING frame ${index + 1} at ${frame.timestamp.toFixed(2)}s` },
                 { type: 'image_url', image_url: { url: frame.dataUrl } },
               ])),
               ...currentFrames.flatMap((frame, index) => ([
-                { type: 'text', text: `CURRENT frame ${index + 1} at ${frame.timestamp.toFixed(2)}s` },
+                { type: 'text', text: `CURRENT WHOLE-ACT frame ${index + 1} at ${frame.timestamp.toFixed(2)}s` },
                 { type: 'image_url', image_url: { url: frame.dataUrl } },
               ])),
             ],
@@ -106,6 +115,7 @@ export class OpenRouterEditorialVarietyQcProvider {
     const payload = await readJsonResponse(response);
     const parsed = parseJsonObject(payload?.choices?.[0]?.message?.content);
     const scores = {
+      transitionDistinctness: clampScore(parsed?.scores?.transitionDistinctness),
       shotTypeAdherence: clampScore(parsed?.scores?.shotTypeAdherence),
       compositionDifference: clampScore(parsed?.scores?.compositionDifference),
       scaleOrAngleDifference: clampScore(parsed?.scores?.scaleOrAngleDifference),
@@ -146,6 +156,7 @@ export class OpenRouterEditorialVarietyQcProvider {
           || buildGuidance(segment, previousSegment, scores),
       sampledFrames: {
         previous: previousFrames.map(({ index, timestamp }) => ({ index, timestamp })),
+        currentOpening: currentOpeningFrames.map(({ index, timestamp }) => ({ index, timestamp })),
         current: currentFrames.map(({ index, timestamp }) => ({ index, timestamp })),
       },
       rawUsage: payload?.usage || null,
@@ -163,6 +174,7 @@ function buildPrompt({ segment, previousSegment }) {
     `CURRENT action: ${segment.action || '(none)'}.`,
     '',
     'Score 0-100:',
+    '- transitionDistinctness: compare PREVIOUS TAIL with CURRENT OPENING. The current act must open directly in its planned new framing; it must not reuse the previous framing for the first seconds and only change later.',
     '- shotTypeAdherence: current frames actually look like the requested current shot type.',
     '- compositionDifference: subject placement/framing is materially different from the previous act.',
     '- scaleOrAngleDifference: camera scale, axis, angle or perspective changes enough to create a new shot.',
@@ -170,9 +182,11 @@ function buildPrompt({ segment, previousSegment }) {
     '',
     'For close-up/macro, require a clear crop/scale change. For wide, require meaningful environmental context. For overhead/POV, require a materially different camera axis. For tracking, require visible camera travel/parallax.',
     'Same location, same character, same apparatus and continuity are NOT failures by themselves.',
+    'If CURRENT OPENING substantially matches PREVIOUS TAIL before changing later, emit issue code "transition-framing-reuse" with severity high even if the later whole-act frames are diverse.',
+    'If the current act is distinct from its first visible frames onward, do not emit transition-framing-reuse.',
     'A 20-60 second explainer should not feel like one unchanged composition repeated across acts.',
     'Return JSON:',
-    '{"score":0,"scores":{"shotTypeAdherence":0,"compositionDifference":0,"scaleOrAngleDifference":0,"editorialNovelty":0},"issues":[{"code":"repeated-framing","severity":"high","evidence":"specific visible evidence"}],"summary":"one sentence","regenerationGuidance":"specific camera/framing correction"}',
+    '{"score":0,"scores":{"transitionDistinctness":0,"shotTypeAdherence":0,"compositionDifference":0,"scaleOrAngleDifference":0,"editorialNovelty":0},"issues":[{"code":"transition-framing-reuse","severity":"high","evidence":"opening frames visibly reuse the previous tail framing before the planned change"}],"summary":"one sentence","regenerationGuidance":"specific camera/framing correction"}',
   ].join('\n');
 }
 
@@ -212,6 +226,31 @@ function sampleTimes(duration, count) {
   return Array.from({ length: count }, (_, index) => (
     round((safeDuration * (index + 0.5)) / count)
   ));
+}
+
+function transitionTailTimes(duration) {
+  const safeDuration = Math.max(0.5, Number(duration) || 5);
+  return uniqueTimes([
+    Math.max(0, safeDuration - 1),
+    Math.max(0, safeDuration - 0.2),
+  ], safeDuration);
+}
+
+function transitionOpeningTimes(duration) {
+  const safeDuration = Math.max(0.5, Number(duration) || 5);
+  return uniqueTimes([
+    Math.min(0.15, safeDuration * 0.1),
+    Math.min(0.75, safeDuration * 0.35),
+    Math.min(1.5, safeDuration * 0.6),
+  ], safeDuration);
+}
+
+function uniqueTimes(values, duration) {
+  return [...new Set(values
+    .map((value) => round(Math.max(0, Math.min(Math.max(0, duration - 0.05), value))))
+    .map(String))]
+    .map(Number)
+    .sort((a, b) => a - b);
 }
 
 function normalizeIssues(value) {
