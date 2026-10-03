@@ -209,6 +209,25 @@ test('close shots describe the setting as out of frame instead of the full locat
   assert.match(prompts.first, /upper wing surface fills the frame/);
 });
 
+test('preflight accepts a cast whose players are named by position or as teammates', async () => {
+  const { roleMatcher, validateProductionScriptPreflight } = await import('../src/core/productionScriptGenerator.js');
+  assert.ok(roleMatcher('player').test('Maya, the team captain'));
+  assert.ok(roleMatcher('player').test('a starting point guard'));
+  assert.ok(!roleMatcher('player').test('a guardian at the door'));
+  assert.ok(!roleMatcher('coach').test('an old stagecoach'));
+
+  const result = validateProductionScriptPreflight({
+    directorialContract: { expectedRoleHints: ['coach', 'player'], requiredVisibleCharacterIds: [] },
+    characters: [
+      { id: 'coach', name: 'Coach Ellis', description: 'Head coach', onScreen: true },
+      { id: 'maya', name: 'Maya', description: 'Team captain and point guard', onScreen: true },
+    ],
+    segments: [],
+  }, { topic: 'A coach motivates his players' });
+  const violations = Array.isArray(result) ? result : (result?.violations || []);
+  assert.ok(!violations.some((item) => /visible (?:coach|player)/.test(String(item))), JSON.stringify(violations));
+});
+
 test('everyday body movement is not locked to breathing micro-motion', async () => {
   const { directMotionRegions } = await import('../src/core/motionRegionDirector.js');
   const plan = (action) => {
@@ -222,4 +241,55 @@ test('everyday body movement is not locked to breathing micro-motion', async () 
 
   const standing = plan('The coach speaks calmly with his hands on his hips.');
   assert.ok(standing.lockedRegions.some((item) => item.id === 'body-shape'));
+});
+
+test('the whole cast and every character in a segment are kept', async () => {
+  const team = ['coach', 'jalen', 'malik', 'owen', 'devon', 'andre', 'samir'];
+  const script = await new ProductionScriptGenerator({
+    llm: {
+      async generateProductionScript() {
+        return {
+          title: 'Huddle',
+          characters: team.map((id) => ({ id, name: id, description: id === 'coach' ? 'Head coach' : 'Team player' })),
+          segments: [{
+            durationSeconds: 8,
+            speakerCharacterId: 'coach',
+            characterIds: team,
+            dialogue: 'Hands in. Together.',
+            action: 'The team huddles and stacks hands.',
+          }],
+        };
+      },
+    },
+  }).generate({ topic: 'coach and team', durationSeconds: 8 });
+
+  assert.equal(script.characters.length, 7);
+  assert.deepEqual(script.segments[0].characterIds, team);
+});
+
+test('segments without dialogue are marked no-dialogue rather than single-speaker', async () => {
+  const script = await generatorFor([
+    { durationSeconds: 6, speakerCharacterId: 'narrator', dialogue: 'Hands in.' },
+    { durationSeconds: 6, action: 'The team runs out of the locker room.' },
+  ]).generate({ topic: 'team', durationSeconds: 12 });
+
+  assert.equal(script.segments[0].speakerMode, 'single-speaker');
+  assert.equal(script.segments[1].speakerMode, 'no-dialogue');
+  assert.equal(script.segments[1].speakerCharacterId, null);
+});
+
+test('screenplay prompt states the per-shot action limit the realism director enforces', async () => {
+  const { OpenAICompatibleLlmProvider } = await import('../src/providers/openaiCompatibleLlmProvider.js');
+  let prompt = '';
+  const llm = new OpenAICompatibleLlmProvider({
+    apiKey: 'key',
+    model: 'model',
+    fetchImpl: async (_url, options) => {
+      prompt = JSON.parse(options.body).messages.map((message) => message.content).join('\n');
+      return { ok: false, status: 500, json: async () => ({ error: { message: 'stop' } }) };
+    },
+  });
+  await llm.generateProductionScript({ topic: 'coach and team', audience: 'fans', durationSeconds: 40 }).catch(() => {});
+  assert.match(prompt, /at most two physical actions/);
+  assert.match(prompt, /Handle at most one object per segment/);
 });

@@ -124,7 +124,7 @@ function normalizeProductionScript(value, context) {
       ...(Array.isArray(segment.characterIds)
         ? segment.characterIds.map(safeId).filter((id) => characterIds.has(id))
         : []),
-    ]).slice(0, 3);
+    ]);
     const speakerCharacterId = dialogueTurns[0]?.speakerCharacterId || legacySpeakerId;
     if (speakerCharacterId && !boundCharacters.includes(speakerCharacterId)) {
       boundCharacters.unshift(speakerCharacterId);
@@ -140,7 +140,9 @@ function normalizeProductionScript(value, context) {
       durationSeconds: round(duration),
       purpose: clean(segment.purpose || (index === 0 ? 'hook' : 'explain'), 80),
       speakerCharacterId,
-      speakerMode: turnSpeakerIds.length > 1 ? 'multi-speaker' : 'single-speaker',
+      speakerMode: turnSpeakerIds.length > 1
+        ? 'multi-speaker'
+        : turnSpeakerIds.length === 1 ? 'single-speaker' : 'no-dialogue',
       dialogueTurns,
       characterIds: boundCharacters,
       locationId: locationIds.has(safeId(segment.locationId))
@@ -210,6 +212,22 @@ const ROLE_HINTS = [
   'customer', 'patient', 'player', 'athlete', 'mechanic', 'pilot', 'firefighter',
 ];
 
+// A cast satisfies a role when it names the role, its plural, or a common synonym
+// ("captain" or "point guard" is a visible player even without the word "player").
+const ROLE_SYNONYMS = {
+  coach: ['head coach', 'assistant coach'],
+  player: ['teammate', 'captain', 'guard', 'point guard', 'forward', 'center', 'athlete', 'striker', 'goalkeeper'],
+  athlete: ['player', 'runner', 'sprinter', 'swimmer', 'lifter'],
+  doctor: ['physician', 'surgeon'],
+  parent: ['mother', 'father', 'mom', 'dad'],
+};
+
+export function roleMatcher(role) {
+  const terms = [role, ...(ROLE_SYNONYMS[role] || [])]
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'));
+  return new RegExp(`\\b(?:${terms.join('|')})(?:e?s)?\\b`, 'i');
+}
+
 const INTERPERSONAL_PATTERN = /\b(motivat(?:e|es|ing)|coach(?:es|ing)?|teach(?:es|ing)?|consult(?:s|ing)?|interview(?:s|ing)?|serve(?:s|ing)?|help(?:s|ing)?|hand(?:s|ing)?|give(?:s|ing)?|argu(?:e|es|ing)|hug(?:s|ging)?|shake hands|high[- ]five|team huddle|addresses? (?:his|her|the) team)\b/i;
 
 function normalizeDirectorialContract(value, {
@@ -235,7 +253,7 @@ function normalizeDirectorialContract(value, {
   const roleIds = roleHints.flatMap((role) => {
     const character = characters.find((item) => (
       item.onScreen !== false
-      && new RegExp(`\\b${role}\\b`, 'i').test([
+      && roleMatcher(role).test([
         item.name,
         item.description,
         item.physicalTraits,
@@ -245,8 +263,7 @@ function normalizeDirectorialContract(value, {
     return character ? [character.id] : [];
   });
   const requiredVisibleCharacterIds = unique([...rawIds, ...roleIds])
-    .filter((id) => characters.some((character) => character.id === id))
-    .slice(0, 4);
+    .filter((id) => characters.some((character) => character.id === id));
 
   const defaultDeadline = Math.min(8, Math.max(1, Number(durationSeconds) * 0.2));
   const requiresInteraction = INTERPERSONAL_PATTERN.test(premise);
@@ -296,7 +313,7 @@ export function validateProductionScriptPreflight(script, {
   for (const role of contract.expectedRoleHints || []) {
     const found = characters.some((character) => (
       character.onScreen !== false
-      && new RegExp(`\\b${role}\\b`, 'i').test([
+      && roleMatcher(role).test([
         character.name,
         character.description,
         character.physicalTraits,
@@ -417,7 +434,7 @@ function normalizeDialogueTurns(segment, {
 function normalizeCharacters(items) {
   const list = Array.isArray(items) ? items : [];
   const usedVoices = new Set();
-  const normalized = list.slice(0, 4).map((character, index) => {
+  const normalized = list.map((character, index) => {
     const requested = clean(character.voice?.presetId || '', 80);
     const canonical = RUNWAY_VOICE_BY_LOWER.get(requested.toLowerCase()) || null;
     let presetId = canonical;
