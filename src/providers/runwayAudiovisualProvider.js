@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
+import { FrameSampler } from '../services/frameSampler.js';
 import { buildRealismPromptBlock } from '../core/realismDirector.js';
 import { buildKeyframePrompts } from '../core/keyframeDirector.js';
 import { buildMotionRegionPromptBlock } from '../core/motionRegionDirector.js';
@@ -31,6 +32,7 @@ export class RunwayAudiovisualProvider {
     maxPolls = Number(process.env.RUNWAY_MAX_POLLS || 120),
     dialogueComposer = null,
     poseExtractor = null,
+    frameSampler = null,
     ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg',
     ffprobeBin = process.env.FFPROBE_BIN || 'ffprobe',
     fetchImpl = globalThis.fetch,
@@ -60,6 +62,7 @@ export class RunwayAudiovisualProvider {
     this.fetch = fetchImpl;
     this.sleep = sleepImpl;
     this.poseExtractor = poseExtractor || new PoseMotionExtractor();
+    this.frameSampler = frameSampler || new FrameSampler({ ffmpegBin });
     this.dialogueComposer = dialogueComposer || new DialogueAudioComposer({
       ffmpegBin,
       ffprobeBin,
@@ -277,16 +280,15 @@ export class RunwayAudiovisualProvider {
         ...(referenceVideos.length ? { referenceVideos } : {}),
         ...(referenceAudio.length ? { referenceAudio } : {}),
       })
-      : await this.createTask('/text_to_video', {
+      : await this.createTextToVideoTask({
         model: this.model,
         promptText,
         audio: true,
         duration,
         ratio: this.ratio,
-        ...(references.length ? { references } : {}),
         ...(referenceVideos.length ? { referenceVideos } : {}),
         ...(referenceAudio.length ? { referenceAudio } : {}),
-      });
+      }, { references, previousAsset });
     const completed = await this.wait(task.id);
     const sourceUrl = firstOutputUrl(completed);
     if (!sourceUrl) throw new Error('Runway audiovisual task completed without output');
@@ -597,6 +599,52 @@ export class RunwayAudiovisualProvider {
     throw new Error(`Runway task timed out after ${this.maxPolls} polls`);
   }
 
+  /**
+   * Reference image URLs are signed and expire (story-bible images from the start of
+   * a long or resumed run). If Runway cannot fetch one, drop the dead links, fall
+   * back to a still from the previous accepted act, and retry once.
+   */
+  async createTextToVideoTask(body, { references = [], previousAsset = null } = {}) {
+    const withReferences = (refs) => (refs.length ? { ...body, references: refs } : body);
+    try {
+      return await this.createTask('/text_to_video', withReferences(references));
+    } catch (error) {
+      if (!references.length || !/Failed to fetch asset[\s\S]*"references"/.test(error.message)) throw error;
+    }
+
+    const usable = [];
+    for (const reference of references) {
+      if (String(reference.uri).startsWith('data:') || await this.isFetchable(reference.uri)) usable.push(reference);
+    }
+    if (!usable.length && previousAsset?.localPath) {
+      try {
+        const duration = Number(previousAsset.durationSeconds) || 5;
+        const [frame] = await this.frameSampler.sampleAt(
+          previousAsset.localPath,
+          [Math.max(0, duration - 0.5)],
+          { maxWidth: 1024, prefix: 'continuity-reference' },
+        );
+        if (frame?.dataUrl) usable.push({ uri: frame.dataUrl });
+      } catch {
+        // No still available; continue with the prompt's location description only.
+      }
+    }
+    return this.createTask('/text_to_video', withReferences(usable));
+  }
+
+  async isFetchable(uri) {
+    try {
+      const response = await this.fetch(uri, {
+        method: 'GET',
+        headers: { range: 'bytes=0-0' },
+        signal: AbortSignal.timeout(10000),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async request(endpoint, { method = 'GET', body = null } = {}) {
     const response = await this.fetch(`${this.baseUrl}${endpoint}`, {
       method,
@@ -618,7 +666,11 @@ export class RunwayAudiovisualProvider {
 
     if (!response.ok) {
       const detail = payload?.error || payload?.message || response.statusText || 'request failed';
-      throw new Error(`Runway request failed (${response.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
+      // Validation errors carry the offending fields in `issues`; keep them for diagnosis.
+      const issues = Array.isArray(payload?.issues) && payload.issues.length
+        ? ` ${JSON.stringify(payload.issues).slice(0, 600)}`
+        : '';
+      throw new Error(`Runway request failed (${response.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}${issues}`);
     }
     return payload;
   }
