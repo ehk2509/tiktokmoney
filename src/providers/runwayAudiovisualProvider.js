@@ -760,7 +760,7 @@ export class RunwayAudiovisualProvider {
   }
 }
 
-function buildAudiovisualPrompt({
+export function buildAudiovisualPrompt({
   narrationInPost = false,
   segment,
   productionScript,
