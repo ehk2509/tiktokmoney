@@ -889,7 +889,7 @@ function uniqueTaggedReferences(items) {
   });
 }
 
-function shotTypeDirective(shotType) {
+export function shotTypeDirective(shotType) {
   const directives = {
     'wide-establishing': 'FRAMING CONTRACT: show the complete primary subject/mechanism plus meaningful surrounding environment. Keep generous context around it; do not crop into a medium or close framing.',
     'close-up': 'FRAMING CONTRACT: move materially closer than an establishing shot. The primary face, object, or mechanism should dominate the frame with much less environment visible.',
