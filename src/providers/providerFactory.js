@@ -19,6 +19,7 @@ import { PoseMotionQcProvider } from './poseMotionQcProvider.js';
 import { OpenRouterTextArtifactQcProvider } from './openRouterTextArtifactQcProvider.js';
 import { OpenRouterVisualFactualQcProvider } from './openRouterVisualFactualQcProvider.js';
 import { OpenRouterEditorialVarietyQcProvider } from './openRouterEditorialVarietyQcProvider.js';
+import { OpenRouterProductionIntegrityQcProvider } from './openRouterProductionIntegrityQcProvider.js';
 import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
 import { YouTubeTrendProvider } from './youtubeTrendProvider.js';
 import { RedditTrendProvider } from './redditTrendProvider.js';
@@ -516,6 +517,43 @@ export function createEditorialVarietyQcProvider(env = process.env) {
       : undefined,
     maxRegenerations: env.EDITORIAL_VARIETY_QC_MAX_REGENERATIONS
       ? Number(env.EDITORIAL_VARIETY_QC_MAX_REGENERATIONS)
+      : undefined,
+  });
+}
+
+export function createProductionIntegrityQcProvider(env = process.env) {
+  const enabled = env.PRODUCTION_INTEGRITY_QC_ENABLED == null
+    ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
+      && Boolean(env.OPENROUTER_API_KEY)
+      && Boolean(env.PRODUCTION_INTEGRITY_QC_MODEL || env.REALISM_QC_MODEL)
+    : isEnabled(env.PRODUCTION_INTEGRITY_QC_ENABLED);
+
+  if (!enabled) return null;
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required when PRODUCTION_INTEGRITY_QC_ENABLED=true');
+  }
+  if (!env.PRODUCTION_INTEGRITY_QC_MODEL && !env.REALISM_QC_MODEL) {
+    throw new Error('PRODUCTION_INTEGRITY_QC_MODEL or REALISM_QC_MODEL is required when PRODUCTION_INTEGRITY_QC_ENABLED=true');
+  }
+
+  return new OpenRouterProductionIntegrityQcProvider({
+    apiKey: env.OPENROUTER_API_KEY,
+    baseUrl: env.OPENROUTER_BASE_URL,
+    model: env.PRODUCTION_INTEGRITY_QC_MODEL || env.REALISM_QC_MODEL,
+    threshold: env.PRODUCTION_INTEGRITY_QC_THRESHOLD
+      ? Number(env.PRODUCTION_INTEGRITY_QC_THRESHOLD)
+      : undefined,
+    minBlockingConfidence: env.PRODUCTION_INTEGRITY_QC_MIN_BLOCKING_CONFIDENCE
+      ? Number(env.PRODUCTION_INTEGRITY_QC_MIN_BLOCKING_CONFIDENCE)
+      : undefined,
+    frames: env.PRODUCTION_INTEGRITY_QC_FRAMES
+      ? Number(env.PRODUCTION_INTEGRITY_QC_FRAMES)
+      : undefined,
+    frameWidth: env.PRODUCTION_INTEGRITY_QC_FRAME_WIDTH
+      ? Number(env.PRODUCTION_INTEGRITY_QC_FRAME_WIDTH)
+      : undefined,
+    maxRegenerations: env.PRODUCTION_INTEGRITY_QC_MAX_REGENERATIONS
+      ? Number(env.PRODUCTION_INTEGRITY_QC_MAX_REGENERATIONS)
       : undefined,
   });
 }
