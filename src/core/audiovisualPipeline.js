@@ -26,6 +26,7 @@ export class AudiovisualPipeline {
     speakerTurnQc = null,
     textArtifactQc = null,
     visualFactualQc = null,
+    editorialVarietyQc = null,
     poseMotionQc = null,
     subtitleConfig = null,
     creativeTournament = null,
@@ -56,6 +57,7 @@ export class AudiovisualPipeline {
     this.speakerTurnQc = speakerTurnQc;
     this.textArtifactQc = textArtifactQc;
     this.visualFactualQc = visualFactualQc;
+    this.editorialVarietyQc = editorialVarietyQc;
     this.poseMotionQc = poseMotionQc;
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
@@ -201,6 +203,7 @@ export class AudiovisualPipeline {
           poseMotionQc: this.poseMotionQc,
           textArtifactQc: this.textArtifactQc,
           visualFactualQc: this.visualFactualQc,
+          editorialVarietyQc: this.editorialVarietyQc,
           segment,
           productionScript,
           storyBible: project.storyBible,
@@ -238,6 +241,7 @@ export class AudiovisualPipeline {
         poseMotionQc: generated.poseMotionQc,
         textArtifactQc: generated.textArtifactQc,
         visualFactualQc: generated.visualFactualQc,
+        editorialVarietyQc: generated.editorialVarietyQc,
         qcApplicability: generated.qcApplicability || null,
       });
 
@@ -307,6 +311,7 @@ async function generateWithQc({
   poseMotionQc,
   textArtifactQc,
   visualFactualQc,
+  editorialVarietyQc,
   segment,
   productionScript,
   storyBible,
@@ -325,6 +330,7 @@ async function generateWithQc({
     poseMotion: 0,
     textArtifact: 0,
     visualFactual: 0,
+    editorialVariety: 0,
   };
   const maxTotalRegenerations = [
     realismQc,
@@ -336,10 +342,11 @@ async function generateWithQc({
     poseMotionQc,
     textArtifactQc,
     visualFactualQc,
+    editorialVarietyQc,
   ].reduce((sum, qc) => sum + Math.max(0, Number(qc?.maxRegenerations) || 0), 0);
   const hasQc = Boolean(
     realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc
-      || textArtifactQc || visualFactualQc,
+      || textArtifactQc || visualFactualQc || editorialVarietyQc,
   );
 
   for (let attempt = 0; attempt <= maxTotalRegenerations; attempt += 1) {
@@ -364,6 +371,7 @@ async function generateWithQc({
         poseMotionQc: null,
         textArtifactQc: null,
         visualFactualQc: null,
+        editorialVarietyQc: null,
         failure: null,
         failureStatus: null,
       };
@@ -457,6 +465,15 @@ async function generateWithQc({
       })
       : null;
 
+    const previousSegment = productionScript.segments?.[segment.index - 1] || null;
+    const editorialVariety = editorialVarietyQc
+      ? await editorialVarietyQc.evaluate(asset, {
+        segment,
+        previousAsset,
+        previousSegment,
+      })
+      : null;
+
     const phonemeViseme = phonemeVisemeQc && applicability.phonemeViseme.applicable
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
@@ -487,6 +504,7 @@ async function generateWithQc({
       ['poseMotion', poseMotion, poseMotionQc],
       ['textArtifact', textArtifact, textArtifactQc],
       ['visualFactual', visualFactual, visualFactualQc],
+      ['editorialVariety', editorialVariety, editorialVarietyQc],
     ];
     const passed = checks
       .map(([, result]) => result)
@@ -520,6 +538,7 @@ async function generateWithQc({
       ),
       ...prefixIssues(textArtifact?.issues, 'text-artifact'),
       ...prefixIssues(visualFactual?.issues, 'visual-factual'),
+      ...prefixIssues(editorialVariety?.issues, 'editorial-variety'),
     ];
     const regenerationGuidance = [
       realism && !realism.passed ? realism.regenerationGuidance : '',
@@ -531,6 +550,7 @@ async function generateWithQc({
       poseMotion && !poseMotion.passed ? poseMotion.regenerationGuidance : '',
       textArtifact && !textArtifact.passed ? textArtifact.regenerationGuidance : '',
       visualFactual && !visualFactual.passed ? visualFactual.regenerationGuidance : '',
+      editorialVariety && !editorialVariety.passed ? editorialVariety.regenerationGuidance : '',
     ].filter(Boolean).join(' ');
 
     const historyEntry = {
@@ -547,6 +567,7 @@ async function generateWithQc({
       poseMotion,
       textArtifact,
       visualFactual,
+      editorialVariety,
       issues,
       regenerationGuidance,
       applicability,
@@ -569,6 +590,7 @@ async function generateWithQc({
           poseMotionQc: poseMotion,
           textArtifactQc: textArtifact,
           visualFactualQc: visualFactual,
+          editorialVarietyQc: editorialVariety,
           qcApplicability: applicability,
         },
         qcHistory,
@@ -580,6 +602,7 @@ async function generateWithQc({
         poseMotionQc: poseMotion,
         textArtifactQc: textArtifact,
         visualFactualQc: visualFactual,
+        editorialVarietyQc: editorialVariety,
         qcApplicability: applicability,
         failure: null,
         failureStatus: null,
@@ -604,6 +627,8 @@ async function generateWithQc({
         ? 'TEXT_ARTIFACT_QC_FAILED'
       : visualFactual && !visualFactual.passed
         ? 'VISUAL_FACT_QC_FAILED'
+      : editorialVariety && !editorialVariety.passed
+        ? 'EDITORIAL_VARIETY_QC_FAILED'
       : poseMotion && !poseMotion.passed
         ? 'POSE_MOTION_QC_FAILED'
       : speakerTurn && !speakerTurn.passed
@@ -627,6 +652,7 @@ async function generateWithQc({
       poseMotionQc: poseMotion,
       textArtifactQc: textArtifact,
       visualFactualQc: visualFactual,
+      editorialVarietyQc: editorialVariety,
       qcApplicability: applicability,
       failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
       failureStatus,
@@ -644,6 +670,7 @@ async function generateWithQc({
     poseMotionQc: null,
     textArtifactQc: null,
     visualFactualQc: null,
+    editorialVarietyQc: null,
     failure: 'audiovisual generation failed',
     failureStatus: 'AUDIOVISUAL_QC_FAILED',
   };
