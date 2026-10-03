@@ -320,7 +320,7 @@ function checkVisibleSpeech(segments, characterById, stage) {
     ));
     if (!visibleTurns.length) continue;
     if (!SPEECH_SAFE_SHOTS.has(segment.shotType)) {
-      blockers.push(issue(`${stage}-shot-risk`, `Act ${segment.index} has visible speech in ${segment.shotType}; use a face-readable shot or move the line to voiceover.`));
+      warnings.push(issue(`${stage}-shot-risk`, `Act ${segment.index} has visible speech in ${segment.shotType}; keep the speaking face/mouth readable or move the line to voiceover.`));
     }
     const visualText = [segment.startState, segment.endState, segment.action, segment.camera].filter(Boolean).join(' ');
     if (/\b(back to camera|back of (?:his|her|their) head|face (?:hidden|obscured|covered)|mouth (?:hidden|covered|obscured))\b/i.test(visualText)) {
@@ -407,7 +407,7 @@ function checkVisualFactualPlan(segments) {
   const warnings = [];
   for (const segment of segments) {
     if (!String(segment.action || '').trim()) {
-      blockers.push(issue('visual-action-missing', `Act ${segment.index} has narration but no explicit visual action contract.`));
+      warnings.push(issue('visual-action-missing', `Act ${segment.index} has narration but no explicit visual action contract.`));
     }
     if (/\b(exactly|precisely)\b/i.test(segment.dialogue || '')
       && !String(segment.action || '').trim()) {
