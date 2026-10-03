@@ -362,6 +362,9 @@ export function extractFullStackMetrics(project) {
     visualFactualConsistencyScore: average(scenes.map((scene) => (
       scene.visualFactualQc?.score
     ))),
+    editorialVarietyScore: average(scenes.map((scene) => (
+      scene.editorialVarietyQc?.score
+    ))),
   };
 }
 
@@ -701,6 +704,7 @@ function detectUntrackedCostComponents(pipeline) {
   if (pipeline?.poseMotionQc) components.push('pose-motion-qc');
   if (pipeline?.textArtifactQc) components.push('text-artifact-qc');
   if (pipeline?.visualFactualQc) components.push('visual-factual-qc');
+  if (pipeline?.editorialVarietyQc) components.push('editorial-variety-qc');
   if (pipeline?.visual) components.push('visual-reference-provider');
   return [...new Set(components)];
 }

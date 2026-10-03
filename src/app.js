@@ -24,6 +24,7 @@ import {
   createPoseMotionQcProvider,
   createTextArtifactQcProvider,
   createVisualFactualQcProvider,
+  createEditorialVarietyQcProvider,
   createTrendIntelligence,
 } from './providers/providerFactory.js';
 
@@ -92,6 +93,9 @@ export function createApp(overrides = {}) {
     const visualFactualQc = Object.prototype.hasOwnProperty.call(overrides, 'visualFactualQc')
       ? overrides.visualFactualQc
       : createVisualFactualQcProvider();
+    const editorialVarietyQc = Object.prototype.hasOwnProperty.call(overrides, 'editorialVarietyQc')
+      ? overrides.editorialVarietyQc
+      : createEditorialVarietyQcProvider();
     capabilities.poseMotion = {
       enabled: Boolean(poseMotionQc),
       extractorAvailable: Boolean(poseMotionQc?.extractor?.available),
@@ -114,6 +118,7 @@ export function createApp(overrides = {}) {
       poseMotionQc,
       textArtifactQc,
       visualFactualQc,
+      editorialVarietyQc,
       subtitleConfig: overrides.subtitleConfig,
       creativeTournament: overrides.creativeTournament,
       trendIntelligence,
