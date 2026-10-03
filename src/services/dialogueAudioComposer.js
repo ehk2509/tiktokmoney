@@ -9,6 +9,7 @@ export class DialogueAudioComposer {
     assetDir = process.env.ASSET_DIR || './outputs/assets',
     turnGapSeconds = Number(process.env.MULTISPEAKER_TURN_GAP_SECONDS || 0.16),
     maxDataUriBytes = Number(process.env.MULTISPEAKER_MAX_DATA_URI_BYTES || 15_500_000),
+    voiceoverGeneratedAmbienceGain = Number(process.env.VOICEOVER_GENERATED_AMBIENCE_GAIN || 0),
     runCommand = run,
     probeDuration = probe,
   } = {}) {
@@ -17,6 +18,12 @@ export class DialogueAudioComposer {
     this.assetDir = assetDir;
     this.turnGapSeconds = clamp(Number(turnGapSeconds), 0, 1, 0.16);
     this.maxDataUriBytes = Math.max(1_000_000, Number(maxDataUriBytes) || 15_500_000);
+    this.voiceoverGeneratedAmbienceGain = clamp(
+      Number(voiceoverGeneratedAmbienceGain),
+      0,
+      1,
+      0,
+    );
     this.runCommand = runCommand;
     this.probeDuration = probeDuration;
   }
@@ -123,7 +130,7 @@ export class DialogueAudioComposer {
     projectId = 'project',
     segmentIndex = 0,
     generationId = 'clip',
-    ambienceGain = 0.35,
+    ambienceGain = null,
   }) {
     await mkdir(this.assetDir, { recursive: true });
     const outputPath = path.join(
@@ -131,12 +138,28 @@ export class DialogueAudioComposer {
       `voiceover-${safe(projectId)}-${segmentIndex}-${safe(generationId)}.mp4`,
     );
     const output = ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', outputPath];
+    const generatedAmbienceGain = ambienceGain != null && Number.isFinite(Number(ambienceGain))
+      ? clamp(Number(ambienceGain), 0, 1, this.voiceoverGeneratedAmbienceGain)
+      : this.voiceoverGeneratedAmbienceGain;
+
+    // Generated audiovisual beds are not trustworthy under off-screen narration:
+    // models can emit faint duplicate speech, echo-like vocal artifacts or looping
+    // sound effects even when prompted for ambience only. Exact TTS is the
+    // authoritative soundtrack, so generated audio is discarded by default.
+    if (generatedAmbienceGain <= 0) {
+      await this.runCommand(this.ffmpegBin, [
+        '-y', '-i', videoPath, '-i', voicePath,
+        '-map', '0:v:0', '-map', '1:a:0', '-af', 'apad', '-shortest',
+        ...output,
+      ]);
+      return outputPath;
+    }
 
     try {
       await this.runCommand(this.ffmpegBin, [
         '-y', '-i', videoPath, '-i', voicePath,
         '-filter_complex',
-        `[0:a]volume=${ambienceGain}[bed];[bed][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`,
+        `[0:a]volume=${generatedAmbienceGain}[bed];[bed][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`,
         '-map', '0:v:0', '-map', '[a]',
         ...output,
       ]);

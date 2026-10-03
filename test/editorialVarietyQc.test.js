@@ -80,6 +80,92 @@ test('editorial variety QC fails when a planned close-up still looks like the pr
   assert.match(prompts[0], /PREVIOUS shot type: wide-establishing/i);
 });
 
+test('editorial variety QC inspects previous-tail vs current-opening frames and blocks delayed reframing', async () => {
+  const samples = [];
+  let requestBody = null;
+  const provider = new OpenRouterEditorialVarietyQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    threshold: 80,
+    maxRegenerations: 1,
+    frameSampler: {
+      async sampleAt(filePath, timestamps, options) {
+        samples.push({ filePath, timestamps, prefix: options.prefix });
+        return timestamps.map((timestamp, index) => ({
+          index,
+          timestamp,
+          dataUrl: `data:image/jpeg;base64,S${samples.length}-${index}`,
+        }));
+      },
+    },
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              score: 74,
+              scores: {
+                transitionDistinctness: 35,
+                shotTypeAdherence: 88,
+                compositionDifference: 84,
+                scaleOrAngleDifference: 85,
+                editorialNovelty: 87,
+              },
+              issues: [{
+                code: 'transition-framing-reuse',
+                severity: 'high',
+                evidence: 'The first 1.5 seconds reuse the previous frontal framing before moving to the new angle.',
+              }],
+              summary: 'The act becomes distinct later, but opens by continuing the previous composition.',
+              regenerationGuidance: 'Open immediately on the planned oblique close framing.',
+            }),
+          },
+        }],
+      });
+    },
+  });
+
+  const result = await provider.evaluate(
+    { localPath: '/fake/current.mp4', durationSeconds: 15 },
+    {
+      segment: {
+        shotType: 'macro-detail',
+        camera: 'Oblique macro view of the wing surface.',
+        action: 'Show airflow separating.',
+        durationSeconds: 15,
+      },
+      previousAsset: { localPath: '/fake/previous.mp4', durationSeconds: 15 },
+      previousSegment: {
+        shotType: 'wide-establishing',
+        camera: 'Frontal view of the full tunnel.',
+        durationSeconds: 15,
+      },
+    },
+  );
+
+  assert.deepEqual(samples[0].timestamps, [14, 14.8]);
+  assert.deepEqual(samples[1].timestamps, [0.15, 0.75, 1.5]);
+  assert.deepEqual(samples[2].timestamps, [2.5, 7.5, 12.5]);
+  assert.equal(samples[0].prefix, 'editorial-prev-tail');
+  assert.equal(samples[1].prefix, 'editorial-current-opening');
+  assert.equal(samples[2].prefix, 'editorial-current');
+
+  const labels = requestBody.messages[1].content
+    .filter((item) => item.type === 'text')
+    .map((item) => item.text)
+    .join('\n');
+  assert.match(labels, /PREVIOUS TAIL frame/);
+  assert.match(labels, /CURRENT OPENING frame/);
+  assert.match(labels, /CURRENT WHOLE-ACT frame/);
+
+  assert.equal(result.passed, false);
+  assert.equal(result.scores.transitionDistinctness, 35);
+  assert.equal(result.issues[0].code, 'transition-framing-reuse');
+  assert.match(result.regenerationGuidance, /Open immediately/i);
+  assert.deepEqual(result.sampledFrames.currentOpening.map((item) => item.timestamp), [0.15, 0.75, 1.5]);
+});
+
 test('editorial variety QC skips the first act because there is no previous composition', async () => {
   const provider = makeProvider({});
   const result = await provider.evaluate(

@@ -84,12 +84,13 @@ test('off-screen narration is mixed in after generation instead of re-spoken by 
   }
 });
 
-test('voiceover mix keeps clip ambience and falls back to narration-only for silent clips', async () => {
+test('opted-in voiceover ambience falls back to narration-only when the generated clip is silent', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-voiceover-mix-'));
   const calls = [];
   try {
     const composer = new DialogueAudioComposer({
       assetDir: dir,
+      voiceoverGeneratedAmbienceGain: 0.2,
       runCommand: async (_bin, args) => {
         calls.push(args);
         if (calls.length === 1) throw new Error('Stream specifier :a matches no streams');
@@ -105,6 +106,7 @@ test('voiceover mix keeps clip ambience and falls back to narration-only for sil
     });
 
     assert.equal(output, path.join(dir, 'voiceover-vid-2-task.mp4'));
+    assert.ok(calls[0].join(' ').includes('volume=0.2'));
     assert.ok(calls[0].join(' ').includes('amix=inputs=2:duration=first'));
     assert.ok(calls[1].includes('apad') && calls[1].includes('-shortest'));
   } finally {

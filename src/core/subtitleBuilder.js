@@ -292,7 +292,10 @@ function groupWords(words, options) {
     const wordLimitReached = current.length >= options.maxWordsPerCue;
     const canCompleteWeakPhrase = wordLimitReached
       && current.length < options.maxWordsPerCue + 2
-      && weakCueEnding(previous?.word)
+      && (
+        weakCueEnding(previous?.word)
+        || dependentPhraseNeedsCompletion(current)
+      )
       && text.length <= options.maxCharsPerCue
       && gap <= options.maxGapSeconds
       && fitsLayout(next, options);
@@ -410,6 +413,21 @@ const WEAK_CUE_ENDINGS = new Set([
 function weakCueEnding(word = '') {
   const token = normalizeToken(word);
   return WEAK_CUE_ENDINGS.has(token);
+}
+
+const DEPENDENT_CLAUSE_MARKERS = new Set([
+  'after', 'although', 'as', 'because', 'before', 'if', 'once', 'since',
+  'though', 'unless', 'until', 'when', 'whenever', 'whereas', 'while',
+]);
+
+function dependentPhraseNeedsCompletion(words = []) {
+  const tokens = words.map((item) => normalizeToken(item.word)).filter(Boolean);
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (!DEPENDENT_CLAUSE_MARKERS.has(tokens[index])) continue;
+    const trailing = tokens.length - index - 1;
+    return trailing > 0 && trailing <= 2;
+  }
+  return false;
 }
 
 /**

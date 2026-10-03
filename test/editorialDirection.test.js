@@ -62,6 +62,36 @@ test('weak one-word labels expand to a more specific spoken phrase', async () =>
   assert.equal(script.segments[0].onScreenLabels[0].text, 'angle increases');
 });
 
+test('labels preserve nearby semantic polarity instead of reversing the narration', async () => {
+  const script = await generatorFor([{
+    durationSeconds: 7,
+    speakerCharacterId: 'narrator',
+    dialogue: 'That loss of attached flow is a stall, not engine failure.',
+    action: 'Separated airflow peels away from the wing.',
+    onScreenLabels: [
+      { text: 'Attached flow', atSeconds: 2, durationSeconds: 2 },
+      { text: 'Engine failure', atSeconds: 4, durationSeconds: 2 },
+    ],
+  }]).generate({ topic: 'wing stall', durationSeconds: 7 });
+
+  assert.deepEqual(
+    script.segments[0].onScreenLabels.map((label) => label.text),
+    ['loss of attached flow', 'not engine failure'],
+  );
+});
+
+test('ordinary spoken labels stay unchanged when no polarity context is present', async () => {
+  const script = await generatorFor([{
+    durationSeconds: 6,
+    speakerCharacterId: 'narrator',
+    dialogue: 'Separated airflow forms above the wing.',
+    action: 'Smoke peels away from the surface.',
+    onScreenLabels: [{ text: 'Separated airflow', atSeconds: 1, durationSeconds: 2 }],
+  }]).generate({ topic: 'wing stall', durationSeconds: 6 });
+
+  assert.equal(script.segments[0].onScreenLabels[0].text, 'Separated airflow');
+});
+
 test('subtitle grouping does not strand weak connector words at cue endings', () => {
   const words = [
     ['At', 0, 0.2],
@@ -86,6 +116,33 @@ test('subtitle grouping does not strand weak connector words at cue endings', ()
 
   assert.equal(subtitles.cues[0].text, 'At a moderate angle of attack');
   assert.ok(!subtitles.cues.some((cue) => /\b(?:of|the|a|an|to|and)$/i.test(cue.text)));
+});
+
+test('subtitle grouping completes a short dependent clause instead of splitting before its verb', () => {
+  const words = [
+    ['but', 0, 0.15],
+    ['only', 0.15, 0.35],
+    ['until', 0.35, 0.6],
+    ['the', 0.6, 0.75],
+    ['flow', 0.75, 1.0],
+    ['separates.', 1.0, 1.4],
+    ['Then', 1.5, 1.7],
+    ['lift', 1.7, 1.95],
+    ['drops.', 1.95, 2.3],
+  ].map(([word, start, end]) => ({ word, start, end }));
+
+  const subtitles = buildSubtitles({
+    voice: { wordTimings: words },
+    config: {
+      maxWordsPerCue: 5,
+      maxCharsPerCue: 34,
+      maxWidthPx: 840,
+      maxLines: 2,
+    },
+  });
+
+  assert.equal(subtitles.cues[0].text, 'but only until the flow separates.');
+  assert.equal(subtitles.cues[1].text, 'Then lift drops.');
 });
 
 test('shot types expand into materially different framing contracts', () => {
