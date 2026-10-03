@@ -27,6 +27,7 @@ export class AudiovisualPipeline {
     textArtifactQc = null,
     visualFactualQc = null,
     editorialVarietyQc = null,
+    productionIntegrityQc = null,
     poseMotionQc = null,
     subtitleConfig = null,
     creativeTournament = null,
@@ -58,6 +59,7 @@ export class AudiovisualPipeline {
     this.textArtifactQc = retryMalformedReplies(textArtifactQc);
     this.visualFactualQc = retryMalformedReplies(visualFactualQc);
     this.editorialVarietyQc = retryMalformedReplies(editorialVarietyQc);
+    this.productionIntegrityQc = retryMalformedReplies(productionIntegrityQc);
     this.poseMotionQc = retryMalformedReplies(poseMotionQc);
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
@@ -205,6 +207,7 @@ export class AudiovisualPipeline {
           textArtifactQc: this.textArtifactQc,
           visualFactualQc: this.visualFactualQc,
           editorialVarietyQc: this.editorialVarietyQc,
+          productionIntegrityQc: this.productionIntegrityQc,
           segment,
           productionScript,
           storyBible: project.storyBible,
@@ -244,6 +247,7 @@ export class AudiovisualPipeline {
         textArtifactQc: generated.textArtifactQc,
         visualFactualQc: generated.visualFactualQc,
         editorialVarietyQc: generated.editorialVarietyQc,
+        productionIntegrityQc: generated.productionIntegrityQc,
         qcApplicability: generated.qcApplicability || null,
       });
 
@@ -325,6 +329,7 @@ async function runQcAttempts({
   textArtifactQc,
   visualFactualQc,
   editorialVarietyQc,
+  productionIntegrityQc,
   segment,
   productionScript,
   storyBible,
@@ -343,6 +348,7 @@ async function runQcAttempts({
     textArtifact: 0,
     visualFactual: 0,
     editorialVariety: 0,
+    productionIntegrity: 0,
   };
   const maxTotalRegenerations = [
     realismQc,
@@ -355,10 +361,11 @@ async function runQcAttempts({
     textArtifactQc,
     visualFactualQc,
     editorialVarietyQc,
+    productionIntegrityQc,
   ].reduce((sum, qc) => sum + Math.max(0, Number(qc?.maxRegenerations) || 0), 0);
   const hasQc = Boolean(
     realismQc || dialogueQc || lipSyncQc || deepLipSyncQc || phonemeVisemeQc || speakerTurnQc || poseMotionQc
-      || textArtifactQc || visualFactualQc || editorialVarietyQc,
+      || textArtifactQc || visualFactualQc || editorialVarietyQc || productionIntegrityQc,
   );
 
   for (let attempt = 0; attempt <= maxTotalRegenerations; attempt += 1) {
@@ -384,6 +391,7 @@ async function runQcAttempts({
         textArtifactQc: null,
         visualFactualQc: null,
         editorialVarietyQc: null,
+        productionIntegrityQc: null,
         failure: null,
         failureStatus: null,
       };
@@ -486,6 +494,13 @@ async function runQcAttempts({
       })
       : null;
 
+    const productionIntegrity = productionIntegrityQc
+      ? await productionIntegrityQc.evaluate(asset, {
+        segment,
+        productionScript,
+      })
+      : null;
+
     const phonemeViseme = phonemeVisemeQc && applicability.phonemeViseme.applicable
       ? dialogue?.transcription
         ? await phonemeVisemeQc.evaluate(asset, {
@@ -517,6 +532,7 @@ async function runQcAttempts({
       ['textArtifact', textArtifact, textArtifactQc],
       ['visualFactual', visualFactual, visualFactualQc],
       ['editorialVariety', editorialVariety, editorialVarietyQc],
+      ['productionIntegrity', productionIntegrity, productionIntegrityQc],
     ];
     const passed = checks
       .map(([, result]) => result)
@@ -551,6 +567,7 @@ async function runQcAttempts({
       ...prefixIssues(textArtifact?.issues, 'text-artifact'),
       ...prefixIssues(visualFactual?.issues, 'visual-factual'),
       ...prefixIssues(editorialVariety?.issues, 'editorial-variety'),
+      ...prefixIssues(productionIntegrity?.issues, 'production-integrity'),
     ];
     const regenerationGuidance = [
       realism && !realism.passed ? realism.regenerationGuidance : '',
@@ -563,6 +580,7 @@ async function runQcAttempts({
       textArtifact && !textArtifact.passed ? textArtifact.regenerationGuidance : '',
       visualFactual && !visualFactual.passed ? visualFactual.regenerationGuidance : '',
       editorialVariety && !editorialVariety.passed ? editorialVariety.regenerationGuidance : '',
+      productionIntegrity && !productionIntegrity.passed ? productionIntegrity.regenerationGuidance : '',
     ].filter(Boolean).join(' ');
 
     const historyEntry = {
@@ -580,6 +598,7 @@ async function runQcAttempts({
       textArtifact,
       visualFactual,
       editorialVariety,
+      productionIntegrity,
       issues,
       regenerationGuidance,
       applicability,
@@ -603,6 +622,7 @@ async function runQcAttempts({
           textArtifactQc: textArtifact,
           visualFactualQc: visualFactual,
           editorialVarietyQc: editorialVariety,
+          productionIntegrityQc: productionIntegrity,
           qcApplicability: applicability,
         },
         qcHistory,
@@ -615,6 +635,7 @@ async function runQcAttempts({
         textArtifactQc: textArtifact,
         visualFactualQc: visualFactual,
         editorialVarietyQc: editorialVariety,
+        productionIntegrityQc: productionIntegrity,
         qcApplicability: applicability,
         failure: null,
         failureStatus: null,
@@ -641,6 +662,8 @@ async function runQcAttempts({
         ? 'VISUAL_FACT_QC_FAILED'
       : editorialVariety && !editorialVariety.passed
         ? 'EDITORIAL_VARIETY_QC_FAILED'
+      : productionIntegrity && !productionIntegrity.passed
+        ? 'PRODUCTION_INTEGRITY_QC_FAILED'
       : poseMotion && !poseMotion.passed
         ? 'POSE_MOTION_QC_FAILED'
       : speakerTurn && !speakerTurn.passed
@@ -665,6 +688,7 @@ async function runQcAttempts({
       textArtifactQc: textArtifact,
       visualFactualQc: visualFactual,
       editorialVarietyQc: editorialVariety,
+      productionIntegrityQc: productionIntegrity,
       qcApplicability: applicability,
       failure: `Audiovisual act ${segment.index} failed QC after ${attempt + 1} attempt(s)`,
       failureStatus,
@@ -683,6 +707,7 @@ async function runQcAttempts({
     textArtifactQc: null,
     visualFactualQc: null,
     editorialVarietyQc: null,
+    productionIntegrityQc: null,
     failure: 'audiovisual generation failed',
     failureStatus: 'AUDIOVISUAL_QC_FAILED',
   };
