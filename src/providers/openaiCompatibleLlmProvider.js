@@ -198,6 +198,7 @@ export class OpenAICompatibleLlmProvider {
     durationSeconds,
     creativeBrief = null,
     researchPacket = null,
+    preflightFeedback = '',
   }) {
     const prompt = [
       'Write a complete production screenplay for a photorealistic vertical short-form video.',
@@ -211,6 +212,9 @@ export class OpenAICompatibleLlmProvider {
         : '',
       researchPacket?.evidence?.length
         ? 'Use the research packet only for supported factual context. Never invent missing statistics, quotes, dates, or claims.'
+        : '',
+      preflightFeedback
+        ? `PREVIOUS SCREENPLAY PREFLIGHT FAILED. Correct every issue before returning JSON: ${preflightFeedback}`
         : '',
       '',
       'The result will be sent to a specialized audiovisual video model that generates picture, spoken dialogue, ambience and sound effects together.',
@@ -229,6 +233,14 @@ export class OpenAICompatibleLlmProvider {
       '  }],',
       '  "visualStyle": {"description":"string","cameraRules":"string","lightingRules":"string"},',
       '  "audioDirection": {"mix":"string","musicPolicy":"string"},',
+      '  "directorialContract": {',
+      '    "primaryVisibleRole":"role explicitly required by the premise, or empty",',
+      '    "requiredVisibleCharacterIds":["character-id"],',
+      '    "requiredInteraction":"specific visible interpersonal action required by the premise, or empty",',
+      '    "interactionMustBeginBySeconds":6,',
+      '    "allowMontage":false,',
+      '    "brandPolicy":{"mode":"unbranded","allowedBrands":[]}',
+      '  },',
       '  "segments": [{',
       '    "durationSeconds": 8, "purpose":"hook|explain|payoff|cta",',
       '    "speakerCharacterId":"presenter", "characterIds":["presenter"],',
@@ -276,6 +288,14 @@ export class OpenAICompatibleLlmProvider {
       '- Keep the combined spoken duration of all dialogueTurns comfortably inside the segment duration; leave room for natural pauses.',
       '- Prefer multi-speaker dialogue only when it improves the creative: debate, interviewer/expert, customer/expert, skeptic/explainer, friend/friend, or reaction format.',
       '- For dialogue acts, blocking must make the active speaker visually unambiguous while listeners react silently.',
+      '- Any on-screen speaker must keep a clearly readable face and unobstructed mouth during their spoken turn. Do not put visible spoken dialogue into macro-detail, object-only POV, top-down/overhead, back-of-head, face-obscured, or mouth-covered framing; use off-screen narration instead when that framing is creatively necessary.',
+      '- For multi-speaker acts, the current speaker should be compositionally emphasized while every listener keeps a closed/resting mouth except for natural silent reactions.',
+
+      '- If the premise explicitly names a human role (coach, doctor, teacher, waiter, trainer, parent, etc.), that role is binding: create a visible character for it and do not replace that person with an anonymous narrator or generic protagonist.',
+      '- If the premise is fundamentally interpersonal (for example a coach motivating a team, doctor consulting a patient, waiter serving a customer, or trainer coaching an athlete), requiredInteraction must describe that visible interaction and it must begin within the first 20% of the video or first 8 seconds, whichever is earlier.',
+      '- For interpersonal premises, the first act must visibly establish the primary role and the people they are interacting with. Do not spend the opening on solitary preparation B-roll instead.',
+      '- Default brandPolicy.mode to "unbranded". Unless the topic explicitly requires a named brand, wardrobe, shoes, balls, equipment, signs and environments must contain no recognizable logos, trademarks, sponsor marks, team marks, signature stripes/swooshes, or branded trade dress.',
+      '- Only put a brand in allowedBrands when the user/topic explicitly requires that brand. Never invent a brand for visual realism.',
       '- Character descriptions must be stable enough for visual continuity: apparent age, face, hair, body type and wardrobe.',
       '- Locations must include fixed physical anchors and exact lighting.',
       '- Camera/action descriptions must be physically plausible and filmable.',
@@ -283,6 +303,8 @@ export class OpenAICompatibleLlmProvider {
       '- endState must be a plausible consequence of the action, never a different composition/world invented only for visual variety.',
       '- Keep hands, held objects and body balance explicit in startState/endState when they are important to the action.',
       '- Default each segment to ONE continuous shot: allowInternalCuts=false, allowDissolves=false, shotCount=1.',
+      '- A single-shot act must remain one camera take from first to last frame. Do not simulate a montage by morphing, dissolving, double-exposing, or teleporting between compositions inside the act.',
+
       '- Only enable internal cuts when a montage is narratively necessary; never use unexplained dissolves, crossfades, ghosting or double exposure.',
       '- For videos longer than 25 seconds, prefer 2-3 related locations or clearly different zones/angles when this improves visual variety without breaking continuity.',
       '- Ambience and sound effects must match what is visible.',
@@ -303,6 +325,61 @@ export class OpenAICompatibleLlmProvider {
       source: 'openai-compatible',
       model: this.model,
     };
+  }
+
+  async reviewProductionPlan({
+    topic,
+    audience,
+    creativeBrief = null,
+    productionScript,
+  }) {
+    const prompt = [
+      'Review this production plan BEFORE any expensive video generation.',
+      'This is a plan-level preventive review, not a review of generated pixels or audio.',
+      `Topic: ${topic}`,
+      `Audience: ${audience}`,
+      creativeBrief ? `Binding creative brief: ${JSON.stringify(creativeBrief)}` : '',
+      '',
+      'Production script:',
+      JSON.stringify(productionScript),
+      '',
+      'Mirror the downstream QC categories and block only defects that already exist in the plan itself.',
+      'Check:',
+      '- realism/temporal realism: physically filmable action, coherent start/end state, no impossible camera/body combination, no hidden montage when forbidden;',
+      '- identity/location continuity: recurring people, wardrobe, location anchors and lighting are specific and internally consistent;',
+      '- keyframe/motion plan: risky actions have clear start/end states and motion constraints;',
+      '- dialogue/lip-sync/phoneme prerequisites: dialogue fits duration; on-screen speakers can visibly expose a face/mouth; no impossible speaking shot;',
+      '- speaker turns: ownership is explicit, ordered and visually blockable;',
+      '- pose/motion: complex physical interaction is broken into executable beats rather than impossible simultaneous actions;',
+      '- text artifact prevention: the video model is never asked to render labels/signage/text;',
+      '- visual factual consistency: narration, action, labels, start state and end state do not contradict one another;',
+      '- editorial variety: consecutive acts have materially different framing contracts from their opening frame onward;',
+      '- production integrity: named roles and required interactions remain present; brand policy is respected;',
+      '- subtitle/audio/publishability prerequisites: spoken copy is concise, no authoring meta-language, and the audio plan is non-empty.',
+      '',
+      'Do NOT claim that a future model will definitely flicker, hallucinate a logo, miss lip sync, have bad loudness, or otherwise fail in pixels/audio. Those are post-generation measurements.',
+      'A blocker must be a concrete defect in the supplied plan that can be corrected before generation.',
+      'Warnings are for risks that are not plan defects.',
+      '',
+      'Return JSON only:',
+      '{',
+      '  "scores": {',
+      '    "realismPlan": 0, "continuityPlan": 0, "speechPlan": 0,',
+      '    "motionPlan": 0, "factualPlan": 0, "editorialPlan": 0,',
+      '    "productionIntegrityPlan": 0, "publishabilityPlan": 0',
+      '  },',
+      '  "blockers": [{"code":"string","message":"specific correctable plan defect"}],',
+      '  "warnings": [{"code":"string","message":"specific non-blocking risk"}],',
+      '  "summary":"one sentence"',
+      '}',
+    ].filter(Boolean).join('\n');
+
+    return this.generateJson({
+      system: 'You are a strict pre-generation film production supervisor. Review only the supplied plan and return JSON.',
+      prompt,
+      temperature: 0.1,
+      model: this.judgeModel,
+    });
   }
 
   async generateStoryBible({ script }) {

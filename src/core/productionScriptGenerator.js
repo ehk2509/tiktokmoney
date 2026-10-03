@@ -14,8 +14,12 @@ const FALLBACK_VOICES = ['Bernard', 'Maya', 'Arjun', 'Serene', 'Eleanor', 'Vince
 const SHOT_TYPES = ['wide-establishing', 'close-up', 'medium', 'macro-detail', 'tracking', 'overhead', 'pov'];
 
 export class ProductionScriptGenerator {
-  constructor({ llm }) {
+  constructor({
+    llm,
+    preflightMaxRetries = Number(process.env.PRODUCTION_SCRIPT_PREFLIGHT_MAX_RETRIES || 1),
+  }) {
     this.llm = llm;
+    this.preflightMaxRetries = Math.max(0, Math.min(3, Number(preflightMaxRetries) || 0));
   }
 
   async generate({
@@ -24,18 +28,43 @@ export class ProductionScriptGenerator {
     durationSeconds,
     creativeBrief = null,
     researchPacket = null,
+    preflightFeedback: initialPreflightFeedback = '',
   }) {
-    const raw = this.llm?.generateProductionScript
-      ? await this.llm.generateProductionScript({
+    let preflightFeedback = String(initialPreflightFeedback || '').trim();
+
+    for (let attempt = 0; attempt <= this.preflightMaxRetries; attempt += 1) {
+      const raw = this.llm?.generateProductionScript
+        ? await this.llm.generateProductionScript({
+          topic,
+          audience,
+          durationSeconds,
+          creativeBrief,
+          researchPacket,
+          preflightFeedback,
+        })
+        : fallbackProductionScript({ topic, audience, durationSeconds, creativeBrief });
+
+      const script = normalizeProductionScript(raw, {
         topic,
         audience,
         durationSeconds,
         creativeBrief,
-        researchPacket,
-      })
-      : fallbackProductionScript({ topic, audience, durationSeconds, creativeBrief });
+      });
+      const preflight = validateProductionScriptPreflight(script, {
+        topic,
+        creativeBrief,
+        durationSeconds,
+      });
+      script.preflight = {
+        ...preflight,
+        attempt: attempt + 1,
+      };
+      if (preflight.passed) return script;
 
-    return normalizeProductionScript(raw, { topic, audience, durationSeconds });
+      preflightFeedback = preflight.violations.join(' ');
+    }
+
+    throw new Error(`Production script failed preflight: ${preflightFeedback}`);
   }
 }
 
@@ -162,10 +191,179 @@ function normalizeProductionScript(value, context) {
       mix: clean(value.audioDirection?.mix || 'Dialogue clear in front; ambience and effects natural and restrained.', 400),
       musicPolicy: clean(value.audioDirection?.musicPolicy || 'Music must never mask dialogue.', 300),
     },
+    directorialContract: normalizeDirectorialContract(value.directorialContract, {
+      topic: context.topic,
+      creativeBrief: context.creativeBrief,
+      durationSeconds: Number(context.durationSeconds) || round(cursor),
+      characters,
+    }),
     segments,
     fullDialogue: segments.map((segment) => segment.dialogue).filter(Boolean).join(' '),
     source: clean(value.source || 'llm', 80),
     model: clean(value.model || '', 120),
+  };
+}
+
+const ROLE_HINTS = [
+  'coach', 'trainer', 'teacher', 'doctor', 'nurse', 'waiter', 'waitress',
+  'barista', 'chef', 'manager', 'interviewer', 'parent', 'mother', 'father',
+  'customer', 'patient', 'player', 'athlete', 'mechanic', 'pilot', 'firefighter',
+];
+
+const INTERPERSONAL_PATTERN = /\b(motivat(?:e|es|ing)|coach(?:es|ing)?|teach(?:es|ing)?|consult(?:s|ing)?|interview(?:s|ing)?|serve(?:s|ing)?|help(?:s|ing)?|hand(?:s|ing)?|give(?:s|ing)?|argu(?:e|es|ing)|hug(?:s|ging)?|shake hands|high[- ]five|team huddle|addresses? (?:his|her|the) team)\b/i;
+
+function normalizeDirectorialContract(value, {
+  topic,
+  creativeBrief,
+  durationSeconds,
+  characters,
+}) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const premise = [
+    topic,
+    creativeBrief?.angle,
+    creativeBrief?.hook,
+    creativeBrief?.format,
+    creativeBrief?.visualOpportunity,
+    creativeBrief?.productionNotes,
+  ].filter(Boolean).join(' ');
+
+  const roleHints = ROLE_HINTS.filter((role) => new RegExp(`\\b${role}\\b`, 'i').test(premise));
+  const rawIds = Array.isArray(raw.requiredVisibleCharacterIds)
+    ? raw.requiredVisibleCharacterIds.map(safeId)
+    : [];
+  const roleIds = roleHints.flatMap((role) => {
+    const character = characters.find((item) => (
+      item.onScreen !== false
+      && new RegExp(`\\b${role}\\b`, 'i').test([
+        item.name,
+        item.description,
+        item.physicalTraits,
+        item.wardrobe,
+      ].filter(Boolean).join(' '))
+    ));
+    return character ? [character.id] : [];
+  });
+  const requiredVisibleCharacterIds = unique([...rawIds, ...roleIds])
+    .filter((id) => characters.some((character) => character.id === id))
+    .slice(0, 4);
+
+  const defaultDeadline = Math.min(8, Math.max(1, Number(durationSeconds) * 0.2));
+  const requiresInteraction = INTERPERSONAL_PATTERN.test(premise);
+
+  return {
+    primaryVisibleRole: clean(raw.primaryVisibleRole || roleHints[0] || '', 80),
+    expectedRoleHints: roleHints,
+    requiredVisibleCharacterIds,
+    requiredInteraction: clean(
+      raw.requiredInteraction || (requiresInteraction ? premise : ''),
+      500,
+    ),
+    interactionMustBeginBySeconds: round(clamp(
+      Number(raw.interactionMustBeginBySeconds) || defaultDeadline,
+      0,
+      Math.max(1, Number(durationSeconds) || defaultDeadline),
+    )),
+    allowMontage: Boolean(raw.allowMontage),
+    brandPolicy: {
+      mode: raw.brandPolicy?.mode === 'allow-list' ? 'allow-list' : 'unbranded',
+      allowedBrands: Array.isArray(raw.brandPolicy?.allowedBrands)
+        ? raw.brandPolicy.allowedBrands.map((item) => clean(item, 80)).filter(Boolean).slice(0, 8)
+        : [],
+    },
+  };
+}
+
+export function validateProductionScriptPreflight(script, {
+  topic = '',
+  creativeBrief = null,
+  durationSeconds = null,
+} = {}) {
+  const violations = [];
+  const contract = script?.directorialContract || {};
+  const characters = Array.isArray(script?.characters) ? script.characters : [];
+  const segments = Array.isArray(script?.segments) ? script.segments : [];
+  const duration = Number(durationSeconds) || Number(script?.generatedDurationSeconds) || 0;
+  const premise = [
+    topic,
+    creativeBrief?.angle,
+    creativeBrief?.hook,
+    creativeBrief?.format,
+    creativeBrief?.visualOpportunity,
+    creativeBrief?.productionNotes,
+  ].filter(Boolean).join(' ');
+
+  for (const role of contract.expectedRoleHints || []) {
+    const found = characters.some((character) => (
+      character.onScreen !== false
+      && new RegExp(`\\b${role}\\b`, 'i').test([
+        character.name,
+        character.description,
+        character.physicalTraits,
+        character.wardrobe,
+      ].filter(Boolean).join(' '))
+    ));
+    if (!found) {
+      violations.push(`The premise explicitly requires a visible ${role}, but no on-screen character is defined as that role.`);
+    }
+  }
+
+  for (const id of contract.requiredVisibleCharacterIds || []) {
+    const character = characters.find((item) => item.id === id);
+    if (!character || character.onScreen === false) {
+      violations.push(`Required visible character "${id}" is missing or off-screen.`);
+    }
+  }
+
+  const deadline = Number(contract.interactionMustBeginBySeconds)
+    || Math.min(8, Math.max(1, duration * 0.2));
+  const earlySegments = segments.filter((segment) => Number(segment.start) < deadline + 0.001);
+
+  if ((contract.requiredVisibleCharacterIds || []).length) {
+    const roleEstablished = earlySegments.some((segment) => (
+      (segment.characterIds || []).some((id) => contract.requiredVisibleCharacterIds.includes(id))
+    ));
+    if (!roleEstablished) {
+      violations.push(`Required primary role is not visibly established before ${round(deadline)}s.`);
+    }
+  }
+
+  if (contract.requiredInteraction) {
+    const interpersonalEarly = earlySegments.some((segment) => (
+      (segment.characterIds || []).length >= 2
+      || INTERPERSONAL_PATTERN.test([segment.action, segment.purpose, segment.dialogue].filter(Boolean).join(' '))
+    ));
+    if (!interpersonalEarly) {
+      violations.push(`Required human interaction does not begin before ${round(deadline)}s; do not open with solitary preparation B-roll.`);
+    }
+  }
+
+  if (!contract.allowMontage) {
+    const montageActs = segments.filter((segment) => (
+      segment.editing?.allowInternalCuts
+      || segment.editing?.allowDissolves
+      || Number(segment.editing?.shotCount) > 1
+    ));
+    if (montageActs.length) {
+      violations.push(`Internal montage/editing is not allowed, but act(s) ${montageActs.map((segment) => segment.index).join(', ')} request multiple shots or dissolves.`);
+    }
+  }
+
+  if (contract.brandPolicy?.mode === 'unbranded') {
+    const brandedWardrobe = characters.filter((character) => /\b(nike|adidas|puma|reebok|under armour|jordan|new balance|converse)\b/i.test(character.wardrobe || ''));
+    if (brandedWardrobe.length) {
+      violations.push(`Unbranded production policy conflicts with branded wardrobe for: ${brandedWardrobe.map((character) => character.id).join(', ')}.`);
+    }
+  }
+
+  if (!premise.trim()) {
+    violations.push('Production premise is empty.');
+  }
+
+  return {
+    passed: violations.length === 0,
+    violations,
+    checkedAt: 'pre-generation',
   };
 }
 

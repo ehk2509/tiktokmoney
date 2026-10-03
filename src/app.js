@@ -25,6 +25,7 @@ import {
   createTextArtifactQcProvider,
   createVisualFactualQcProvider,
   createEditorialVarietyQcProvider,
+  createProductionIntegrityQcProvider,
   createTrendIntelligence,
 } from './providers/providerFactory.js';
 
@@ -96,6 +97,9 @@ export function createApp(overrides = {}) {
     const editorialVarietyQc = Object.prototype.hasOwnProperty.call(overrides, 'editorialVarietyQc')
       ? overrides.editorialVarietyQc
       : createEditorialVarietyQcProvider();
+    const productionIntegrityQc = Object.prototype.hasOwnProperty.call(overrides, 'productionIntegrityQc')
+      ? overrides.productionIntegrityQc
+      : createProductionIntegrityQcProvider();
     capabilities.poseMotion = {
       enabled: Boolean(poseMotionQc),
       extractorAvailable: Boolean(poseMotionQc?.extractor?.available),
@@ -119,12 +123,15 @@ export function createApp(overrides = {}) {
       textArtifactQc,
       visualFactualQc,
       editorialVarietyQc,
+      productionIntegrityQc,
       subtitleConfig: overrides.subtitleConfig,
       creativeTournament: overrides.creativeTournament,
       trendIntelligence,
       keyframeDirector: overrides.keyframeDirector,
       motionRegionDirector: overrides.motionRegionDirector,
       motionGuideDirector: overrides.motionGuideDirector,
+      preGenerationQualityGate: overrides.preGenerationQualityGate,
+      preGenerationMaxRewrites: overrides.preGenerationMaxRewrites,
     });
   } else {
     const voice = overrides.voice || createVoiceProvider();

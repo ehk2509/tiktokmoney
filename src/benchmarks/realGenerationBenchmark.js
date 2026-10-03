@@ -340,6 +340,11 @@ export function extractFullStackMetrics(project) {
     finalSuccess,
     publishabilityPassed,
     retryCount,
+    preGenerationPassed: project?.preGenerationQc?.passed ?? null,
+    preGenerationAttempts: Number(project?.planning?.preGenerationAttempts) || null,
+    preGenerationRewrites: Number(project?.planning?.preGenerationAttempts) > 0
+      ? Math.max(0, Number(project.planning.preGenerationAttempts) - 1)
+      : null,
     sceneCount: scenes.length,
     dialogueWer: average(scenes.map((scene) => (
       scene.dialogueVerification && (
@@ -364,6 +369,11 @@ export function extractFullStackMetrics(project) {
     ))),
     editorialVarietyScore: average(scenes.map((scene) => (
       scene.editorialVarietyQc?.score
+    ))),
+    productionIntegrityScore: average(scenes.flatMap((scene) => (
+      scene.productionIntegrityQc?.scores
+        ? Object.values(scene.productionIntegrityQc.scores)
+        : []
     ))),
   };
 }
@@ -705,6 +715,7 @@ function detectUntrackedCostComponents(pipeline) {
   if (pipeline?.textArtifactQc) components.push('text-artifact-qc');
   if (pipeline?.visualFactualQc) components.push('visual-factual-qc');
   if (pipeline?.editorialVarietyQc) components.push('editorial-variety-qc');
+  if (pipeline?.productionIntegrityQc) components.push('production-integrity-qc');
   if (pipeline?.visual) components.push('visual-reference-provider');
   return [...new Set(components)];
 }

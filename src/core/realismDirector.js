@@ -50,6 +50,7 @@ export class RealismDirector {
         profile,
         profileConfig,
         maxShotsPerAct: this.maxShotsPerAct,
+        allowMontage: script.directorialContract?.allowMontage !== false,
       })
     ));
 
@@ -90,6 +91,7 @@ export function directSegment(segment, {
   profile = 'organic-documentary',
   profileConfig = captureProfile(profile),
   maxShotsPerAct = 3,
+  allowMontage = true,
 } = {}) {
   const action = String(segment.action || '');
   const camera = String(segment.camera || '');
@@ -134,8 +136,12 @@ export function directSegment(segment, {
     editing: {
       ...segment.editing,
       allowDissolves: false,
-      allowInternalCuts: highRisk ? recommendedShots > 1 : Boolean(segment.editing?.allowInternalCuts),
-      shotCount: highRisk ? recommendedShots : Math.max(1, Number(segment.editing?.shotCount) || 1),
+      allowInternalCuts: allowMontage
+        ? (highRisk ? recommendedShots > 1 : Boolean(segment.editing?.allowInternalCuts))
+        : false,
+      shotCount: allowMontage
+        ? (highRisk ? recommendedShots : Math.max(1, Number(segment.editing?.shotCount) || 1))
+        : 1,
     },
     realismDirection: {
       profile,

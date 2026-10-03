@@ -362,7 +362,39 @@ EDITORIAL_VARIETY_QC_THRESHOLD=80
 EDITORIAL_VARIETY_QC_MAX_REGENERATIONS=2
 VISUAL_FACT_QC_ENABLED=true
 VISUAL_FACT_QC_THRESHOLD=82
+PRODUCTION_SCRIPT_PREFLIGHT_MAX_RETRIES=1
+PRE_GENERATION_QC_MAX_REWRITES=1
+PRE_GENERATION_SEMANTIC_QC_ENABLED=true
+PRODUCTION_INTEGRITY_QC_ENABLED=true
 ```
+
+### Pre-generation QC mirror
+
+TikTokMoney now mirrors the downstream audiovisual QC stack **before Story Bible reference generation, TTS, or WAN video generation**. The goal is to spend video credits only on plans that are already capable of passing the post-generation gates.
+
+The preventive pass checks the available planning-time equivalents of:
+
+```text
+realism + temporal realism
+identity / location continuity
+keyframe readiness
+motion-region + motion-guide readiness
+dialogue duration / speaker ownership
+lip-sync / phoneme / visible-mouth prerequisites
+multi-speaker turn blocking
+pose-motion reference readiness
+generated-text prevention
+visual factual plan consistency
+editorial shot variety
+role / interaction / brand integrity
+estimated subtitle layout
+audio-plan safety
+publishability / meta-language
+```
+
+Deterministic checks run after the realism, keyframe, motion-region, and motion-guide directors. When the configured LLM supports it, one additional **text-only semantic plan review** checks cross-field contradictions and directorial intent. A failed plan is rewritten at the screenplay level before any video call. If it remains invalid after the configured rewrite budget, the project stops as `PRE_GENERATION_QC_FAILED` with zero WAN generations.
+
+Some qualities cannot literally be measured before media exists—actual flicker/morphing, generated-speech WER, real lip/phoneme timing, hallucinated logo pixels, produced pose trajectory, final frame similarity, or measured LUFS/true peak. Their **prerequisites and prompt contracts are mirrored pre-generation**, while the original post-generation checks remain as verification that the model obeyed the valid plan.
 
 ### Editorial variety, semantic labels, and captions
 
