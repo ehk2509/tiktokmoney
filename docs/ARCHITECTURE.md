@@ -321,6 +321,32 @@ The renderer measures the joined soundtrack with FFmpeg EBU R128 analysis. Effec
 For off-screen narration, the generated audiovisual bed is considered untrusted by default and is discarded before composition. Exact TTS is padded to the visual act length and becomes the authoritative audio stream. This is intentionally stricter than merely lowering the generated bed because duplicate synthetic speech can remain audible even at low gain.
 
 
+### Pre-generation quality mirror
+
+The pipeline treats expensive video regeneration as the last resort. After screenplay normalization and all planning directors, but before reference-image preparation, TTS, or WAN, `PreGenerationQualityGate` mirrors every downstream quality family for which a planning-time signal exists.
+
+```text
+creative brief
+  -> screenplay normalization / structural preflight
+  -> realism director
+  -> keyframe director
+  -> motion-region director
+  -> motion-guide director
+  -> deterministic full QC mirror
+  -> optional one-call text-only semantic plan review
+       -> pass
+           -> Story Bible references / TTS / WAN
+       -> fail
+           -> cheap screenplay rewrite
+           -> re-run all directors + preflight
+```
+
+The deterministic mirror validates physical-camera/human-motion contracts, temporal/editing constraints, visible-character and location continuity metadata, keyframe states, motion controls, dialogue budgets, speaker ownership, visible-mouth prerequisites, speaker-turn blocking, motion-reference rights/readiness, text-free generation directions, shot variety, directorial role/interaction/brand contracts, estimated subtitle layout, audio planning, and publishability/meta-language.
+
+The semantic plan review is deliberately text-only. It can block contradictions already present in narration/action/labels or an execution plan that violates the creative brief, but it may not predict that future pixels will flicker, contain a logo, or have bad lip sync. If the semantic reviewer itself fails, that stage degrades to a warning and deterministic prevention remains active.
+
+The post-generation gates are retained because several measurements are inherently unavailable beforehand: actual pixel realism and temporal stability, generated speech WER, audiovisual/phoneme timing, generated pose trajectory, hallucinated text/logo pixels, factual accuracy of the produced imagery, realized cross-act framing, and measured loudness/true peak.
+
 ### Editorial-variety and transition gate
 
 A planned shot change must be visible **from the opening frames**, not merely by the middle of the act.
