@@ -288,6 +288,9 @@ export class OpenAICompatibleLlmProvider {
       '- Keep the combined spoken duration of all dialogueTurns comfortably inside the segment duration; leave room for natural pauses.',
       '- Prefer multi-speaker dialogue only when it improves the creative: debate, interviewer/expert, customer/expert, skeptic/explainer, friend/friend, or reaction format.',
       '- For dialogue acts, blocking must make the active speaker visually unambiguous while listeners react silently.',
+      '- Any on-screen speaker must keep a clearly readable face and unobstructed mouth during their spoken turn. Do not put visible spoken dialogue into macro-detail, object-only POV, top-down/overhead, back-of-head, face-obscured, or mouth-covered framing; use off-screen narration instead when that framing is creatively necessary.',
+      '- For multi-speaker acts, the current speaker should be compositionally emphasized while every listener keeps a closed/resting mouth except for natural silent reactions.',
+
       '- If the premise explicitly names a human role (coach, doctor, teacher, waiter, trainer, parent, etc.), that role is binding: create a visible character for it and do not replace that person with an anonymous narrator or generic protagonist.',
       '- If the premise is fundamentally interpersonal (for example a coach motivating a team, doctor consulting a patient, waiter serving a customer, or trainer coaching an athlete), requiredInteraction must describe that visible interaction and it must begin within the first 20% of the video or first 8 seconds, whichever is earlier.',
       '- For interpersonal premises, the first act must visibly establish the primary role and the people they are interacting with. Do not spend the opening on solitary preparation B-roll instead.',
