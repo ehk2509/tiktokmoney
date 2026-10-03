@@ -2441,6 +2441,65 @@ test('subtitle builder wraps by estimated pixel width and remains in two-line sa
   }).passed, true);
 });
 
+test('voiceover mix discards generated act audio by default to prevent echo and repeated sounds', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-clean-voiceover-'));
+  const commands = [];
+  try {
+    const composer = new DialogueAudioComposer({
+      assetDir: dir,
+      runCommand: async (_command, args) => { commands.push(args); },
+    });
+
+    await composer.mixVoiceover({
+      videoPath: '/fake/generated.mp4',
+      voicePath: '/fake/exact-tts.mp3',
+      projectId: 'clean',
+      segmentIndex: 1,
+      generationId: 'take',
+    });
+
+    assert.equal(commands.length, 1);
+    const args = commands[0];
+    assert.equal(args.includes('-filter_complex'), false);
+    const maps = args
+      .map((value, index) => value === '-map' ? args[index + 1] : null)
+      .filter(Boolean);
+    assert.deepEqual(maps, ['0:v:0', '1:a:0']);
+    assert.ok(args.includes('apad'));
+    assert.ok(args.includes('-shortest'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('generated ambience under voiceover is an explicit opt-in', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-voiceover-bed-'));
+  const commands = [];
+  try {
+    const composer = new DialogueAudioComposer({
+      assetDir: dir,
+      voiceoverGeneratedAmbienceGain: 0.12,
+      runCommand: async (_command, args) => { commands.push(args); },
+    });
+
+    await composer.mixVoiceover({
+      videoPath: '/fake/generated.mp4',
+      voicePath: '/fake/exact-tts.mp3',
+      projectId: 'bed',
+      segmentIndex: 1,
+      generationId: 'take',
+    });
+
+    assert.equal(commands.length, 1);
+    const filterIndex = commands[0].indexOf('-filter_complex');
+    assert.ok(filterIndex >= 0);
+    assert.match(commands[0][filterIndex + 1], /volume=0\.12/);
+    assert.match(commands[0][filterIndex + 1], /amix=inputs=2/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('audio inspector can skip the true-peak ceiling for pre-normalization input', async () => {
   const inspector = new AudioQualityInspector({
     runCapture: async () => `
