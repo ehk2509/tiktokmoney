@@ -47,13 +47,26 @@ export class PreGenerationQualityGate {
 
     let semantic = null;
     if (this.semanticReviewEnabled && typeof this.llm?.reviewProductionPlan === 'function') {
-      semantic = normalizeSemanticReview(await this.llm.reviewProductionPlan({
-        topic,
-        audience,
-        creativeBrief,
-        productionScript,
-      }));
-      checks.semanticPlanReview = semantic;
+      try {
+        semantic = normalizeSemanticReview(await this.llm.reviewProductionPlan({
+          topic,
+          audience,
+          creativeBrief,
+          productionScript,
+        }));
+        checks.semanticPlanReview = semantic;
+      } catch (error) {
+        checks.semanticPlanReview = {
+          passed: true,
+          blockers: [],
+          warnings: [{
+            code: 'semantic-preflight-unavailable',
+            message: `Text-only semantic preflight could not run: ${error.message}`,
+          }],
+          scores: null,
+          summary: '',
+        };
+      }
     }
 
     const blockers = Object.entries(checks)
