@@ -166,7 +166,7 @@ test('pre-generation mirror covers every current post-generation quality stage',
 test('deterministic pre-generation mirror catches known retry causes before video exists', () => {
   const script = validPlan();
   script.characters[0].wardrobe = 'Nike basketball shirt';
-  script.segments[0].dialogue = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen.';
+  script.segments[0].dialogue = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one.';
   script.segments[0].dialogueTurns[0].text = script.segments[0].dialogue;
   script.fullDialogue = script.segments[0].dialogue;
   script.segments[0].action = 'Presenter points at written signage with a Nike logo.';
