@@ -109,6 +109,14 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const failedProductionIntegrity = scenes.filter((scene) => scene.productionIntegrityQc?.passed === false);
+  if (failedProductionIntegrity.length) {
+    blockers.push({
+      code: 'production-integrity',
+      message: `Generated acts violated role, interaction, single-shot, or brand contracts for scene(s): ${failedProductionIntegrity.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   if (subtitles?.enabled && subtitles.layout?.passed === false) {
     blockers.push({
       code: 'subtitle-layout',
@@ -136,7 +144,9 @@ export function evaluateAudiovisualPublishability({
   }
 
   const qcWarningScenes = scenes.filter((scene) => (
-    scene.visualFactualQc?.warnings?.length || scene.editorialVarietyQc?.warnings?.length
+    scene.visualFactualQc?.warnings?.length
+    || scene.editorialVarietyQc?.warnings?.length
+    || scene.productionIntegrityQc?.warnings?.length
   ));
   if (qcWarningScenes.length) {
     warnings.push({
