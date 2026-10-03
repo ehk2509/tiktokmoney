@@ -115,7 +115,9 @@ export class OpenRouterEditorialVarietyQcProvider {
     const payload = await readJsonResponse(response);
     const parsed = parseJsonObject(payload?.choices?.[0]?.message?.content);
     const scores = {
-      transitionDistinctness: clampScore(parsed?.scores?.transitionDistinctness),
+      transitionDistinctness: clampScore(
+        parsed?.scores?.transitionDistinctness ?? parsed?.scores?.compositionDifference,
+      ),
       shotTypeAdherence: clampScore(parsed?.scores?.shotTypeAdherence),
       compositionDifference: clampScore(parsed?.scores?.compositionDifference),
       scaleOrAngleDifference: clampScore(parsed?.scores?.scaleOrAngleDifference),
@@ -213,10 +215,11 @@ function skippedResult(reason, model, threshold) {
     threshold,
     scores: null,
     issues: [],
+    warnings: [],
     summary: '',
     regenerationGuidance: '',
     reason,
-    sampledFrames: { previous: [], current: [] },
+    sampledFrames: { previous: [], currentOpening: [], current: [] },
     rawUsage: null,
   };
 }
