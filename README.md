@@ -133,6 +133,7 @@ export RUNWAYML_API_SECRET=...
 export AUDIOVISUAL_VIDEO_MODEL=wan3
 export AUDIOVISUAL_DIALOGUE_MODE=locked
 export AUDIOVISUAL_TTS_MODEL=eleven_v3
+export VOICEOVER_GENERATED_AMBIENCE_GAIN=0
 
 # Optional/current realism-first scene-composer backends
 export LUMA_AGENTS_API_KEY=...
@@ -291,20 +292,26 @@ topic
        -> music direction
   -> canonical character/location references when available
   -> per-act exact voice generation
-  -> WAN 3 native-audio video generation
+  -> WAN 3 audiovisual video generation
        -> video
-       -> synchronized dialogue
-       -> ambience
-       -> effects
+       -> visible-speaker dialogue when applicable
+       -> generated ambience/effects when trusted
+  -> off-screen voiceover path
+       -> exact Runway TTS is authoritative
+       -> WAN-generated act audio muted by default
   -> static + temporal realism QC
+  -> visual factual + generated-text QC
+  -> transition-aware editorial-variety QC
   -> targeted audiovisual regeneration
-  -> subtitles
-  -> audio-preserving final composition
+  -> semantic captions + deterministic editor labels
+  -> loudness-normalized final composition
 ```
 
 ### Dialogue modes
 
-`AUDIOVISUAL_DIALOGUE_MODE=locked` is the production default. Each 4–15 second act first creates the exact dialogue using Runway text-to-speech, then passes that audio into WAN 3 through `referenceAudio`. The video prompt explicitly requires the visible performance to preserve those words verbatim.
+`AUDIOVISUAL_DIALOGUE_MODE=locked` is the production default. For visible speakers, each 4–15 second act first creates the exact dialogue using Runway text-to-speech, then passes that audio into WAN 3 through `referenceAudio`. The video prompt explicitly requires the visible performance to preserve those words verbatim.
+
+For **off-screen narration**, TikTokMoney does not ask WAN to re-speak the line. It generates the exact TTS track, generates the visual act without reference speech, then lays the TTS over the accepted video. WAN's generated soundtrack is muted by default in this path because generated beds can contain faint duplicate speech, echo-like vocal artifacts, or looping effects. Set `VOICEOVER_GENERATED_AMBIENCE_GAIN` above zero only when you intentionally want to retain that generated bed.
 
 `AUDIOVISUAL_DIALOGUE_MODE=native` skips the separate TTS request and asks WAN 3 to generate synchronized speech directly from the screenplay. It is cheaper/simpler but less strict about exact wording.
 
@@ -325,9 +332,16 @@ Audiovisual mode now applies a final publishability layer before a video is cons
 - subtitles are laid out by estimated rendered pixel width, not character count alone
 - captions are limited to two lines inside an 840px safe width and moved higher above TikTok UI
 - audiovisual acts default to one continuous shot; unexplained cuts, dissolves, crossfades and ghosting are explicitly forbidden
-- WAN receives the previous accepted act as a video reference to improve cross-act identity/location continuity
+- the previous accepted act is sent as a video reference only for true continuation shots; deliberate framing changes do not inherit the prior clip as a continuation reference
+- close-up/macro prompts omit full-room composition cues that would pull the generator back to a wide shot
+- editorial-variety QC compares the previous act tail with the first 0.15 / 0.75 / 1.5 seconds of the next act, so delayed reframing cannot pass merely because later frames are different
+- after repeated editorial-variety failures, WAN generation can escalate to a forced opening keyframe in the planned framing
 - realism QC compares frames from the previous accepted act and enforces recurring identity/location continuity floors
-- joined native audio is inspected for silence / unusable level before final render
+- generated-text QC rejects pseudo-text from the video model; intended labels are drawn deterministically after generation
+- label normalization preserves nearby semantic polarity such as `LOSS OF ATTACHED FLOW` or `NOT ENGINE FAILURE`
+- visual factual QC blocks only high-confidence visible contradictions; a low diagnostic score without a contradiction is a warning
+- off-screen voiceover uses exact TTS as the authoritative soundtrack and discards WAN-generated act audio by default
+- joined audio is inspected for silence / unusable level before final render
 - final audio is normalized to -14 LUFS with a -1 dBTP ceiling
 - the normalized output is inspected again before the render is marked successful
 
@@ -342,7 +356,39 @@ SUBTITLES_MAX_LINES=2
 PUBLISHABILITY_AUDIO_REQUIRED=true
 AUDIO_TARGET_LUFS=-14
 AUDIO_TRUE_PEAK_DBTP=-1
+VOICEOVER_GENERATED_AMBIENCE_GAIN=0
+EDITORIAL_VARIETY_QC_ENABLED=true
+EDITORIAL_VARIETY_QC_THRESHOLD=80
+EDITORIAL_VARIETY_QC_MAX_REGENERATIONS=2
+VISUAL_FACT_QC_ENABLED=true
+VISUAL_FACT_QC_THRESHOLD=82
 ```
+
+### Editorial variety, semantic labels, and captions
+
+Consecutive acts are expected to be visually distinct when their screenplay `shotType` changes. Shot types such as `wide-establishing`, `close-up`, `macro-detail`, `tracking`, `overhead`, and `pov` expand into concrete framing contracts rather than acting as loose tags.
+
+Editorial-variety QC performs two checks in the same review:
+
+```text
+previous accepted act
+  -> tail samples near the cut
+        versus
+current act
+  -> opening samples at ~0.15 / 0.75 / 1.5 s
+  -> distributed whole-act samples
+```
+
+A clip that copies the old framing for the first seconds and only changes angle later can therefore fail with `transition-framing-reuse`. Numeric variety scores remain diagnostic; regeneration is issue-driven so a merely conservative score does not waste video credits.
+
+Deterministic labels are restricted to phrases supported by the spoken narration. The normalizer also preserves nearby negation or loss context so shortening a phrase cannot reverse its meaning. Examples:
+
+```text
+"loss of attached flow" -> LOSS OF ATTACHED FLOW
+"not engine failure"    -> NOT ENGINE FAILURE
+```
+
+Subtitle grouping uses verified word timings when available and treats the word-count limit as soft when one or two additional words are needed to finish a connector or short dependent clause, while still respecting safe-area width, line count, timing-gap, and character limits.
 
 
 ## Dialogue fidelity + lip-sync QC
