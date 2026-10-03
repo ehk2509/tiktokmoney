@@ -289,10 +289,18 @@ function groupWords(words, options) {
     const previous = current.at(-1);
     const gap = previous ? word.start - previous.end : 0;
 
+    const wordLimitReached = current.length >= options.maxWordsPerCue;
+    const canCompleteWeakPhrase = wordLimitReached
+      && current.length < options.maxWordsPerCue + 2
+      && weakCueEnding(previous?.word)
+      && text.length <= options.maxCharsPerCue
+      && gap <= options.maxGapSeconds
+      && fitsLayout(next, options);
+
     if (
       current.length
       && (
-        current.length >= options.maxWordsPerCue
+        (wordLimitReached && !canCompleteWeakPhrase)
         || text.length > options.maxCharsPerCue
         || gap > options.maxGapSeconds
         || sentenceBoundary(previous?.word)
@@ -392,6 +400,16 @@ function sentenceBoundary(word = '') {
 
 function clauseBoundary(word = '') {
   return /[,;:]["')\]]?$/.test(word);
+}
+
+const WEAK_CUE_ENDINGS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'of', 'on',
+  'or', 'than', 'that', 'the', 'to', 'under', 'over', 'when', 'while', 'with',
+]);
+
+function weakCueEnding(word = '') {
+  const token = normalizeToken(word);
+  return WEAK_CUE_ENDINGS.has(token);
 }
 
 /**
