@@ -60,6 +60,11 @@
 - [x] Stable per-character Runway voice assignment
 - [x] Timed composed dialogue master
 - [x] Speaker attribution / turn-taking QC
+- [x] Off-screen exact-TTS post-mix with model-generated audio muted by default
+- [x] Generated-text / pseudo-label artifact QC
+- [x] Visual factual-consistency QC with contradiction-driven blocking
+- [x] Semantic subtitle phrase completion from verified word timings
+- [x] Deterministic label context preservation for negation / loss semantics
 
 ## M1.9 - Anti-plastic realism
 
@@ -79,6 +84,11 @@
 - [ ] Native provider spatial-mask transport when an API exposes it
 - [x] Risk-adaptive first-only vs first+last keyframe policy
 - [x] Keyframe adherence QC and targeted regeneration
+- [x] Concrete framing contracts for wide / close / macro / tracking / overhead / POV shots
+- [x] Editorial-variety QC across consecutive acts
+- [x] Transition-tail vs opening-frame comparison for delayed reframing
+- [x] Conditional previous-act video references only for true continuation shots
+- [x] Forced opening-keyframe escalation after repeated framing failures
 - [x] Real-motion reference-video guidance for body mechanics/timing
 - [x] Motion-reference selection + rights gate
 - [x] Combined reference-video duration budgeting
