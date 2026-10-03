@@ -87,7 +87,27 @@ The manifest records:
 
 Billing values are never guessed. The harness records observed provider spend separately from complete spend. A USD total is authoritative only when every observed audiovisual-provider task reports USD billing and there are no configured paid full-stack components outside benchmark instrumentation. Partial billing stays visible as observed spend, but `totalProviderSpendUsd` and cost-per-publishable remain `null`.
 
-Full-stack runs can also use paid LLM, transcription, realism, lip-sync or speaker-turn services. Until those components expose benchmark billing telemetry, the manifest lists them as untracked cost components and does not claim a complete full-stack cost.
+Full-stack runs can also use paid LLM, transcription, realism, lip-sync, speaker-turn, generated-text, visual-factual, editorial-variety, or visual-reference services. Until those components expose benchmark billing telemetry, the manifest lists them as untracked cost components and does not claim a complete full-stack cost.
+
+## Full-stack internal metrics
+
+For the TikTokMoney arm, the harness records operational and QC diagnostics in addition to the final artifact:
+
+- `firstPassSuccess`
+- `finalSuccess`
+- `publishabilityPassed`
+- `retryCount`
+- `sceneCount`
+- `dialogueWer`
+- `lipSyncScore`
+- `poseFidelity`
+- `realismScore`
+- `visualFactualConsistencyScore`
+- `editorialVarietyScore`
+
+The last two are intentionally diagnostics rather than standalone claims of correctness or watchability. Visual-factual QC is contradiction-driven, so a low numeric score without a blocking contradiction can still be an accepted act. Editorial-variety QC is likewise issue-driven and separately inspects the previous-act tail against the first ~1.5 seconds of the next act to catch delayed reframing.
+
+These metrics are useful for diagnosing regressions and retry behavior, but they do not replace blinded human evaluation.
 
 ## Final-render requirement
 
@@ -142,7 +162,7 @@ Do not use the internal TikTokMoney QC score as the final claim. The strongest e
 
 1. externally blinded human publishability and quality ratings;
 2. deterministic operational metrics such as failures, retries and latency;
-3. independent dialogue, lip-sync and pose measurements when configured;
+3. independent dialogue, lip-sync, pose, visual-factual and editorial-variety measurements when configured;
 4. provider-reported spend.
 
 Compare releases only when the suite hash is identical. If the suite changes, report it as a new benchmark generation rather than continuing the old series.
