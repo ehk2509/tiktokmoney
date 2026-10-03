@@ -238,6 +238,7 @@ export class OpenAICompatibleLlmProvider {
       '    "requiredVisibleCharacterIds":["character-id"],',
       '    "requiredInteraction":"specific visible interpersonal action required by the premise, or empty",',
       '    "interactionMustBeginBySeconds":6,',
+      '    "allowMontage":false,',
       '    "brandPolicy":{"mode":"unbranded","allowedBrands":[]}',
       '  },',
       '  "segments": [{',
