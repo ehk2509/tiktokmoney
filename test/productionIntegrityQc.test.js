@@ -12,6 +12,7 @@ import {
 } from '../src/providers/openRouterProductionIntegrityQcProvider.js';
 import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
 import { evaluateAudiovisualPublishability } from '../src/core/publishabilityGate.js';
+import { RealismDirector } from '../src/core/realismDirector.js';
 
 function jsonResponse(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => payload };
@@ -193,6 +194,33 @@ test('WAN prompt receives the binding human-interaction, single-shot, and unbran
   assert.match(prompt, /not a montage/i);
   assert.match(prompt, /everything visible must be generic and unbranded/i);
   assert.match(prompt, /signature swooshes/i);
+});
+
+test('realism direction cannot re-enable montage after preflight forbids it', () => {
+  const directed = new RealismDirector().direct({
+    directorialContract: { allowMontage: false },
+    visualStyle: {
+      description: 'Photorealistic sports documentary.',
+      cameraRules: 'Natural handheld camera.',
+      lightingRules: 'Practical locker-room light.',
+    },
+    segments: [{
+      index: 0,
+      durationSeconds: 8,
+      speakerMode: 'single-speaker',
+      dialogueTurns: [{ speakerCharacterId: 'coach', text: 'We win together.' }],
+      characterIds: ['coach', 'captain'],
+      action: 'The coach grabs a basketball, walks through the team, and players rise around him.',
+      camera: '360 orbit with rapid zoom.',
+      ambience: 'Locker room.',
+      editing: { allowInternalCuts: false, allowDissolves: false, shotCount: 1 },
+    }],
+  });
+
+  assert.equal(directed.segments[0].editing.allowInternalCuts, false);
+  assert.equal(directed.segments[0].editing.allowDissolves, false);
+  assert.equal(directed.segments[0].editing.shotCount, 1);
+  assert.ok(directed.segments[0].realismDirection.recommendedShots > 1);
 });
 
 test('production-integrity QC blocks logo leakage and ghost/montage transitions', async () => {
