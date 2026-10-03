@@ -138,7 +138,7 @@ export class DialogueAudioComposer {
       `voiceover-${safe(projectId)}-${segmentIndex}-${safe(generationId)}.mp4`,
     );
     const output = ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', outputPath];
-    const generatedAmbienceGain = Number.isFinite(Number(ambienceGain))
+    const generatedAmbienceGain = ambienceGain != null && Number.isFinite(Number(ambienceGain))
       ? clamp(Number(ambienceGain), 0, 1, this.voiceoverGeneratedAmbienceGain)
       : this.voiceoverGeneratedAmbienceGain;
 
