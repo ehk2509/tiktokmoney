@@ -386,7 +386,10 @@ function normalizeLabels(labels, { dialogue, duration }) {
   const spoken = ` ${tokenKey(dialogue)} `;
   return labels
     .map((label) => ({
-      text: improveLabelText(clean(label?.text || '', 24), dialogue),
+      text: preserveLabelContext(
+        improveLabelText(clean(label?.text || '', 24), dialogue),
+        dialogue,
+      ),
       atSeconds: round(clamp(Number(label?.atSeconds) || 0, 0, Math.max(0, duration - 1))),
       durationSeconds: round(clamp(Number(label?.durationSeconds) || 2.5, 1, 4)),
     }))
@@ -420,6 +423,50 @@ function improveLabelText(text, dialogue) {
 
   const improved = clean(candidate, 24);
   return improved || text;
+}
+
+const LABEL_CONTEXT_PREFIXES = [
+  ['loss', 'of'],
+  ['lack', 'of'],
+  ['absence', 'of'],
+  ['failure', 'of'],
+  ['drop', 'in'],
+  ['reduction', 'in'],
+  ['without'],
+  ['not'],
+  ['no'],
+  ['never'],
+  ['reduced'],
+  ['decreased'],
+  ['decreasing'],
+  ['increased'],
+  ['increasing'],
+];
+
+function preserveLabelContext(text, dialogue) {
+  const labelKeys = tokenKey(text).split(' ').filter(Boolean);
+  if (!labelKeys.length) return text;
+
+  const rawWords = String(dialogue || '').match(/[\p{L}\p{N}]+/gu) || [];
+  const keys = rawWords.map((word) => tokenKey(word));
+
+  for (let start = 0; start <= keys.length - labelKeys.length; start += 1) {
+    if (!labelKeys.every((key, offset) => keys[start + offset] === key)) continue;
+
+    for (const prefix of LABEL_CONTEXT_PREFIXES) {
+      const prefixStart = start - prefix.length;
+      if (prefixStart < 0) continue;
+      const matches = prefix.every((key, offset) => keys[prefixStart + offset] === key);
+      if (!matches) continue;
+
+      const candidate = rawWords
+        .slice(prefixStart, start + labelKeys.length)
+        .join(' ');
+      if (candidate.length <= 24) return candidate;
+    }
+  }
+
+  return text;
 }
 
 function tokenKey(value) {
