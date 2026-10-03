@@ -186,11 +186,13 @@ function checkTemporal(segments, script) {
     if (segment.editing?.allowDissolves) {
       warnings.push(issue('dissolve-risk', `Act ${segment.index} plans a dissolve/crossfade, which raises ghost-transition risk.`));
     }
-    if (Number(segment.realismDirection?.riskScore) >= 32 && !String(segment.startState || '').trim()) {
-      blockers.push(issue('start-state-missing', `Risky act ${segment.index} has no explicit opening physical state.`));
+    const plannedStartState = segment.startState || segment.keyframeDirection?.firstFrame?.state;
+    const plannedEndState = segment.endState || segment.keyframeDirection?.lastFrame?.state;
+    if (Number(segment.realismDirection?.riskScore) >= 32 && !String(plannedStartState || '').trim()) {
+      blockers.push(issue('start-state-missing', `Risky act ${segment.index} has no opening physical state or inferred first-keyframe state.`));
     }
-    if (Number(segment.realismDirection?.riskScore) >= 50 && !String(segment.endState || '').trim()) {
-      blockers.push(issue('end-state-missing', `High-risk act ${segment.index} has no explicit reachable ending state.`));
+    if (Number(segment.realismDirection?.riskScore) >= 50 && !String(plannedEndState || '').trim()) {
+      blockers.push(issue('end-state-missing', `High-risk act ${segment.index} has no reachable ending state or inferred last-keyframe state.`));
     }
   }
   return result(blockers, warnings);
@@ -213,12 +215,12 @@ function checkContinuity(segments, characters, locations, characterById, locatio
   }
 
   for (const character of characters) {
-    if ((recurring.get(character.id) || 0) > 1) {
+    if (character.onScreen !== false && (recurring.get(character.id) || 0) > 1) {
       if (!String(character.physicalTraits || '').trim()) {
-        blockers.push(issue('recurring-character-traits-missing', `Recurring character ${character.id} needs stable physicalTraits.`));
+        blockers.push(issue('recurring-character-traits-missing', `Recurring visible character ${character.id} needs stable physicalTraits.`));
       }
       if (!String(character.wardrobe || '').trim()) {
-        blockers.push(issue('recurring-character-wardrobe-missing', `Recurring character ${character.id} needs exact wardrobe continuity.`));
+        blockers.push(issue('recurring-character-wardrobe-missing', `Recurring visible character ${character.id} needs exact wardrobe continuity.`));
       }
     }
   }
@@ -313,11 +315,14 @@ function checkDialogue(segments, characterById) {
       }
     }
     const wordCount = wordCountOf(segment.dialogue);
-    const budget = Math.floor(Math.max(1, Number(segment.durationSeconds) || 1) * 2);
-    if (wordCount > budget) {
-      blockers.push(issue('dialogue-duration-budget', `Act ${segment.index} has ${wordCount} words for a ${segment.durationSeconds}s act; pre-generation limit is ${budget}.`));
-    } else if (wordCount > budget * 0.9) {
-      warnings.push(issue('dialogue-duration-tight', `Act ${segment.index} uses more than 90% of its speech budget.`));
+    const plannedBudget = Math.floor(Math.max(1, Number(segment.durationSeconds) || 1) * 2);
+    const hardBudget = 30; // locked WAN acts can stretch to at most 15s at ~2 words/sec
+    if (wordCount > hardBudget) {
+      blockers.push(issue('dialogue-duration-budget', `Act ${segment.index} has ${wordCount} words; even a 15s stretched act exceeds the 30-word pre-generation ceiling.`));
+    } else if (wordCount > plannedBudget) {
+      warnings.push(issue('dialogue-duration-stretch', `Act ${segment.index} has ${wordCount} words for the planned ${segment.durationSeconds}s; exact TTS may stretch the act before video generation.`));
+    } else if (wordCount > plannedBudget * 0.9) {
+      warnings.push(issue('dialogue-duration-tight', `Act ${segment.index} uses more than 90% of its planned speech budget.`));
     }
   }
   return result(blockers, warnings);
