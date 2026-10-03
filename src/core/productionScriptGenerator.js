@@ -374,18 +374,52 @@ export function stripTextDirections(value) {
   return sentences.filter((sentence) => !TEXT_DIRECTION.test(sentence)).join('').trim();
 }
 
+const WEAK_SINGLE_LABELS = new Set([
+  'angle', 'change', 'changes', 'effect', 'effects', 'part', 'parts', 'point',
+  'points', 'process', 'result', 'results', 'step', 'steps', 'system', 'thing',
+  'things', 'way', 'ways',
+]);
+const LABEL_STOPWORDS = new Set(['a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'with']);
+
 function normalizeLabels(labels, { dialogue, duration }) {
   if (!Array.isArray(labels)) return [];
   const spoken = ` ${tokenKey(dialogue)} `;
   return labels
     .map((label) => ({
-      text: clean(label?.text || '', 24),
+      text: improveLabelText(clean(label?.text || '', 24), dialogue),
       atSeconds: round(clamp(Number(label?.atSeconds) || 0, 0, Math.max(0, duration - 1))),
       durationSeconds: round(clamp(Number(label?.durationSeconds) || 2.5, 1, 4)),
     }))
     // A label may only name something the narration says, so it cannot introduce new claims.
     .filter((label) => label.text && spoken.includes(` ${tokenKey(label.text)} `))
     .slice(0, 2);
+}
+
+function improveLabelText(text, dialogue) {
+  const key = tokenKey(text);
+  const parts = key.split(' ').filter(Boolean);
+  if (parts.length !== 1 || !WEAK_SINGLE_LABELS.has(parts[0])) return text;
+
+  const rawWords = String(dialogue || '').match(/[\p{L}\p{N}]+/gu) || [];
+  const keys = rawWords.map((word) => tokenKey(word));
+  const index = keys.indexOf(parts[0]);
+  if (index < 0) return text;
+
+  const next = keys[index + 1];
+  const next2 = keys[index + 2];
+  const previous = keys[index - 1];
+
+  let candidate = '';
+  if (next === 'of' && next2 && !LABEL_STOPWORDS.has(next2)) {
+    candidate = [rawWords[index], rawWords[index + 1], rawWords[index + 2]].join(' ');
+  } else if (next && !LABEL_STOPWORDS.has(next)) {
+    candidate = [rawWords[index], rawWords[index + 1]].join(' ');
+  } else if (previous && !LABEL_STOPWORDS.has(previous)) {
+    candidate = [rawWords[index - 1], rawWords[index]].join(' ');
+  }
+
+  const improved = clean(candidate, 24);
+  return improved || text;
 }
 
 function tokenKey(value) {
