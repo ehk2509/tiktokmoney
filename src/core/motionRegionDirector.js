@@ -72,6 +72,9 @@ export function directMotionRegions(segment, {
     || /pick|grab|hold|pour|drink|open|close|phone|cup|glass|bottle|dumbbell|tool/i.test(action);
   const actionHeavy = Boolean(direction.actionHeavy)
     || /run|jump|squat|lift|deadlift|boxing|dance|sprint|throw|kick/i.test(action);
+  // Everyday whole-body movement must not be locked to breathing micro-motion.
+  const bodyMovement = !actionHeavy
+    && /\b(walk|stride|step|stand(?:s|ing)? up|rises?|gets? up|turns?|pivots?|paces?|huddles?|gathers?|circles?|approach(?:es)?|moves? (?:to|toward|towards|across|into|forward|closer)|lean(?:s|ing)?|kneel|crouch|sit(?:s)? down|stack|hands? in)/i.test(action);
   const multiSpeaker = segment.speakerMode === 'multi-speaker'
     || new Set((segment.dialogueTurns || []).map((turn) => turn.speakerCharacterId)).size > 1;
   const hasSpeech = Boolean(
@@ -99,6 +102,13 @@ export function directMotionRegions(segment, {
       region: 'hips, torso, legs, arms and feet required by the planned athletic/body action',
       behavior: 'move as one biomechanical chain with gravity, inertia, foot contact and balance recovery',
       intensity: 'high',
+    });
+  } else if (bodyMovement) {
+    allowedMotion.push({
+      id: 'body-movement',
+      region: 'legs, feet, hips, torso and arms required by the planned movement',
+      behavior: 'natural walking, standing, turning or gathering with grounded foot contact and steady balance',
+      intensity: 'medium',
     });
   } else {
     allowedMotion.push({
@@ -139,7 +149,7 @@ export function directMotionRegions(segment, {
     });
   }
 
-  if (!actionHeavy) {
+  if (!actionHeavy && !bodyMovement) {
     lockedRegions.push({
       id: 'body-shape',
       region: complexInteraction

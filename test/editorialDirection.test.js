@@ -208,3 +208,18 @@ test('close shots describe the setting as out of frame instead of the full locat
   assert.doesNotMatch(prompts.first, /glass test chamber|wing stand/);
   assert.match(prompts.first, /upper wing surface fills the frame/);
 });
+
+test('everyday body movement is not locked to breathing micro-motion', async () => {
+  const { directMotionRegions } = await import('../src/core/motionRegionDirector.js');
+  const plan = (action) => {
+    const result = directMotionRegions({ action, dialogue: 'Together.' });
+    return result.motionRegionDirection || result;
+  };
+
+  const walking = plan('The coach walks between the benches and turns to face the team.');
+  assert.ok(walking.allowedMotion.some((item) => item.id === 'body-movement'));
+  assert.ok(!walking.lockedRegions.some((item) => item.id === 'body-shape'));
+
+  const standing = plan('The coach speaks calmly with his hands on his hips.');
+  assert.ok(standing.lockedRegions.some((item) => item.id === 'body-shape'));
+});
