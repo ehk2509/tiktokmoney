@@ -200,10 +200,13 @@ Runway uses `POST /v1/image_to_video` with the 2024-11-06 API version and downlo
 Subtitles are a post-QC presentation layer:
 
 ```text
-narration
-  -> ElevenLabs word timing when available
+narration / verified transcript
+  -> exact word timing when available
   -> otherwise estimate word timing from retimed scenes
-  -> group into short readable phrases
+  -> restore script punctuation onto verified words
+  -> group into semantic short phrases
+       -> avoid weak connector endings
+       -> finish short dependent clauses when layout permits
   -> create one highlight event per spoken word
   -> ASS timeline
   -> final FFmpeg burn-in
@@ -231,14 +234,20 @@ Topic
       -> 4-15s acts
   -> reference bible
   -> RunwayAudiovisualProvider
-      -> optional exact TTS per act
-      -> WAN 3 with native audio
-      -> audio reference + visual references
-  -> existing realism + temporal QC
+      -> exact TTS for locked dialogue
+      -> WAN 3 audiovisual generation
+      -> reference audio for visible speakers
+      -> TTS-only post-mix for off-screen narration
+      -> conditional previous-act video reference
+      -> optional forced opening keyframe after repeated framing failures
+  -> realism + temporal QC
+  -> generated-text + visual-factual QC
+  -> transition-aware editorial-variety QC
   -> AudiovisualRenderer
-      -> preserve model-generated audio
+      -> keep trusted native audio or authoritative TTS
       -> concatenate acts
-      -> burn subtitles
+      -> loudness normalize
+      -> burn subtitles + deterministic labels
 ```
 
 ### Why acts are capped at 15 seconds
@@ -267,7 +276,11 @@ Locked mode is the default because generated-video models can otherwise paraphra
 
 ### Rendering contract
 
-The audiovisual renderer never strips scene audio. Each generated act is normalized to 1080x1920 H.264 + AAC, acts are concatenated with audio intact, then subtitles are burned in during the final video pass while audio is stream-copied.
+Each accepted act is normalized to 1080x1920 H.264 + AAC, then acts are concatenated and the final soundtrack is loudness-normalized before publishability succeeds.
+
+For visible-speaker/native-audio acts, the accepted model soundtrack is retained. For **off-screen voiceover**, exact TTS is authoritative: TikTokMoney replaces the generated act audio by default instead of mixing both together. This prevents faint duplicate speech, echo-like vocal artifacts, or looping model-generated effects from surviving under narration. Generated ambience can be explicitly opted back in with `VOICEOVER_GENERATED_AMBIENCE_GAIN>0`.
+
+Subtitles and deterministic labels are burned in only after the underlying audiovisual acts pass QC.
 
 
 ## Publishability gate
@@ -287,17 +300,51 @@ production script
   -> RENDERED
 ```
 
-### Cross-act continuity
+### Cross-act continuity and shot-change isolation
 
-For every act after the first, WAN receives the previous accepted act as `referenceVideos`. QC also samples the previous act and compares recurring character face geometry, apparent age, hair, body proportions, wardrobe, location geometry, fixed objects and lighting. The default cross-act continuity floor is 85/100.
+The previous accepted act is **not** automatically sent as `referenceVideos` for every new act. A previous video reference makes WAN behave like it is continuing the same shot, which conflicts with deliberate framing changes.
 
-### Subtitle safety
+TikTokMoney now sends the previous act as a video reference only when the new act is a true continuation: same shot type, same location, and no hard-cut transition. When the screenplay asks for a different shot type, continuity instead comes from the Story Bible, canonical references, location/lighting contracts, and optional keyframes.
 
-Captions are greedily wrapped using an estimated font-width model. A cue may use at most two lines and each rendered line must remain within the configured pixel width. The renderer refuses to burn captions when the safe-area contract fails.
+QC still compares recurring character face geometry, apparent age, hair, body proportions, wardrobe, location geometry, fixed objects and lighting. The default cross-act continuity floor remains 85/100.
+
+### Subtitle and label safety
+
+Captions use verified word timings when available and are grouped into short semantic phrases before ASS rendering. The word-count limit is soft only when one or two extra words are needed to avoid stranding a connector or leaving a short dependent clause unfinished. Character count, timing gap, two-line layout, and rendered-width limits still remain hard bounds.
+
+Deterministic labels are also constrained by the spoken narration. Labels must be contiguous spoken phrases, and nearby polarity/context such as `loss of`, `without`, `not`, or `no` is preserved when dropping it would reverse the meaning. The renderer refuses subtitle layouts that violate the safe-area contract.
 
 ### Audio safety
 
-The renderer measures the joined native soundtrack with FFmpeg EBU R128 analysis. Effectively silent audio is rejected before final encode. Final audio is normalized to -14 LUFS, LRA 7 and -1 dBTP, then measured again before success is returned.
+The renderer measures the joined soundtrack with FFmpeg EBU R128 analysis. Effectively silent audio is rejected before final encode. Final audio is normalized to -14 LUFS, LRA 7 and -1 dBTP, then measured again before success is returned.
+
+For off-screen narration, the generated audiovisual bed is considered untrusted by default and is discarded before composition. Exact TTS is padded to the visual act length and becomes the authoritative audio stream. This is intentionally stricter than merely lowering the generated bed because duplicate synthetic speech can remain audible even at low gain.
+
+
+### Editorial-variety and transition gate
+
+A planned shot change must be visible **from the opening frames**, not merely by the middle of the act.
+
+For each act after the first, the editorial-variety provider samples:
+
+```text
+previous accepted act
+  -> tail: ~duration-1.0s, ~duration-0.2s
+
+current act
+  -> opening: ~0.15s, ~0.75s, ~1.5s
+  -> whole act: distributed checkpoints
+```
+
+The evaluator reports `transitionDistinctness`, `shotTypeAdherence`, `compositionDifference`, `scaleOrAngleDifference`, and `editorialNovelty`. A concrete high/critical issue such as `transition-framing-reuse` blocks the act; a low numeric score without a concrete defect remains a warning.
+
+Repeated editorial-variety failures have an independent retry budget. After two failed attempts, supported WAN generation can escalate to a generated opening keyframe in the required framing. The previous act may still be sampled as an identity/location reference for that still, but the keyframe prompt explicitly treats its camera framing as non-authoritative.
+
+### Visual factual and generated-text gates
+
+Generated footage is expected to remain text-free. Generated-text QC rejects pseudo-labels, captions, signage, or other model-rendered text artifacts before deterministic editor overlays are added.
+
+Visual factual QC uses the narration/action contract to find **high-confidence visible contradictions** such as incorrect anatomy, reversed flow/mechanism direction, or the wrong object/species/place. Its numeric score is diagnostic only: generic footage, a narration preview of a later event, or a low score without a blocking contradiction does not trigger regeneration.
 
 
 ## Dialogue fidelity and speech-timing QC
