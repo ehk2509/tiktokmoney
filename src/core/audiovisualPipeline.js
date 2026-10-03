@@ -10,6 +10,7 @@ import { MotionRegionDirector } from './motionRegionDirector.js';
 import { MotionGuideDirector } from './motionGuideDirector.js';
 import { MotionReferenceStore } from '../storage/motionReferenceStore.js';
 import { resolveQcApplicability } from './qcApplicability.js';
+import { PreGenerationQualityGate } from './preGenerationQualityGate.js';
 
 export class AudiovisualPipeline {
   constructor({
@@ -36,6 +37,8 @@ export class AudiovisualPipeline {
     keyframeDirector = null,
     motionRegionDirector = null,
     motionGuideDirector = null,
+    preGenerationQualityGate = null,
+    preGenerationMaxRewrites = Number(process.env.PRE_GENERATION_QC_MAX_REWRITES || 1),
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
     this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
@@ -62,6 +65,14 @@ export class AudiovisualPipeline {
     this.productionIntegrityQc = retryMalformedReplies(productionIntegrityQc);
     this.poseMotionQc = retryMalformedReplies(poseMotionQc);
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
+    this.preGenerationQualityGate = preGenerationQualityGate || new PreGenerationQualityGate({
+      llm,
+      subtitleConfig: this.subtitleConfig,
+    });
+    this.preGenerationMaxRewrites = Math.max(
+      0,
+      Math.min(3, Number(preGenerationMaxRewrites) || 0),
+    );
   }
 
   async generate({
@@ -126,19 +137,49 @@ export class AudiovisualPipeline {
       return project;
     }
 
-    const rawProductionScript = await this.productionScriptGenerator.generate({
-      topic: normalizedTopic,
-      audience,
-      durationSeconds,
-      creativeBrief: tournament.winner || null,
-      researchPacket,
-    });
-    const realismDirectedScript = this.realismDirector.direct(rawProductionScript);
-    const keyframeDirectedScript = this.keyframeDirector.direct(realismDirectedScript);
-    const motionRegionDirectedScript = this.motionRegionDirector.direct(keyframeDirectedScript);
-    const productionScript = await this.motionGuideDirector.direct(motionRegionDirectedScript);
+    let productionScript = null;
+    let preGenerationQc = null;
+    let preGenerationFeedback = '';
+
+    for (let planAttempt = 0; planAttempt <= this.preGenerationMaxRewrites; planAttempt += 1) {
+      const rawProductionScript = await this.productionScriptGenerator.generate({
+        topic: normalizedTopic,
+        audience,
+        durationSeconds,
+        creativeBrief: tournament.winner || null,
+        researchPacket,
+        preflightFeedback: preGenerationFeedback,
+      });
+      const realismDirectedScript = this.realismDirector.direct(rawProductionScript);
+      const keyframeDirectedScript = this.keyframeDirector.direct(realismDirectedScript);
+      const motionRegionDirectedScript = this.motionRegionDirector.direct(keyframeDirectedScript);
+      productionScript = await this.motionGuideDirector.direct(motionRegionDirectedScript);
+
+      preGenerationQc = await this.preGenerationQualityGate.evaluate(productionScript, {
+        topic: normalizedTopic,
+        audience,
+        creativeBrief: tournament.winner || null,
+      });
+      preGenerationQc.attempt = planAttempt + 1;
+
+      if (preGenerationQc.passed) break;
+      preGenerationFeedback = preGenerationQc.feedback;
+
+      if (planAttempt >= this.preGenerationMaxRewrites) {
+        project.productionScript = productionScript;
+        project.preGenerationQc = preGenerationQc;
+        project.planning.preGenerationAttempts = planAttempt + 1;
+        project.status = 'PRE_GENERATION_QC_FAILED';
+        project.error = `Production plan failed pre-generation QC before any video generation: ${preGenerationFeedback}`;
+        await this.store?.saveProject(project);
+        return project;
+      }
+    }
+
     let storyBible = productionScriptToStoryBible(productionScript);
     project.productionScript = productionScript;
+    project.preGenerationQc = preGenerationQc;
+    project.planning.preGenerationAttempts = preGenerationQc?.attempt || 1;
     project.realismDirection = productionScript.realismDirection || null;
     project.keyframeDirection = productionScript.keyframeDirection || null;
     project.motionRegionDirection = productionScript.motionRegionDirection || null;
