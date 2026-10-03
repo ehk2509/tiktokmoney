@@ -681,6 +681,7 @@ function buildAudiovisualPrompt({
     location ? `LOCATION: ${location.name}. ${location.description}. Lighting: ${location.lighting}. Fixed elements: ${location.fixedElements.join(', ')}.` : '',
     `ACTION: ${segment.action}.`,
     segment.shotType ? `SHOT TYPE: ${segment.shotType}.` : '',
+    segment.shotType ? shotTypeDirective(segment.shotType) : '',
     `CAMERA: ${segment.camera}.`,
     buildRealismPromptBlock(segment),
     buildMotionRegionPromptBlock(segment),
@@ -886,6 +887,19 @@ function uniqueTaggedReferences(items) {
     seen.add(item.uri);
     return true;
   });
+}
+
+function shotTypeDirective(shotType) {
+  const directives = {
+    'wide-establishing': 'FRAMING CONTRACT: show the complete primary subject/mechanism plus meaningful surrounding environment. Keep generous context around it; do not crop into a medium or close framing.',
+    'close-up': 'FRAMING CONTRACT: move materially closer than an establishing shot. The primary face, object, or mechanism should dominate the frame with much less environment visible.',
+    'medium': 'FRAMING CONTRACT: use a true medium composition between wide and close-up. Show the primary subject clearly while retaining some contextual environment.',
+    'macro-detail': 'FRAMING CONTRACT: use an extreme detail view of the exact mechanism/action being explained. Exclude most of the wider environment so this cannot resemble the establishing composition.',
+    'tracking': 'FRAMING CONTRACT: create a clearly moving tracking composition with noticeable parallax or lateral/forward camera travel while keeping the subject readable. Do not render a static tripod-like view.',
+    'overhead': 'FRAMING CONTRACT: use a clearly elevated top-down or steep high-angle view. The camera axis must be materially different from eye-level or side-on shots.',
+    'pov': 'FRAMING CONTRACT: use a first-person/subjective perspective from the participant or observer position. Do not render a conventional detached third-person composition.',
+  };
+  return directives[String(shotType || '').toLowerCase()] || '';
 }
 
 function firstOutputUrl(task) {
