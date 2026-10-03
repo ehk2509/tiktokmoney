@@ -101,6 +101,14 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const failedEditorialVariety = scenes.filter((scene) => scene.editorialVarietyQc?.passed === false);
+  if (failedEditorialVariety.length) {
+    blockers.push({
+      code: 'editorial-variety',
+      message: `Generated framing did not create the required visual change for scene(s): ${failedEditorialVariety.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   if (subtitles?.enabled && subtitles.layout?.passed === false) {
     blockers.push({
       code: 'subtitle-layout',
