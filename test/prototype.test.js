@@ -39,6 +39,7 @@ import {
 import {
   RunwayAudiovisualProvider,
   buildVideoReferencePlan,
+  shouldContinuePreviousShot,
 } from '../src/providers/runwayAudiovisualProvider.js';
 import { AudiovisualPipeline } from '../src/core/audiovisualPipeline.js';
 import { AudiovisualRenderer } from '../src/renderers/audiovisualRenderer.js';
@@ -2480,6 +2481,19 @@ test('audio quality parser rejects silence and unsafe true peak while accepting 
   assert.ok(hot.issues.some((issue) => issue.code === 'audio-true-peak'));
 });
 
+test('previous act is a reference video only for continuation shots', () => {
+  const previous = { index: 0, shotType: 'wide-establishing', locationId: 'tunnel', transition: 'none' };
+  assert.equal(shouldContinuePreviousShot(previous, { ...previous, index: 1 }), true);
+  assert.equal(shouldContinuePreviousShot(previous, { ...previous, index: 1, shotType: 'tracking' }), false);
+  assert.equal(shouldContinuePreviousShot(previous, { ...previous, index: 1, locationId: 'hangar' }), false);
+  assert.equal(shouldContinuePreviousShot(previous, { ...previous, index: 1, transition: 'hard cut' }), false);
+  assert.equal(shouldContinuePreviousShot({ ...previous, transition: 'Hard cut to the gauge' }, { ...previous, index: 1 }), false);
+  assert.equal(shouldContinuePreviousShot(null, previous), false);
+
+  const plan = buildVideoReferencePlan({ previousAsset: null });
+  assert.deepEqual(plan.references, []);
+});
+
 test('Runway audiovisual provider sends previous accepted act as WAN continuity video reference', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-av-continuity-'));
   const requests = [];
@@ -2514,7 +2528,11 @@ test('Runway audiovisual provider sends previous accepted act as WAN continuity 
       speakerCharacterId: 'alex',
       characterIds: ['alex'],
       locationId: 'gym',
+      shotType: 'tracking',
+      transition: 'continuous move',
+      startState: 'Low side angle beside Alex at the rack.',
       action: 'Alex walks naturally through the gym.',
+      endState: 'Alex reaches the far window.',
       camera: 'Medium tracking shot.',
       ambience: 'Gym ambience.',
       soundEffects: [],
@@ -2533,6 +2551,10 @@ test('Runway audiovisual provider sends previous accepted act as WAN continuity 
       }],
       visualStyle: { description: 'photorealistic', cameraRules: 'natural lens', lightingRules: 'stable daylight' },
       audioDirection: { mix: 'clear dialogue', musicPolicy: 'music low' },
+      segments: [
+        { index: 0, shotType: 'tracking', locationId: 'gym', transition: 'none' },
+        segment,
+      ],
     };
 
     await provider.generateSegment({
@@ -2553,6 +2575,9 @@ test('Runway audiovisual provider sends previous accepted act as WAN continuity 
     assert.match(videoRequest.body.promptText, /ONE continuous shot only/i);
     assert.match(videoRequest.body.promptText, /Dissolves and crossfades are forbidden/i);
     assert.match(videoRequest.body.promptText, /previous accepted act is supplied as a video reference/i);
+    assert.match(videoRequest.body.promptText, /do NOT copy its camera position, framing or composition/);
+    assert.match(videoRequest.body.promptText, /OPENING FRAME: Low side angle beside Alex at the rack\./);
+    assert.match(videoRequest.body.promptText, /ENDING FRAME: Alex reaches the far window\./);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

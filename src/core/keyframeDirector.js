@@ -88,6 +88,28 @@ export function selectKeyframePolicy({
   });
 }
 
+const CLOSE_SHOTS = new Set(['close-up', 'macro-detail']);
+
+/**
+ * A full room description pulls generators back to a wide view of the whole set.
+ * Close shots keep only the lighting and state that the setting is out of frame.
+ */
+export function describeLocationForShot(location, shotType) {
+  if (!location) return '';
+  if (CLOSE_SHOTS.has(shotType)) {
+    return [
+      `Setting (out of frame, implied only by background blur): ${location.name}.`,
+      location.lighting ? `Lighting: ${location.lighting}.` : '',
+      'Do not show the room, enclosure, walls, stand or full apparatus; only the described detail fills the frame.',
+    ].filter(Boolean).join(' ');
+  }
+  return [
+    `Location: ${location.name}. ${location.description}.`,
+    location.lighting ? `Lighting: ${location.lighting}.` : '',
+    location.fixedElements?.length ? `Fixed elements: ${location.fixedElements.join(', ')}.` : '',
+  ].filter(Boolean).join(' ');
+}
+
 export function buildKeyframePrompts({
   segment,
   productionScript,
@@ -114,15 +136,7 @@ export function buildKeyframePrompts({
       character.physicalTraits ? `Exact physical traits: ${character.physicalTraits}.` : '',
       character.wardrobe ? `Exact wardrobe: ${character.wardrobe}.` : '',
     ].filter(Boolean).join(' ')),
-    location
-      ? [
-        `Location: ${location.name}. ${location.description}.`,
-        location.lighting ? `Lighting: ${location.lighting}.` : '',
-        location.fixedElements?.length
-          ? `Fixed elements: ${location.fixedElements.join(', ')}.`
-          : '',
-      ].filter(Boolean).join(' ')
-      : '',
+    describeLocationForShot(location, segment.shotType),
   ].filter(Boolean).join(' ');
 
   const shared = [

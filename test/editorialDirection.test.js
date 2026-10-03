@@ -120,3 +120,34 @@ test('scene labels become timed title cards in the burned-in subtitle track', ()
   assert.match(ass, /^Style: Label,/m);
   assert.match(ass, /^Dialogue: 1,0:00:13\.00,0:00:15\.00,Label,.*GILLS$/m);
 });
+
+test('close shots describe the setting as out of frame instead of the full location', async () => {
+  const { describeLocationForShot, buildKeyframePrompts } = await import('../src/core/keyframeDirector.js');
+  const location = {
+    id: 'tunnel',
+    name: 'Wind tunnel lab',
+    description: 'A glass test chamber on a steel bench',
+    lighting: 'Cool overhead strips',
+    fixedElements: ['glass chamber', 'wing stand'],
+  };
+
+  const wide = describeLocationForShot(location, 'wide-establishing');
+  assert.match(wide, /glass test chamber/);
+  assert.match(wide, /Fixed elements: glass chamber, wing stand/);
+
+  const close = describeLocationForShot(location, 'close-up');
+  assert.doesNotMatch(close, /glass test chamber|Fixed elements/);
+  assert.match(close, /out of frame/);
+  assert.match(close, /Cool overhead strips/);
+
+  const prompts = buildKeyframePrompts({
+    segment: {
+      shotType: 'macro-detail',
+      locationId: 'tunnel',
+      keyframeDirection: { enabled: true, policy: 'first', firstFrame: { state: 'The upper wing surface fills the frame.' } },
+    },
+    productionScript: { characters: [], locations: [location] },
+  });
+  assert.doesNotMatch(prompts.first, /glass test chamber|wing stand/);
+  assert.match(prompts.first, /upper wing surface fills the frame/);
+});

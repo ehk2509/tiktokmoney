@@ -263,6 +263,7 @@ export class OpenAICompatibleLlmProvider {
       '- The video model must generate text-free footage. Never describe labels, captions, callouts, written words, diagram text, signage or numbers in startState, endState, action or camera.',
       '- To name something on screen use onScreenLabels instead: at most 2 per segment, at most 24 characters each, and every label must repeat words spoken in that segment. The editor draws them as clean title cards after generation.',
       '- Give consecutive segments different shotType values and a distinct visual purpose (for example hook reveal, close detail, process, payoff). Each startState must continue from the previous endState framing unless the transition calls for a deliberate contrasting cut.',
+      '- For close-up and macro-detail segments, startState, endState and camera must describe only what is inside the tight frame (for example \"the upper wing surface fills the frame\"). Never say the room, chamber, enclosure or whole apparatus fills or is visible in a close shot.',
       '- Spoken audio must fit inside its segment: across all dialogueTurns, use at most 2 words per second of durationSeconds (an 8 second segment allows at most 16 words), and count pauses toward the budget.',
       '- A segment may contain 1-3 speaking characters and at most 5 ordered dialogueTurns.',
       '- Set onScreen to false only for an unseen voiceover narrator who never appears in frame; every onScreen character must show a clearly visible face and mouth while speaking.',

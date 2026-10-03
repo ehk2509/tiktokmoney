@@ -10,7 +10,7 @@ export class OpenRouterEditorialVarietyQcProvider {
     threshold = Number(process.env.EDITORIAL_VARIETY_QC_THRESHOLD || 80),
     frames = Number(process.env.EDITORIAL_VARIETY_QC_FRAMES || 3),
     frameWidth = Number(process.env.EDITORIAL_VARIETY_QC_FRAME_WIDTH || 512),
-    maxRegenerations = Number(process.env.EDITORIAL_VARIETY_QC_MAX_REGENERATIONS || 1),
+    maxRegenerations = Number(process.env.EDITORIAL_VARIETY_QC_MAX_REGENERATIONS || 2),
     frameSampler = new FrameSampler(),
     fetchImpl = globalThis.fetch,
   } = {}) {

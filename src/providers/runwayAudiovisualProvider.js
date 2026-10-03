@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 import { FrameSampler } from '../services/frameSampler.js';
 import { buildRealismPromptBlock } from '../core/realismDirector.js';
-import { buildKeyframePrompts } from '../core/keyframeDirector.js';
+import { buildKeyframePrompts, describeLocationForShot } from '../core/keyframeDirector.js';
 import { buildMotionRegionPromptBlock } from '../core/motionRegionDirector.js';
 import { buildMotionGuidePromptBlock } from '../core/motionGuideDirector.js';
 import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
@@ -106,9 +106,15 @@ export class RunwayAudiovisualProvider {
       }
     }
 
+    // A reference video makes WAN continue that shot, which contradicts a planned
+    // change of framing. Only continuation shots get the previous act as video.
+    const continuePreviousShot = shouldContinuePreviousShot(
+      productionScript.segments?.find((item) => item.index === segment.index - 1),
+      segment,
+    );
     const videoReferencePlan = buildVideoReferencePlan({
       motionGuide,
-      previousAsset,
+      previousAsset: continuePreviousShot ? previousAsset : null,
       maxCombinedSeconds: 15,
     });
     const referenceVideos = videoReferencePlan.references;
@@ -229,11 +235,26 @@ export class RunwayAudiovisualProvider {
       dialogueTurns,
       dialogueTrack,
       regeneration,
-      previousAsset,
+      previousAsset: continuePreviousShot ? previousAsset : null,
     });
 
     let keyframes = null;
     let keyframeError = null;
+    // Escalation: after two takes rejected for repeated framing, stop relying on the
+    // prompt and animate from a generated opening frame in the planned framing.
+    const forceOpeningFrame = !segment.keyframeDirection?.enabled
+      && Number(regeneration?.retryUsage?.editorialVariety) >= 2
+      && supportsWanKeyframes(this.model);
+    if (forceOpeningFrame) {
+      keyframes = await this.generateForcedOpeningFrame({
+        segment,
+        productionScript,
+        storyBible,
+        previousAsset,
+        regeneration,
+        projectId,
+      });
+    }
     if (segment.keyframeDirection?.enabled && supportsWanKeyframes(this.model)) {
       try {
         keyframes = await this.generateKeyframes({
@@ -362,6 +383,7 @@ export class RunwayAudiovisualProvider {
       referenceImageUrl: keyframes?.first?.url || references[0]?.uri || null,
       referenceEndImageUrl: keyframes?.last?.url || null,
       previousGenerationId: previousAsset?.generationId || null,
+      previousActVideoReference: Boolean(continuePreviousShot && previousAsset?.sourceUrl),
     };
   }
 
@@ -476,6 +498,62 @@ export class RunwayAudiovisualProvider {
       imageModel: this.imageModel,
       first,
       last,
+    };
+  }
+
+  async generateForcedOpeningFrame({
+    segment,
+    productionScript,
+    storyBible = null,
+    previousAsset = null,
+    regeneration = null,
+    projectId = 'project',
+  }) {
+    const prompts = buildKeyframePrompts({
+      segment: {
+        ...segment,
+        keyframeDirection: {
+          enabled: true,
+          policy: 'first',
+          firstFrame: {
+            state: [shotTypeDirective(segment.shotType), segment.startState].filter(Boolean).join(' '),
+          },
+        },
+      },
+      productionScript,
+      storyBible,
+      previousAsset: null,
+      regeneration,
+    });
+
+    // A local still survives expired provider URLs; it carries identity and setting only.
+    const references = [];
+    if (previousAsset?.localPath) {
+      try {
+        const [frame] = await this.frameSampler.sampleAt(
+          previousAsset.localPath,
+          [Math.max(0, (Number(previousAsset.durationSeconds) || 5) - 0.5)],
+          { maxWidth: 1024, prefix: 'forced-keyframe' },
+        );
+        if (frame?.dataUrl) references.push({ uri: frame.dataUrl, tag: 'previousact' });
+      } catch {
+        // Generate from the text description alone.
+      }
+    }
+
+    const first = await this.generateKeyframeImage({
+      prompt: `${prompts.first} Use the previousact reference only for objects, identity, setting and lighting; the camera framing must follow the FRAMING CONTRACT, not the reference.`,
+      references,
+      projectId,
+      segmentIndex: segment.index,
+      position: 'first',
+    });
+    return {
+      policy: 'forced-first',
+      provider: 'runway',
+      imageModel: this.imageModel,
+      first,
+      last: null,
     };
   }
 
@@ -730,8 +808,10 @@ function buildAudiovisualPrompt({
     'Create a single continuous photorealistic vertical short-form video act with synchronized audiovisual output.',
     `ACT PURPOSE: ${segment.purpose}.`,
     castLines.length ? `CAST: ${castLines.join(' | ')}` : '',
-    location ? `LOCATION: ${location.name}. ${location.description}. Lighting: ${location.lighting}. Fixed elements: ${location.fixedElements.join(', ')}.` : '',
+    location ? `LOCATION: ${describeLocationForShot(location, segment.shotType)}` : '',
+    segment.startState ? `OPENING FRAME: ${segment.startState}` : '',
     `ACTION: ${segment.action}.`,
+    segment.endState ? `ENDING FRAME: ${segment.endState}` : '',
     segment.shotType ? `SHOT TYPE: ${segment.shotType}.` : '',
     segment.shotType ? shotTypeDirective(segment.shotType) : '',
     `CAMERA: ${segment.camera}.`,
@@ -779,7 +859,7 @@ function buildAudiovisualPrompt({
     segment.music ? `MUSIC: ${segment.music}. Keep it below dialogue.` : '',
     `GLOBAL VISUAL STYLE: ${productionScript.visualStyle.description}. ${productionScript.visualStyle.cameraRules}. ${productionScript.visualStyle.lightingRules}.`,
     `AUDIO MIX: ${productionScript.audioDirection.mix}. ${productionScript.audioDirection.musicPolicy}.`,
-    previousAsset ? 'The previous accepted act is supplied as a video reference. Match its recurring character identity, apparent age, face geometry, hair, body proportions, wardrobe, environment anchors, lighting and visual language exactly.' : '',
+    previousAsset ? 'The previous accepted act is supplied as a video reference for continuity only. Match its recurring character identity, apparent age, face geometry, hair, body proportions, wardrobe, environment anchors and lighting exactly, but do NOT copy its camera position, framing or composition: this act opens directly in its own SHOT TYPE and OPENING FRAME.' : '',
     regeneration?.guidance ? `QC CORRECTION: ${regeneration.guidance}` : '',
     'No on-screen text, captions, logos, watermarks, CGI look, anatomy errors, face morphing, flicker, or unexplained cuts.',
   ].filter(Boolean).join(' ');
@@ -808,6 +888,15 @@ function normalizedDialogueTurns(segment, productionScript) {
     delivery: '',
     pauseAfterSeconds: 0,
   }];
+}
+
+export function shouldContinuePreviousShot(previousSegment, segment) {
+  if (!previousSegment || !segment) return false;
+  const cut = /\bcut\b/i;
+  return previousSegment.shotType === segment.shotType
+    && previousSegment.locationId === segment.locationId
+    && !cut.test(previousSegment.transition || '')
+    && !cut.test(segment.transition || '');
 }
 
 export function buildVideoReferencePlan({
