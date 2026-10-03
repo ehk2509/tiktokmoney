@@ -374,6 +374,7 @@ test('each QC stage keeps its own retry allowance after another stage already re
     textArtifact: 0,
     visualFactual: 0,
     editorialVariety: 0,
+    productionIntegrity: 0,
   });
   assert.deepEqual(project.scenes[0].asset.qc.retryUsage, {
     realism: 1,
@@ -386,5 +387,6 @@ test('each QC stage keeps its own retry allowance after another stage already re
     textArtifact: 0,
     visualFactual: 0,
     editorialVariety: 0,
+    productionIntegrity: 0,
   });
 });
