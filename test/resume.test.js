@@ -124,3 +124,64 @@ test('resume regenerates from the first act whose clip file is missing', async (
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a malformed QC reply is retried instead of aborting generation', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-malformed-'));
+  try {
+    let calls = 0;
+    const pipeline = pipelineWith({ dir, store: memoryStore(), generated: [] });
+    pipeline.textArtifactQc = new AudiovisualPipeline({
+      textArtifactQc: {
+        maxRegenerations: 0,
+        async evaluate() {
+          calls += 1;
+          if (calls === 1) throw new SyntaxError("Expected ',' or '}' after property value in JSON");
+          return { passed: true, issues: [] };
+        },
+      },
+    }).textArtifactQc;
+
+    const project = await pipeline.generate({ topic: 'lift', durationSeconds: 18, render: false });
+    assert.equal(project.status, 'READY');
+    assert.equal(calls, 4);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an interrupted act keeps the QC history of its rejected takes', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-interrupted-'));
+  try {
+    const store = memoryStore();
+    let attempts = 0;
+    const pipeline = new AudiovisualPipeline({
+      llm,
+      store,
+      renderer: null,
+      audiovisual: {
+        async generateSegment({ segment }) {
+          if (segment.index === 1 && ++attempts === 2) throw new Error('Runway request failed (400): not enough credits');
+          const localPath = path.join(dir, `act-${segment.index}-${attempts}.mp4`);
+          await writeFile(localPath, 'clip');
+          return { type: 'ai-video', localPath, generationId: `g${segment.index}-${attempts}` };
+        },
+      },
+      textArtifactQc: {
+        maxRegenerations: 1,
+        async evaluate(asset) {
+          return asset.localPath.includes('act-1-')
+            ? { passed: false, issues: [{ code: 'generated-text', severity: 'critical' }], regenerationGuidance: 'No text.' }
+            : { passed: true, issues: [] };
+        },
+      },
+    });
+
+    await assert.rejects(pipeline.generate({ topic: 'lift', durationSeconds: 18, render: false }), /not enough credits/);
+    const [saved] = store.projects.values();
+    assert.equal(saved.interruptedAct.index, 1);
+    assert.equal(saved.interruptedAct.attempts.length, 1);
+    assert.equal(saved.interruptedAct.attempts[0].issues[0].code, 'text-artifact:generated-text');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -49,16 +49,16 @@ export class AudiovisualPipeline {
     this.renderer = renderer;
     this.store = store;
     this.visual = visual;
-    this.realismQc = realismQc;
-    this.dialogueQc = dialogueQc;
-    this.lipSyncQc = lipSyncQc;
-    this.deepLipSyncQc = deepLipSyncQc;
-    this.phonemeVisemeQc = phonemeVisemeQc;
-    this.speakerTurnQc = speakerTurnQc;
-    this.textArtifactQc = textArtifactQc;
-    this.visualFactualQc = visualFactualQc;
-    this.editorialVarietyQc = editorialVarietyQc;
-    this.poseMotionQc = poseMotionQc;
+    this.realismQc = retryMalformedReplies(realismQc);
+    this.dialogueQc = retryMalformedReplies(dialogueQc);
+    this.lipSyncQc = retryMalformedReplies(lipSyncQc);
+    this.deepLipSyncQc = retryMalformedReplies(deepLipSyncQc);
+    this.phonemeVisemeQc = retryMalformedReplies(phonemeVisemeQc);
+    this.speakerTurnQc = retryMalformedReplies(speakerTurnQc);
+    this.textArtifactQc = retryMalformedReplies(textArtifactQc);
+    this.visualFactualQc = retryMalformedReplies(visualFactualQc);
+    this.editorialVarietyQc = retryMalformedReplies(editorialVarietyQc);
+    this.poseMotionQc = retryMalformedReplies(poseMotionQc);
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
@@ -180,6 +180,7 @@ export class AudiovisualPipeline {
     project.resumedAt = [...(project.resumedAt || []), new Date().toISOString()];
     project.resumedFromAct = accepted.length;
     delete project.error;
+    delete project.interruptedAct;
     project.render = null;
     return this.produce(project, { render });
   }
@@ -214,6 +215,7 @@ export class AudiovisualPipeline {
         // Keep accepted acts so `resume` can continue after provider errors.
         project.status = 'GENERATION_INTERRUPTED';
         project.error = error.message;
+        project.interruptedAct = { index: segment.index, attempts: error.qcHistory || [] };
         await this.store?.saveProject(project);
         throw error;
       }
@@ -300,7 +302,18 @@ export class AudiovisualPipeline {
   }
 }
 
-async function generateWithQc({
+async function generateWithQc(options) {
+  const qcHistory = [];
+  try {
+    return await runQcAttempts({ ...options, qcHistory });
+  } catch (error) {
+    error.qcHistory = qcHistory;
+    throw error;
+  }
+}
+
+async function runQcAttempts({
+  qcHistory,
   provider,
   realismQc,
   dialogueQc,
@@ -318,7 +331,6 @@ async function generateWithQc({
   previousAsset,
   projectId,
 }) {
-  const qcHistory = [];
   let regeneration = null;
   const retryUsage = {
     realism: 0,
@@ -713,6 +725,31 @@ export function collectSceneLabels(scenes) {
       start: roundTime(start + label.atSeconds),
       end: roundTime(Math.min(sceneEnd, start + label.atSeconds + label.durationSeconds)),
     })).filter((label) => label.end > label.start);
+  });
+}
+
+/**
+ * Vision reviewers occasionally return malformed JSON. Retry that one call
+ * instead of letting a parsing error abort the whole generation.
+ */
+function retryMalformedReplies(qc) {
+  if (!qc) return qc;
+  const malformed = (error) => error instanceof SyntaxError
+    || /invalid JSON|empty content|non-JSON/i.test(String(error?.message));
+  return new Proxy(qc, {
+    get(target, property) {
+      const value = target[property];
+      if (typeof value !== 'function') return value;
+      if (property !== 'evaluate' && property !== 'evaluateScene') return value.bind(target);
+      return async (...args) => {
+        try {
+          return await value.apply(target, args);
+        } catch (error) {
+          if (!malformed(error)) throw error;
+          return value.apply(target, args);
+        }
+      };
+    },
   });
 }
 
