@@ -340,6 +340,11 @@ export function extractFullStackMetrics(project) {
     finalSuccess,
     publishabilityPassed,
     retryCount,
+    preGenerationPassed: project?.preGenerationQc?.passed ?? null,
+    preGenerationAttempts: Number(project?.planning?.preGenerationAttempts) || null,
+    preGenerationRewrites: Number(project?.planning?.preGenerationAttempts) > 0
+      ? Math.max(0, Number(project.planning.preGenerationAttempts) - 1)
+      : null,
     sceneCount: scenes.length,
     dialogueWer: average(scenes.map((scene) => (
       scene.dialogueVerification && (
