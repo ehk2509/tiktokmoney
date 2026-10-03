@@ -778,6 +778,15 @@ function buildAudiovisualPrompt({
   const multiSpeaker = new Set(
     dialogueTurns.map((turn) => turn.speakerCharacterId),
   ).size > 1;
+  const directorialContract = productionScript.directorialContract || {};
+  const brandPolicy = directorialContract.brandPolicy || { mode: 'unbranded', allowedBrands: [] };
+  const interactionDeadline = Number(directorialContract.interactionMustBeginBySeconds);
+  const interactionRequiredNow = Boolean(
+    directorialContract.requiredInteraction
+    && Number.isFinite(interactionDeadline)
+    && Number(segment.start) < interactionDeadline + 0.001
+  );
+
   const speakerVisibility = timedTurns.map((turn) => (
     characters.find((character) => character.id === turn.speakerCharacterId)?.onScreen !== false
   ));
@@ -811,6 +820,16 @@ function buildAudiovisualPrompt({
     location ? `LOCATION: ${describeLocationForShot(location, segment.shotType)}` : '',
     segment.startState ? `OPENING FRAME: ${segment.startState}` : '',
     `ACTION: ${segment.action}.`,
+    directorialContract.primaryVisibleRole
+      ? `PRIMARY VISIBLE ROLE: ${directorialContract.primaryVisibleRole}. Do not substitute this role with an anonymous narrator, generic protagonist, or unrelated character.`
+      : '',
+    directorialContract.requiredVisibleCharacterIds?.length
+      ? `REQUIRED VISIBLE CHARACTERS: ${directorialContract.requiredVisibleCharacterIds.join(', ')}. These characters must be visibly present whenever this act binds them.`
+      : '',
+    interactionRequiredNow
+      ? `REQUIRED INTERACTION NOW: ${directorialContract.requiredInteraction}. The interaction must already be visible in this act; do not replace it with solitary preparation B-roll.`
+      : '',
+
     segment.endState ? `ENDING FRAME: ${segment.endState}` : '',
     segment.shotType ? `SHOT TYPE: ${segment.shotType}.` : '',
     segment.shotType ? shotTypeDirective(segment.shotType) : '',
@@ -821,6 +840,10 @@ function buildAudiovisualPrompt({
     segment.editing?.allowInternalCuts
       ? `EDITING: internal cuts allowed; maximum ${segment.editing.shotCount || 2} shots. Use only clean motivated cuts.`
       : 'EDITING: ONE continuous shot only. No internal cuts, dissolves, crossfades, flash transitions, ghosting, double exposure or montage.',
+    !directorialContract.allowMontage
+      ? 'DIRECTORIAL EDITING CONTRACT: this production is not a montage. Maintain one coherent camera take for this act; never jump between preparation inserts, alternate angles, or time-compressed mini-scenes inside the generated clip.'
+      : '',
+
     segment.editing?.allowDissolves
       ? 'A motivated dissolve is allowed only if explicitly required by the action.'
       : 'Dissolves and crossfades are forbidden.',
@@ -860,8 +883,13 @@ function buildAudiovisualPrompt({
     `GLOBAL VISUAL STYLE: ${productionScript.visualStyle.description}. ${productionScript.visualStyle.cameraRules}. ${productionScript.visualStyle.lightingRules}.`,
     `AUDIO MIX: ${productionScript.audioDirection.mix}. ${productionScript.audioDirection.musicPolicy}.`,
     previousAsset ? 'The previous accepted act is supplied as a video reference for continuity only. Match its recurring character identity, apparent age, face geometry, hair, body proportions, wardrobe, environment anchors and lighting exactly, but do NOT copy its camera position, framing or composition: this act opens directly in its own SHOT TYPE and OPENING FRAME.' : '',
+    brandPolicy.mode === 'unbranded'
+      ? 'BRAND POLICY: everything visible must be generic and unbranded. No recognizable commercial logos, trademarks, sponsor marks, team insignia, signature swooshes, three-stripe designs, branded trade dress, or brand-like symbols on shoes, clothing, balls, equipment, walls, or props.'
+      : brandPolicy.allowedBrands?.length
+        ? `BRAND POLICY: only these explicitly allowed brands may appear: ${brandPolicy.allowedBrands.join(', ')}. No other recognizable brand marks.`
+        : '',
     regeneration?.guidance ? `QC CORRECTION: ${regeneration.guidance}` : '',
-    'No on-screen text, captions, logos, watermarks, CGI look, anatomy errors, face morphing, flicker, or unexplained cuts.',
+    'No on-screen text, captions, unauthorized logos, watermarks, CGI look, anatomy errors, face morphing, flicker, or unexplained cuts.',
   ].filter(Boolean).join(' ');
 }
 
