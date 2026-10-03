@@ -380,7 +380,9 @@ export class RunwayAudiovisualProvider {
         : 'off',
       nativeMotionMask: false,
       motionRegionDirection: segment.motionRegionDirection || null,
-      referenceImageUrl: keyframes?.first?.url || references[0]?.uri || null,
+      referenceImageUrl: keyframes?.first?.url
+        || (String(references[0]?.uri || '').startsWith('data:') ? null : references[0]?.uri)
+        || null,
       referenceEndImageUrl: keyframes?.last?.url || null,
       previousGenerationId: previousAsset?.generationId || null,
       previousActVideoReference: Boolean(continuePreviousShot && previousAsset?.sourceUrl),

@@ -9,6 +9,7 @@ import { KeyframeDirector } from './keyframeDirector.js';
 import { MotionRegionDirector } from './motionRegionDirector.js';
 import { MotionGuideDirector } from './motionGuideDirector.js';
 import { MotionReferenceStore } from '../storage/motionReferenceStore.js';
+import { ReferenceStore } from '../services/referenceStore.js';
 import { resolveQcApplicability } from './qcApplicability.js';
 import { PreGenerationQualityGate } from './preGenerationQualityGate.js';
 
@@ -31,6 +32,7 @@ export class AudiovisualPipeline {
     productionIntegrityQc = null,
     poseMotionQc = null,
     subtitleConfig = null,
+    referenceStore = null,
     creativeTournament = null,
     trendIntelligence = null,
     realismDirector = null,
@@ -65,6 +67,7 @@ export class AudiovisualPipeline {
     this.productionIntegrityQc = retryMalformedReplies(productionIntegrityQc);
     this.poseMotionQc = retryMalformedReplies(poseMotionQc);
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
+    this.referenceStore = referenceStore || new ReferenceStore();
     this.preGenerationQualityGate = preGenerationQualityGate || new PreGenerationQualityGate({
       llm,
       subtitleConfig: this.subtitleConfig,
@@ -191,6 +194,7 @@ export class AudiovisualPipeline {
       project.status = 'REFERENCES_PREPARING';
       try {
         storyBible = await this.visual.prepareStoryBible(storyBible, { projectId: id });
+        await this.referenceStore.persist(storyBible, { projectId: id });
         project.storyBible = storyBible;
       } catch (error) {
         project.warnings.push({ stage: 'story-bible', message: error.message });
@@ -236,6 +240,7 @@ export class AudiovisualPipeline {
     for (const segment of productionScript.segments.slice(project.scenes.length)) {
       let generated;
       try {
+        const storyBible = await this.referenceStore.withFreshReferences(project.storyBible);
         generated = await generateWithQc({
           provider: this.audiovisual,
           realismQc: this.realismQc,
@@ -251,7 +256,7 @@ export class AudiovisualPipeline {
           productionIntegrityQc: this.productionIntegrityQc,
           segment,
           productionScript,
-          storyBible: project.storyBible,
+          storyBible,
           previousAsset,
           projectId: project.id,
         });
