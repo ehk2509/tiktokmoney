@@ -96,7 +96,10 @@ For the TikTokMoney arm, the harness records operational and QC diagnostics in a
 - `firstPassSuccess`
 - `finalSuccess`
 - `publishabilityPassed`
-- `retryCount`
+- `retryCount` — expensive post-generation video retries
+- `preGenerationPassed`
+- `preGenerationAttempts`
+- `preGenerationRewrites` — cheap screenplay/plan rewrites before video generation
 - `sceneCount`
 - `dialogueWer`
 - `lipSyncScore`
@@ -106,6 +109,8 @@ For the TikTokMoney arm, the harness records operational and QC diagnostics in a
 - `editorialVarietyScore`
 
 The last two are intentionally diagnostics rather than standalone claims of correctness or watchability. Visual-factual QC is contradiction-driven, so a low numeric score without a blocking contradiction can still be an accepted act. Editorial-variety QC is likewise issue-driven and separately inspects the previous-act tail against the first ~1.5 seconds of the next act to catch delayed reframing.
+
+The pre-generation counters are intentionally separate from `retryCount`: a successful cheap plan rewrite should not be counted as a video regeneration. This makes it possible to verify that prevention is reducing expensive retries rather than merely moving failures around.
 
 These metrics are useful for diagnosing regressions and retry behavior, but they do not replace blinded human evaluation.
 
