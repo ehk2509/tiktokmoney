@@ -205,3 +205,34 @@ test('publishability exposes an unresolved repeated-framing failure', () => {
   assert.equal(result.passed, false);
   assert.ok(result.blockers.some((item) => item.code === 'editorial-variety'));
 });
+
+test('a low variety score without a concrete framing defect passes with a warning', async () => {
+  const provider = makeProvider({
+    score: 67,
+    scores: { shotTypeAdherence: 70, compositionDifference: 65, scaleOrAngleDifference: 65, editorialNovelty: 68 },
+    issues: [{ code: 'tight-start', severity: 'low', evidence: 'Opening could be slightly wider.' }],
+    summary: 'The act executes a distinct side tracking move.',
+    regenerationGuidance: 'Consider widening the initial framing.',
+  }, []);
+
+  const result = await provider.evaluate(
+    { localPath: '/fake/current.mp4', durationSeconds: 8 },
+    {
+      segment: { shotType: 'tracking', camera: 'Side tracking.', action: 'Track along the wing.', durationSeconds: 8 },
+      previousAsset: { localPath: '/fake/previous.mp4', durationSeconds: 7 },
+      previousSegment: { shotType: 'macro-detail', camera: 'Macro push-in.', durationSeconds: 7 },
+    },
+  );
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.warnings.map((warning) => warning.code), ['tight-start', 'editorial-variety-low']);
+  assert.equal(result.regenerationGuidance, '');
+
+  const gate = evaluateAudiovisualPublishability({
+    productionScript: { segments: [] },
+    scenes: [{ index: 1, editorialVarietyQc: result }],
+    subtitles: null,
+  });
+  assert.ok(gate.warnings.some((warning) => warning.code === 'qc-warnings'));
+});

@@ -135,6 +135,16 @@ export function evaluateAudiovisualPublishability({
     });
   }
 
+  const qcWarningScenes = scenes.filter((scene) => (
+    scene.visualFactualQc?.warnings?.length || scene.editorialVarietyQc?.warnings?.length
+  ));
+  if (qcWarningScenes.length) {
+    warnings.push({
+      code: 'qc-warnings',
+      message: `QC passed with diagnostic warnings for scene(s): ${qcWarningScenes.map((scene) => scene.index).join(', ')}.`,
+    });
+  }
+
   const internalEdits = (productionScript?.segments || []).filter(
     (segment) => segment.editing?.allowInternalCuts || segment.editing?.allowDissolves,
   );

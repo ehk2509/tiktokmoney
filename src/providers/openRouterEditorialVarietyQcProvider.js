@@ -112,9 +112,20 @@ export class OpenRouterEditorialVarietyQcProvider {
       editorialNovelty: clampScore(parsed?.scores?.editorialNovelty),
     };
     const score = clampScore(parsed?.score ?? average(Object.values(scores)));
-    const issues = normalizeIssues(parsed?.issues);
-    const criticalFailure = issues.some((issue) => issue.severity === 'critical');
-    const passed = score >= this.threshold && !criticalFailure;
+    const reported = normalizeIssues(parsed?.issues);
+    // Issue-driven like factual QC: only a concrete high/critical defect (e.g.
+    // repeated-framing) regenerates. A low score with no such defect is a warning,
+    // because the reviewer often scores visibly distinct shots in the high 60s.
+    const issues = reported.filter((issue) => ['high', 'critical'].includes(issue.severity));
+    const passed = issues.length === 0;
+    const warnings = [
+      ...reported.filter((issue) => !issues.includes(issue)).map((issue) => ({ ...issue, severity: 'warning' })),
+      ...(score < this.threshold && passed ? [{
+        code: 'editorial-variety-low',
+        severity: 'warning',
+        evidence: `Diagnostic editorial-variety score ${score} is below warning threshold ${this.threshold}, but no blocking framing defect was found.`,
+      }] : []),
+    ];
 
     return {
       provider: 'openrouter',
@@ -127,6 +138,7 @@ export class OpenRouterEditorialVarietyQcProvider {
       previousShotType: previousSegment.shotType,
       currentShotType: segment.shotType,
       issues,
+      warnings,
       summary: stringOrEmpty(parsed?.summary),
       regenerationGuidance: passed
         ? ''
