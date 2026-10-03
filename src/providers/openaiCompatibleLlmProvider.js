@@ -324,6 +324,61 @@ export class OpenAICompatibleLlmProvider {
     };
   }
 
+  async reviewProductionPlan({
+    topic,
+    audience,
+    creativeBrief = null,
+    productionScript,
+  }) {
+    const prompt = [
+      'Review this production plan BEFORE any expensive video generation.',
+      'This is a plan-level preventive review, not a review of generated pixels or audio.',
+      `Topic: ${topic}`,
+      `Audience: ${audience}`,
+      creativeBrief ? `Binding creative brief: ${JSON.stringify(creativeBrief)}` : '',
+      '',
+      'Production script:',
+      JSON.stringify(productionScript),
+      '',
+      'Mirror the downstream QC categories and block only defects that already exist in the plan itself.',
+      'Check:',
+      '- realism/temporal realism: physically filmable action, coherent start/end state, no impossible camera/body combination, no hidden montage when forbidden;',
+      '- identity/location continuity: recurring people, wardrobe, location anchors and lighting are specific and internally consistent;',
+      '- keyframe/motion plan: risky actions have clear start/end states and motion constraints;',
+      '- dialogue/lip-sync/phoneme prerequisites: dialogue fits duration; on-screen speakers can visibly expose a face/mouth; no impossible speaking shot;',
+      '- speaker turns: ownership is explicit, ordered and visually blockable;',
+      '- pose/motion: complex physical interaction is broken into executable beats rather than impossible simultaneous actions;',
+      '- text artifact prevention: the video model is never asked to render labels/signage/text;',
+      '- visual factual consistency: narration, action, labels, start state and end state do not contradict one another;',
+      '- editorial variety: consecutive acts have materially different framing contracts from their opening frame onward;',
+      '- production integrity: named roles and required interactions remain present; brand policy is respected;',
+      '- subtitle/audio/publishability prerequisites: spoken copy is concise, no authoring meta-language, and the audio plan is non-empty.',
+      '',
+      'Do NOT claim that a future model will definitely flicker, hallucinate a logo, miss lip sync, have bad loudness, or otherwise fail in pixels/audio. Those are post-generation measurements.',
+      'A blocker must be a concrete defect in the supplied plan that can be corrected before generation.',
+      'Warnings are for risks that are not plan defects.',
+      '',
+      'Return JSON only:',
+      '{',
+      '  "scores": {',
+      '    "realismPlan": 0, "continuityPlan": 0, "speechPlan": 0,',
+      '    "motionPlan": 0, "factualPlan": 0, "editorialPlan": 0,',
+      '    "productionIntegrityPlan": 0, "publishabilityPlan": 0',
+      '  },',
+      '  "blockers": [{"code":"string","message":"specific correctable plan defect"}],',
+      '  "warnings": [{"code":"string","message":"specific non-blocking risk"}],',
+      '  "summary":"one sentence"',
+      '}',
+    ].filter(Boolean).join('\n');
+
+    return this.generateJson({
+      system: 'You are a strict pre-generation film production supervisor. Review only the supplied plan and return JSON.',
+      prompt,
+      temperature: 0.1,
+      model: this.judgeModel,
+    });
+  }
+
   async generateStoryBible({ script }) {
     const parts = [script.hook, ...(script.body || []), script.payoff, script.cta].filter(Boolean);
     const prompt = [
