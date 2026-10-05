@@ -2925,20 +2925,28 @@ test('dialogue QC rejects paraphrased generated speech and returns targeted guid
 
 test('lip-sync sample plan combines speech-active word timestamps and true pauses', () => {
   const samples = buildLipSyncSamples([
-    { word: 'Hello', start: 0.4, end: 0.8 },
-    { word: 'there', start: 0.8, end: 1.1 },
-    { word: 'this', start: 1.6, end: 1.9 },
-    { word: 'works', start: 1.9, end: 2.3 },
+    { word: 'Hello', start: 0.9, end: 1.3 },
+    { word: 'there', start: 1.3, end: 1.6 },
+    { word: 'this', start: 2.6, end: 2.9 },
+    { word: 'works', start: 2.9, end: 3.3 },
   ], {
-    durationSeconds: 3,
+    durationSeconds: 4.5,
     maxFrames: 8,
   });
 
   assert.ok(samples.some((sample) => sample.kind === 'speech' && sample.word === 'Hello'));
-  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp < 0.4));
-  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp > 1.1 && sample.timestamp < 1.6));
-  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp > 2.3));
+  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp < 0.9));
+  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp > 1.9 && sample.timestamp < 2.3));
+  assert.ok(samples.some((sample) => sample.kind === 'pause' && sample.timestamp >= 3.8));
   assert.ok(samples.every((sample, index) => index === 0 || sample.timestamp >= samples[index - 1].timestamp));
+
+  // Gaps shorter than the lip release window are articulation, not pauses.
+  const tight = buildLipSyncSamples([
+    { word: 'One', start: 0.1, end: 0.4 },
+    { word: 'more', start: 0.9, end: 1.2 },
+  ], { durationSeconds: 1.6, maxFrames: 8 });
+  assert.ok(!tight.some((sample) => sample.kind === 'pause'));
+  assert.match(tight.find((sample) => sample.word === 'more').label, /m\/b\/p lip closure/);
 });
 
 test('lip-sync QC judges visual mouth activity using independent word timestamps', async () => {

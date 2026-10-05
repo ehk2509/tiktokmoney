@@ -8,6 +8,7 @@ export class OpenRouterLipSyncQcProvider {
     baseUrl = process.env.OPENROUTER_BASE_URL || DEFAULT_BASE_URL,
     model = process.env.LIPSYNC_QC_MODEL || process.env.REALISM_QC_MODEL,
     threshold = Number(process.env.LIPSYNC_QC_THRESHOLD || 80),
+    minScore = Number(process.env.LIPSYNC_QC_MIN_SCORE || 55),
     maxFrames = Number(process.env.LIPSYNC_QC_FRAMES || 10),
     frameWidth = Number(process.env.LIPSYNC_QC_FRAME_WIDTH || 384),
     maxRegenerations = Number(process.env.LIPSYNC_QC_MAX_REGENERATIONS || 2),
@@ -22,6 +23,7 @@ export class OpenRouterLipSyncQcProvider {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.model = model;
     this.threshold = clampScore(threshold);
+    this.minScore = clampScore(minScore);
     this.maxFrames = clampInt(maxFrames, 4, 14, 10);
     this.frameWidth = clampInt(frameWidth, 256, 768, 384);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
@@ -125,9 +127,27 @@ export class OpenRouterLipSyncQcProvider {
     const score = clampScore(
       parsed?.score ?? average(Object.values(scores)),
     );
-    const issues = normalizeIssues(parsed?.issues);
-    const criticalFailure = issues.some((issue) => issue.severity === 'critical');
-    const passed = score >= this.threshold && !criticalFailure;
+    const reported = normalizeIssues(parsed?.issues);
+    // Issue-driven like factual/variety QC: regenerate for a concrete high/critical
+    // defect seen across frames, or clearly broken sync below the hard floor.
+    // A score between the floor and the threshold is a warning, not a retake.
+    const issues = reported.filter((issue) => ['high', 'critical'].includes(issue.severity));
+    const passed = issues.length === 0 && score >= this.minScore;
+    const warnings = [
+      ...reported.filter((issue) => !issues.includes(issue)).map((issue) => ({ ...issue, severity: 'warning' })),
+      ...(passed && score < this.threshold ? [{
+        code: 'lip-sync-low',
+        severity: 'warning',
+        evidence: `Diagnostic lip-sync score ${score} is below warning threshold ${this.threshold}, but no blocking defect was found.`,
+      }] : []),
+    ];
+    if (!passed && !issues.length) {
+      issues.push({
+        code: 'lip-sync-score-floor',
+        severity: 'high',
+        evidence: `Lip-sync score ${score} is below the minimum ${this.minScore}.`,
+      });
+    }
 
     return {
       provider: 'openrouter',
@@ -135,11 +155,14 @@ export class OpenRouterLipSyncQcProvider {
       passed,
       score,
       threshold: this.threshold,
+      minScore: this.minScore,
       scores,
       issues,
+      warnings,
       summary: stringOrEmpty(parsed?.summary),
-      regenerationGuidance: stringOrEmpty(parsed?.regenerationGuidance)
-        || buildGuidance(scores, issues),
+      regenerationGuidance: passed
+        ? ''
+        : stringOrEmpty(parsed?.regenerationGuidance) || buildGuidance(scores, issues),
       sampledFrames: frames.map((frame, index) => ({
         index: frame.index,
         timestamp: frame.timestamp,
@@ -150,6 +173,14 @@ export class OpenRouterLipSyncQcProvider {
       limitation: 'visual speech-timing proxy; not phoneme-level alignment',
     };
   }
+}
+
+export function lipContactSounds(word) {
+  const lower = String(word || '').toLowerCase().replace(/[^a-z]/g, '');
+  const found = [];
+  if (/[mbp]/.test(lower)) found.push('m/b/p lip closure');
+  if (/[fv]/.test(lower) || /ph/.test(lower)) found.push('f/v lip-teeth contact');
+  return found.join(' and ');
 }
 
 export function buildLipSyncSamples(words, {
@@ -171,21 +202,26 @@ export function buildLipSyncSamples(words, {
   const activeIndices = spreadIndices(cleanWords.length, activeBudget);
   const active = activeIndices.map((index) => {
     const word = cleanWords[index];
+    const closures = lipContactSounds(word.word);
     return {
       kind: 'speech',
       word: word.word,
       timestamp: round((word.start + word.end) / 2),
-      label: `SPEECH ACTIVE around word "${word.word}"`,
+      label: closures
+        ? `SPEECH ACTIVE around word "${word.word}" (contains ${closures}: momentary closed lips or lip-teeth contact here is correct articulation)`
+        : `SPEECH ACTIVE around word "${word.word}"`,
     };
   });
 
   const pauses = [];
-  const minPause = 0.28;
+  // Lips take ~0.3s to settle after a word; sample pauses only past that release.
+  const release = 0.3;
+  const minPause = 0.28 + (2 * release);
   const firstStart = cleanWords[0].start;
   if (firstStart >= minPause) {
     pauses.push({
       kind: 'pause',
-      timestamp: round(firstStart / 2),
+      timestamp: round(Math.min(firstStart / 2, firstStart - release)),
       label: 'EXPECTED PAUSE before speech',
     });
   }
@@ -204,7 +240,7 @@ export function buildLipSyncSamples(words, {
   if (duration - lastEnd >= minPause) {
     pauses.push({
       kind: 'pause',
-      timestamp: round(lastEnd + ((duration - lastEnd) / 2)),
+      timestamp: round(Math.max(lastEnd + release + 0.2, lastEnd + ((duration - lastEnd) / 2))),
       label: 'EXPECTED PAUSE after speech',
     });
   }
@@ -233,7 +269,10 @@ function buildPrompt({
     '',
     'The supplied frames are sampled using independent word timestamps.',
     'Frames labeled SPEECH ACTIVE should normally show plausible visible articulation when the speaker face is visible.',
+    'Natural speech includes momentary closed lips (m, b, p), lip-teeth contact (f, v) and brief closures between syllables; a single such frame is NOT a defect.',
     'Frames labeled EXPECTED PAUSE should not show strong continued speaking mouth motion unless the shot hides the mouth or another sound source explains it.',
+    'Relaxed, slightly parted resting lips during a pause are normal; flag only active articulation (opening/closing as if speaking).',
+    'Report a timing defect only when it persists across at least two frames, and list those frame numbers in "frames". Use severity high only for defects a viewer would clearly notice: frozen or absent mouth during speech, speaking motion through a pause, wrong person speaking, or face morphing.',
     '',
     'Judge these from 0 to 100:',
     '- speakerVisibility: intended speaking face/mouth is sufficiently visible when dialogue is performed.',
@@ -253,7 +292,7 @@ function buildPrompt({
     '    "faceStability": 0,',
     '    "timingPlausibility": 0',
     '  },',
-    '  "issues": [{"code":"frozen-mouth","severity":"high","evidence":"brief concrete evidence"}],',
+    '  "issues": [{"code":"frozen-mouth","severity":"high","frames":[2,3],"evidence":"brief concrete evidence"}],',
     '  "summary": "one sentence",',
     '  "regenerationGuidance": "specific corrective instruction"',
     '}',
@@ -278,16 +317,31 @@ function inferDuration(words) {
   return Math.max(1, Number(words.at(-1)?.end) || 1);
 }
 
+const TIMING_ISSUE = /articulat|aperture|open|closed|pause|lingering|frozen|timing|mouth-during|lag|lead/i;
+
 function normalizeIssues(issues) {
   if (!Array.isArray(issues)) return [];
   return issues
     .filter((issue) => issue && typeof issue === 'object')
     .slice(0, 8)
-    .map((issue) => ({
-      code: String(issue.code || 'unspecified').slice(0, 80),
-      severity: normalizeSeverity(issue.severity),
-      evidence: String(issue.evidence || '').slice(0, 300),
-    }));
+    .map((issue) => {
+      const frames = Array.isArray(issue.frames)
+        ? [...new Set(issue.frames.map(Number).filter(Number.isFinite))]
+        : [];
+      let severity = normalizeSeverity(issue.severity);
+      // Timing defects must persist: one sampled frame can land on a natural
+      // closure or release, so single-frame timing evidence is capped at medium.
+      if (TIMING_ISSUE.test(String(issue.code || '')) && frames.length < 2
+        && ['high', 'critical'].includes(severity)) {
+        severity = 'medium';
+      }
+      return {
+        code: String(issue.code || 'unspecified').slice(0, 80),
+        severity,
+        evidence: String(issue.evidence || '').slice(0, 300),
+        frames,
+      };
+    });
 }
 
 function normalizeSeverity(value) {
