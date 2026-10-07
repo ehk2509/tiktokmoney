@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 #!/usr/bin/env node
 import { createApp } from './app.js';
 import {
@@ -33,6 +34,19 @@ try {
     }
     const project = await app.pipeline.resume(id, { render: options['no-render'] !== true });
     console.log(JSON.stringify(project, null, 2));
+  } else if (command === 'billing-import') {
+    const file = options.file || options.input;
+    if (!file) throw new Error('Usage: node src/cli.js billing-import --file ./billing.json [--source provider-export]');
+    const payload = JSON.parse(await readFile(file, 'utf8'));
+    const records = Array.isArray(payload) ? payload : payload.records;
+    if (!Array.isArray(records)) throw new Error('billing import file must contain an array or { records: [] }');
+    console.log(JSON.stringify(await app.importProviderBilling(records, {
+      source: options.source || 'manual-import',
+    }), null, 2));
+  } else if (command === 'billing-reconcile') {
+    const id = options.id || options.project;
+    if (!id) throw new Error('Usage: node src/cli.js billing-reconcile --id vid_...');
+    console.log(JSON.stringify(await app.reconcileProjectBilling(id), null, 2));
   } else if (command === 'publish') {
     const id = options.id || options.project;
     if (!id) throw new Error('Usage: node src/cli.js publish --id vid_... --privacy SELF_ONLY --confirm-publish');
@@ -151,6 +165,8 @@ try {
       '  generate --topic "..." [--duration 35]',
       '  resume --id "vid_..." [--no-render]   continue a saved video from its first missing act',
       '  opportunities',
+      '  billing-import --file ./billing.json [--source provider-export]',
+      '  billing-reconcile --id "vid_..."',
       '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',
       '  publication-refresh --id "pub_..."',
       '  publication-metrics --id "pub_..."',
