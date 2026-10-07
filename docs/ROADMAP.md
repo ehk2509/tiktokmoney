@@ -158,7 +158,8 @@ Current M3 publishing intentionally requires an explicit per-post confirmation a
 ## M4 - Learning + monetization
 
 - [ ] Revenue attribution
-- [ ] Cost-per-video ledger + estimated-vs-actual daily budget reconciliation
+- [x] Provider-reported task cost ledger + conservative estimated-vs-actual daily budget reconciliation
+- [ ] Full all-provider production-cost coverage (LLM/QC/media providers)
 - [ ] Strategy analytics by hook/duration/style
 - [ ] Contextual exploration/exploitation policy
 - [x] Campaign budgets and autonomous daily planning
