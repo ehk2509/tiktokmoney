@@ -158,7 +158,9 @@ export class EquivalentProviderRouter {
       };
     }).sort((a, b) => b.routingScore - a.routingScore);
 
-    if (scored.length > 1 && this.random() < this.explorationRate) {
+    const evidenceReady = scored.length > 1
+      && scored.every((candidate) => candidate.routingEvidence.hasEnoughSamples);
+    if (evidenceReady && this.random() < this.explorationRate) {
       const exploreIndex = 1 + Math.floor(this.random() * (scored.length - 1));
       const [explored] = scored.splice(exploreIndex, 1);
       explored.explored = true;
@@ -166,6 +168,22 @@ export class EquivalentProviderRouter {
     }
 
     return scored;
+  }
+
+  async recordOutcome(routedResult, {
+    qualityScore = null,
+    passed = true,
+    actualCostUsd = null,
+  } = {}) {
+    const providerId = routedResult?.providerRouting?.providerId;
+    if (!providerId) return null;
+    const outcome = {
+      generationFailed: false,
+      passed: Boolean(passed),
+      qualityScore: Number.isFinite(Number(qualityScore)) ? Number(qualityScore) : null,
+      actualCostUsd: Number.isFinite(Number(actualCostUsd)) ? Number(actualCostUsd) : null,
+    };
+    return this.record(providerId, outcome);
   }
 
   async reliabilitySnapshot() {
@@ -234,16 +252,11 @@ function extractObservedCostUsd(result) {
 }
 
 function extractQualityScore(result) {
-  const candidates = [
-    result?.overallScore,
-    result?.score,
-    result?.qualityScore,
-  ];
-  for (const value of candidates) {
-    const number = Number(value);
-    if (Number.isFinite(number)) return Math.max(0, Math.min(100, number));
-  }
-  return null;
+  const value = Number(
+    result?.providerQualityScore
+      ?? result?.providerRoutingQualityScore,
+  );
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
 }
 
 function clamp01(value, fallback = 0.5) {
