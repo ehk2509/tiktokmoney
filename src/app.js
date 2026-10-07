@@ -7,6 +7,7 @@ import { DailyPlanStore } from './storage/dailyPlanStore.js';
 import { PublicationStore } from './storage/publicationStore.js';
 import { PerformanceLearningStore } from './storage/performanceLearningStore.js';
 import { PerformanceLearningService } from './services/performanceLearningService.js';
+import { ExperimentService } from './services/experimentService.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
@@ -56,12 +57,16 @@ export function createApp(overrides = {}) {
     store: performanceLearningStore,
     projectStore: store,
   });
+  const experimentService = overrides.experimentService || new ExperimentService({
+    store: performanceLearningStore,
+  });
   const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher();
   const publishingService = overrides.publishingService || new PublishingService({
     projectStore: store,
     publicationStore,
     publisher: tiktokPublisher,
     learningService,
+    experimentService,
   });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
   const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
@@ -192,6 +197,7 @@ export function createApp(overrides = {}) {
     motionLibraryBuilder,
     publishingService,
     learningService,
+    experimentService,
     performanceLearningStore,
     billingStore: store.billingStore || null,
     async importProviderBilling(records, options = {}) {
@@ -223,6 +229,12 @@ export function createApp(overrides = {}) {
     },
     async performanceLearningContext(options = {}) {
       return learningService.contextFor(options);
+    },
+    async evaluateExperiment(experimentId) {
+      return experimentService.evaluate(experimentId);
+    },
+    async listExperiments() {
+      return experimentService.list();
     },
     async opportunities() {
       const items = await trends.list();
