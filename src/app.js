@@ -180,6 +180,16 @@ export function createApp(overrides = {}) {
     motionReferenceStore,
     motionLibraryBuilder,
     publishingService,
+    billingStore: store.billingStore || null,
+    async importProviderBilling(records, options = {}) {
+      if (!store.billingStore) throw new Error('provider billing store is not configured');
+      return store.billingStore.importRecords(records, options);
+    },
+    async reconcileProjectBilling(projectId) {
+      const project = await store.getProject(projectId);
+      await store.saveProject(project);
+      return store.getProject(projectId);
+    },
     async publishProject(projectId, options = {}) {
       return publishingService.publishProject(projectId, options);
     },
