@@ -9,6 +9,7 @@ export class OpenRouterRealismQcProvider {
     apiKey = process.env.OPENROUTER_API_KEY,
     baseUrl = process.env.OPENROUTER_BASE_URL || DEFAULT_BASE_URL,
     model = process.env.REALISM_QC_MODEL,
+    providerName = 'openrouter',
     threshold = Number(process.env.REALISM_QC_THRESHOLD || 82),
     temporalThreshold = Number(process.env.REALISM_QC_TEMPORAL_THRESHOLD || 80),
     continuityThreshold = Number(process.env.REALISM_QC_CONTINUITY_THRESHOLD || 85),
@@ -28,6 +29,7 @@ export class OpenRouterRealismQcProvider {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.model = model;
+    this.providerName = providerName;
     this.threshold = clampScore(threshold);
     this.temporalThreshold = clampScore(temporalThreshold);
     this.continuityThreshold = clampScore(continuityThreshold);
@@ -240,7 +242,7 @@ export class OpenRouterRealismQcProvider {
       : '';
 
     return {
-      provider: 'openrouter',
+      provider: this.providerName,
       model: this.model,
       threshold: this.threshold,
       temporalThreshold: this.temporalThreshold,
