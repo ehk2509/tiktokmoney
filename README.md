@@ -171,6 +171,39 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## TikTok OAuth account lifecycle
+
+TikTokMoney can now manage a persistent TikTok Login Kit OAuth session instead of relying on a manually rotated access token.
+
+Configure:
+
+```env
+TIKTOK_CLIENT_KEY=...
+TIKTOK_CLIENT_SECRET=...
+TIKTOK_REDIRECT_URI=https://your-host.example/api/tiktok/oauth/callback
+TIKTOK_OAUTH_SCOPES=video.publish,video.list
+```
+
+Register the exact redirect URI in the TikTok developer app, then open:
+
+```text
+GET /api/tiktok/oauth/start
+```
+
+The server creates a one-time CSRF `state`, redirects to TikTok authorization, validates that state on callback, exchanges the authorization code server-side, and stores the token bundle in `data/tiktok-auth.json` with restrictive file permissions.
+
+The publisher asks the auth service for a valid access token before TikTok API calls. If the access token is close to expiry, the refresh token is used automatically and a rotated refresh token is persisted immediately.
+
+Operational commands:
+
+```bash
+node src/cli.js tiktok-auth-url
+node src/cli.js tiktok-auth-status
+node src/cli.js tiktok-auth-refresh
+```
+
+`TIKTOK_ACCESS_TOKEN` remains supported as a backward-compatible override, but durable OAuth is the preferred autonomous path.
+
 ## Guarded TikTok publishing
 
 TikTok publishing is available as an **explicitly confirmed** post-generation step. It is never invoked by `generate`, `plan`, or `run-plan`.

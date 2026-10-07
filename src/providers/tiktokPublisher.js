@@ -7,18 +7,20 @@ const MAX_CHUNK_BYTES = 64 * MB;
 export class TikTokPublisher {
   constructor({
     accessToken = process.env.TIKTOK_ACCESS_TOKEN,
+    authService = null,
     baseUrl = process.env.TIKTOK_API_BASE_URL || 'https://open.tiktokapis.com',
     fetchImpl = fetch,
     chunkSizeBytes = MAX_CHUNK_BYTES,
   } = {}) {
     this.accessToken = accessToken;
+    this.authService = authService;
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.fetchImpl = fetchImpl;
     this.chunkSizeBytes = Math.min(MAX_CHUNK_BYTES, Math.max(5 * MB, Number(chunkSizeBytes) || MAX_CHUNK_BYTES));
   }
 
   get configured() {
-    return Boolean(this.accessToken);
+    return Boolean(this.accessToken || this.authService?.configured);
   }
 
   async queryCreatorInfo() {
@@ -133,11 +135,11 @@ export class TikTokPublisher {
   }
 
   async request(path, { body = {} } = {}) {
-    this.requireConfigured();
+    const accessToken = await this.resolveAccessToken();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${this.accessToken}`,
+        authorization: `Bearer ${accessToken}`,
         'content-type': 'application/json; charset=UTF-8',
       },
       body: JSON.stringify(body),
@@ -155,9 +157,18 @@ export class TikTokPublisher {
   }
 
   requireConfigured() {
-    if (!this.accessToken) {
-      throw new Error('TikTok publishing requires TIKTOK_ACCESS_TOKEN with the required scopes');
+    if (!this.configured) {
+      throw new Error('TikTok publishing requires an OAuth account or TIKTOK_ACCESS_TOKEN');
     }
+  }
+
+  async resolveAccessToken() {
+    if (this.accessToken) return this.accessToken;
+    if (this.authService?.getValidAccessToken) {
+      const token = await this.authService.getValidAccessToken();
+      if (token) return token;
+    }
+    throw new Error('TikTok account is not authorized or the refresh token is unavailable');
   }
 }
 
