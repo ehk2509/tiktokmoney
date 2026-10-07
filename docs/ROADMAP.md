@@ -207,3 +207,13 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Voice fallback model group
 - [x] Fail-closed QC semantics when every equivalent is unavailable
 - [x] Provider health visibility across capability groups
+
+
+## M3.12 - Cross-vendor failover
+
+- [x] OpenAI-compatible LLM ↔ OpenRouter vendor failover
+- [x] Vendor-specific LLM reliability and usage identity
+- [x] OpenRouter ↔ OpenAI-compatible realism QC failover
+- [x] ElevenLabs ↔ OpenAI TTS voice failover
+- [x] Opt-in configuration preserving existing defaults
+- [x] Cross-vendor reliability IDs and automatic health-aware selection

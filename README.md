@@ -171,6 +171,64 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## Cross-vendor capability failover
+
+TikTokMoney can now fail over across vendors, not only across models inside one vendor.
+
+### LLM
+
+OpenAI-compatible LLM traffic can fall through to OpenRouter models:
+
+```env
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.6-luna
+OPENAI_API_KEY=...
+OPENROUTER_API_KEY=...
+OPENROUTER_LLM_FALLBACK_MODELS=anthropic/claude-sonnet-4,google/gemini-2.5-pro
+```
+
+The reverse direction is also supported:
+
+```env
+LLM_PROVIDER=openrouter
+OPENROUTER_LLM_MODEL=anthropic/claude-sonnet-4
+OPENROUTER_API_KEY=...
+OPENAI_API_KEY=...
+OPENAI_LLM_FALLBACK_MODELS=gpt-5.6-luna
+```
+
+OpenRouter exposes an OpenAI-compatible API at `https://openrouter.ai/api/v1`, so both vendors use the same structured LLM contract while retaining distinct reliability IDs and usage-provider labels.
+
+### Realism QC
+
+Realism QC can use an OpenRouter primary and explicit OpenAI-compatible backup vision model:
+
+```env
+REALISM_QC_MODEL=primary-openrouter-vision-model
+OPENROUTER_API_KEY=...
+OPENAI_API_KEY=...
+OPENAI_REALISM_QC_FALLBACK_MODELS=openai-vision-backup
+```
+
+A real QC rejection is still treated as a valid QC execution; only transport/API failure affects provider reliability.
+
+### Voice
+
+Scene-composer voice can now use OpenAI TTS as a real cross-vendor fallback for ElevenLabs:
+
+```env
+ELEVENLABS_API_KEY=...
+ELEVENLABS_VOICE_ID=...
+OPENAI_API_KEY=...
+OPENAI_TTS_FALLBACK_ENABLED=true
+OPENAI_TTS_MODEL=gpt-4o-mini-tts
+OPENAI_TTS_VOICE=alloy
+```
+
+OpenAI TTS returns audio without ElevenLabs word timings in this integration, so subtitle timing falls back to the pipeline's existing non-word-timestamp timing path rather than fabricating timestamps.
+
+Cross-vendor fallbacks are opt-in. If alternate vendor settings are absent, existing behavior is unchanged.
+
 ## Equivalent-provider failover for LLM, QC and voice
 
 Health-aware failover now extends beyond AI-video generation.

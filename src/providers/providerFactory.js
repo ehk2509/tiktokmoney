@@ -2,6 +2,7 @@ import { TemplateLlmProvider } from '../providers.js';
 import { OpenAICompatibleLlmProvider } from './openaiCompatibleLlmProvider.js';
 import { PexelsStockProvider, NullStockProvider } from './pexelsStockProvider.js';
 import { ElevenLabsVoiceProvider, NullVoiceProvider } from './elevenLabsVoiceProvider.js';
+import { OpenAiVoiceProvider } from './openAiVoiceProvider.js';
 import { LumaRealisticVideoProvider } from './lumaRealisticVideoProvider.js';
 import { LumaAgentsVideoProvider } from './lumaAgentsVideoProvider.js';
 import { RunwayVideoProvider } from './runwayVideoProvider.js';
@@ -33,27 +34,83 @@ export function createLlmProvider(env = process.env) {
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
 
   if (provider === 'template') return new TemplateLlmProvider();
+
+  const entries = [];
   if (provider === 'openai-compatible' || provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required for OpenAI LLM provider');
     const models = unique([
       env.LLM_MODEL || 'gpt-5.6-luna',
       ...csv(env.LLM_FALLBACK_MODELS),
     ].filter(Boolean));
-    const entries = models.map((model, index) => ({
-      id: `llm:${model}`,
-      provider: new OpenAICompatibleLlmProvider({
-        apiKey: env.OPENAI_API_KEY,
-        baseUrl: env.LLM_BASE_URL,
-        model,
-        judgeModel: index === 0 ? env.CREATIVE_JUDGE_MODEL : model,
-      }),
-    }));
-    return wrapEquivalent(entries, {
-      capability: 'llm',
-      env,
+    models.forEach((model, index) => {
+      entries.push({
+        id: `llm:openai:${model}`,
+        provider: new OpenAICompatibleLlmProvider({
+          apiKey: env.OPENAI_API_KEY,
+          baseUrl: env.LLM_BASE_URL,
+          model,
+          judgeModel: index === 0 ? env.CREATIVE_JUDGE_MODEL : model,
+          providerName: 'openai',
+        }),
+      });
     });
+
+    if (env.OPENROUTER_API_KEY) {
+      const openRouterModels = csv(env.OPENROUTER_LLM_FALLBACK_MODELS);
+      openRouterModels.forEach((model) => {
+        entries.push({
+          id: `llm:openrouter:${model}`,
+          provider: new OpenAICompatibleLlmProvider({
+            apiKey: env.OPENROUTER_API_KEY,
+            baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+            model,
+            judgeModel: model,
+            providerName: 'openrouter',
+          }),
+        });
+      });
+    }
+  } else if (provider === 'openrouter') {
+    if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is required for OpenRouter LLM provider');
+    const models = unique([
+      env.OPENROUTER_LLM_MODEL || env.LLM_MODEL || 'openrouter/auto',
+      ...csv(env.OPENROUTER_LLM_FALLBACK_MODELS),
+    ].filter(Boolean));
+    models.forEach((model) => {
+      entries.push({
+        id: `llm:openrouter:${model}`,
+        provider: new OpenAICompatibleLlmProvider({
+          apiKey: env.OPENROUTER_API_KEY,
+          baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+          model,
+          judgeModel: model,
+          providerName: 'openrouter',
+        }),
+      });
+    });
+
+    if (env.OPENAI_API_KEY) {
+      csv(env.OPENAI_LLM_FALLBACK_MODELS).forEach((model) => {
+        entries.push({
+          id: `llm:openai:${model}`,
+          provider: new OpenAICompatibleLlmProvider({
+            apiKey: env.OPENAI_API_KEY,
+            baseUrl: env.LLM_BASE_URL,
+            model,
+            judgeModel: model,
+            providerName: 'openai',
+          }),
+        });
+      });
+    }
+  } else {
+    throw new Error(`Unsupported LLM_PROVIDER: ${provider}`);
   }
 
-  throw new Error(`Unsupported LLM_PROVIDER: ${provider}`);
+  return wrapEquivalent(entries, {
+    capability: 'llm',
+    env,
+  });
 }
 
 export function createTrendIntelligence(env = process.env) {
@@ -233,50 +290,50 @@ export function createVisualProvider(env = process.env) {
 export function createRealismQcProvider(env = process.env) {
   if (!isEnabled(env.REALISM_QC_ENABLED)) return null;
 
-  if (!env.OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY is required when REALISM_QC_ENABLED=true');
-  }
-  if (!env.REALISM_QC_MODEL) {
+  const primaryModel = env.REALISM_QC_MODEL;
+  if (!primaryModel) {
     throw new Error('REALISM_QC_MODEL is required when REALISM_QC_ENABLED=true');
   }
 
-  const models = unique([
-    env.REALISM_QC_MODEL,
-    ...csv(env.REALISM_QC_FALLBACK_MODELS),
-  ].filter(Boolean));
-  const entries = models.map((model) => ({
-    id: `qc:realism:${model}`,
-    provider: new OpenRouterRealismQcProvider({
-      apiKey: env.OPENROUTER_API_KEY,
-      baseUrl: env.OPENROUTER_BASE_URL,
-      model,
-      threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
-      temporalThreshold: env.REALISM_QC_TEMPORAL_THRESHOLD
-        ? Number(env.REALISM_QC_TEMPORAL_THRESHOLD)
-        : undefined,
-      continuityThreshold: env.REALISM_QC_CONTINUITY_THRESHOLD
-        ? Number(env.REALISM_QC_CONTINUITY_THRESHOLD)
-        : undefined,
-      keyframeThreshold: env.REALISM_QC_KEYFRAME_THRESHOLD
-        ? Number(env.REALISM_QC_KEYFRAME_THRESHOLD)
-        : undefined,
-      motionRegionThreshold: env.REALISM_QC_MOTION_REGION_THRESHOLD
-        ? Number(env.REALISM_QC_MOTION_REGION_THRESHOLD)
-        : undefined,
-      motionGuideThreshold: env.REALISM_QC_MOTION_GUIDE_THRESHOLD
-        ? Number(env.REALISM_QC_MOTION_GUIDE_THRESHOLD)
-        : undefined,
-      temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
-        ? undefined
-        : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),
-      maxRegenerations: env.REALISM_MAX_REGENERATIONS
-        ? Number(env.REALISM_MAX_REGENERATIONS)
-        : undefined,
-      failClosed: env.REALISM_QC_FAIL_CLOSED == null
-        ? undefined
-        : isEnabled(env.REALISM_QC_FAIL_CLOSED),
-    }),
-  }));
+  const entries = [];
+  if (env.OPENROUTER_API_KEY) {
+    const models = unique([
+      primaryModel,
+      ...csv(env.REALISM_QC_FALLBACK_MODELS),
+    ].filter(Boolean));
+    models.forEach((model) => {
+      entries.push({
+        id: `qc:realism:openrouter:${model}`,
+        provider: createRealismQcBackend({
+          apiKey: env.OPENROUTER_API_KEY,
+          baseUrl: env.OPENROUTER_BASE_URL,
+          model,
+          providerName: 'openrouter',
+          env,
+        }),
+      });
+    });
+  }
+
+  if (env.OPENAI_API_KEY) {
+    csv(env.OPENAI_REALISM_QC_FALLBACK_MODELS).forEach((model) => {
+      entries.push({
+        id: `qc:realism:openai:${model}`,
+        provider: createRealismQcBackend({
+          apiKey: env.OPENAI_API_KEY,
+          baseUrl: env.OPENAI_API_BASE_URL || env.LLM_BASE_URL || 'https://api.openai.com/v1',
+          model,
+          providerName: 'openai',
+          env,
+        }),
+      });
+    });
+  }
+
+  if (!entries.length) {
+    throw new Error('REALISM_QC_ENABLED=true requires OPENROUTER_API_KEY or an OpenAI fallback model/key');
+  }
+
   return wrapEquivalent(entries, {
     capability: 'qc:realism',
     env,
@@ -521,23 +578,46 @@ export function createSpeakerTurnQcProvider(env = process.env) {
 }
 
 export function createVoiceProvider(env = process.env) {
-  if (!env.ELEVENLABS_API_KEY || !env.ELEVENLABS_VOICE_ID) {
-    return new NullVoiceProvider();
+  const entries = [];
+
+  if (env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID) {
+    const models = unique([
+      env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2',
+      ...csv(env.ELEVENLABS_FALLBACK_MODELS),
+    ]);
+    models.forEach((modelId) => {
+      entries.push({
+        id: `voice:elevenlabs:${modelId}`,
+        provider: new ElevenLabsVoiceProvider({
+          apiKey: env.ELEVENLABS_API_KEY,
+          voiceId: env.ELEVENLABS_VOICE_ID,
+          modelId,
+          outputDir: env.OUTPUT_DIR,
+        }),
+      });
+    });
   }
 
-  const models = unique([
-    env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2',
-    ...csv(env.ELEVENLABS_FALLBACK_MODELS),
-  ]);
-  const entries = models.map((modelId) => ({
-    id: `voice:elevenlabs:${modelId}`,
-    provider: new ElevenLabsVoiceProvider({
-      apiKey: env.ELEVENLABS_API_KEY,
-      voiceId: env.ELEVENLABS_VOICE_ID,
-      modelId,
-      outputDir: env.OUTPUT_DIR,
-    }),
-  }));
+  if (env.OPENAI_API_KEY && isEnabled(env.OPENAI_TTS_FALLBACK_ENABLED)) {
+    const models = unique([
+      env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
+      ...csv(env.OPENAI_TTS_FALLBACK_MODELS),
+    ]);
+    models.forEach((modelId) => {
+      entries.push({
+        id: `voice:openai:${modelId}`,
+        provider: new OpenAiVoiceProvider({
+          apiKey: env.OPENAI_API_KEY,
+          baseUrl: env.OPENAI_API_BASE_URL,
+          modelId,
+          voice: env.OPENAI_TTS_VOICE || 'alloy',
+          outputDir: env.OUTPUT_DIR,
+        }),
+      });
+    });
+  }
+
+  if (!entries.length) return new NullVoiceProvider();
   return wrapEquivalent(entries, {
     capability: 'voice',
     env,
@@ -723,4 +803,45 @@ function csv(value) {
 
 function unique(values) {
   return [...new Set(values)];
+}
+
+
+function createRealismQcBackend({
+  apiKey,
+  baseUrl,
+  model,
+  providerName,
+  env,
+}) {
+  return new OpenRouterRealismQcProvider({
+    apiKey,
+    baseUrl,
+    model,
+    providerName,
+    threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
+    temporalThreshold: env.REALISM_QC_TEMPORAL_THRESHOLD
+      ? Number(env.REALISM_QC_TEMPORAL_THRESHOLD)
+      : undefined,
+    continuityThreshold: env.REALISM_QC_CONTINUITY_THRESHOLD
+      ? Number(env.REALISM_QC_CONTINUITY_THRESHOLD)
+      : undefined,
+    keyframeThreshold: env.REALISM_QC_KEYFRAME_THRESHOLD
+      ? Number(env.REALISM_QC_KEYFRAME_THRESHOLD)
+      : undefined,
+    motionRegionThreshold: env.REALISM_QC_MOTION_REGION_THRESHOLD
+      ? Number(env.REALISM_QC_MOTION_REGION_THRESHOLD)
+      : undefined,
+    motionGuideThreshold: env.REALISM_QC_MOTION_GUIDE_THRESHOLD
+      ? Number(env.REALISM_QC_MOTION_GUIDE_THRESHOLD)
+      : undefined,
+    temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
+      ? undefined
+      : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),
+    maxRegenerations: env.REALISM_MAX_REGENERATIONS
+      ? Number(env.REALISM_MAX_REGENERATIONS)
+      : undefined,
+    failClosed: env.REALISM_QC_FAIL_CLOSED == null
+      ? undefined
+      : isEnabled(env.REALISM_QC_FAIL_CLOSED),
+  });
 }
