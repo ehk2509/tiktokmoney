@@ -93,12 +93,12 @@ export class PublicationOrchestrator {
     if (!['QUEUED', 'RETRY'].includes(job.status)) return job;
 
     if (job.type === 'publish' && this.circuitBreakerService?.evaluate) {
-      const decision = await this.circuitBreakerService.evaluate('publishing');
+      const decision = await this.circuitBreakerService.evaluate('publishing-recovery');
       if (!decision.allowed) {
         job.status = 'RETRY';
         job.lastError = `circuit breaker open: ${decision.blockingIncidents.map((item) => item.code).join(', ')}`;
         job.circuitBreaker = {
-          operation: 'publishing',
+          operation: 'publishing-recovery',
           blockedAt: this.now().toISOString(),
           incidents: decision.blockingIncidents,
         };
