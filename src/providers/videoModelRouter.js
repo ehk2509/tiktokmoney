@@ -29,6 +29,9 @@ export class VideoModelRouter {
     const sceneClass = classifyScene(scene);
     const ranked = await this.rank(scene, sceneClass, context);
     const errors = [];
+    if (!ranked.length) {
+      throw new Error('all AI video providers are unavailable due to provider reliability circuits');
+    }
 
     let reference = null;
     if (this.referenceProvider?.prepareSceneReference) {
@@ -139,6 +142,17 @@ export class VideoModelRouter {
     }
 
     return results.sort((a, b) => b.score - a.score);
+  }
+
+  async reliabilitySnapshot() {
+    const states = {};
+    for (const provider of this.providers) {
+      const id = provider.profile?.id || provider.id || provider.constructor.name;
+      states[id] = this.reliabilityService
+        ? await this.reliabilityService.state(id)
+        : { providerId: id, state: 'UNKNOWN', reasons: [] };
+    }
+    return states;
   }
 
   async recordGenerationFailure(candidate, sceneClass, {
