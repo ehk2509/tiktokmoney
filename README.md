@@ -107,6 +107,29 @@ node src/cli.js billing-reconcile --id "vid_..."
 
 Imported records are keyed by `provider + taskId/generationId`, upserted idempotently, and only attach to matching project provenance. Reconciled costs carry their source in the project ledger.
 
+## Scheduled publishing and automatic metric refresh
+
+TikTok publication can now be queued for a future time while preserving the explicit publish-approval guard. Scheduling still requires `confirmPublish=true` and an explicit privacy level.
+
+```bash
+node src/cli.js publish-schedule \
+  --id "vid_..." \
+  --at "2026-10-08T12:00:00Z" \
+  --privacy SELF_ONLY \
+  --confirm-publish
+```
+
+The API server automatically polls the durable orchestration queue. After a scheduled publish succeeds, it creates a metrics-refresh job at the experiment observation window (or `PUBLICATION_METRICS_DELAY_HOURS` for non-experiment posts). If TikTok has not exposed the post/metrics yet, the job retries with the configured delay instead of silently completing.
+
+Operational commands:
+
+```bash
+node src/cli.js orchestration-jobs
+node src/cli.js orchestration-run
+```
+
+Set `ORCHESTRATION_AUTO_RUN=false` if an external cron/worker should own queue execution instead of the API process.
+
 ## Controlled creative experiments
 
 High-conviction opportunities that receive multiple production variants are now treated as controlled experiments. The first variant is the control and later variants are challengers under one persisted experiment ID.
