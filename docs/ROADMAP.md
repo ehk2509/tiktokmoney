@@ -159,7 +159,9 @@ Current M3 publishing intentionally requires an explicit per-post confirmation a
 
 - [ ] Revenue attribution
 - [x] Provider-reported task cost ledger + conservative estimated-vs-actual daily budget reconciliation
-- [ ] Full all-provider production-cost coverage (LLM/QC/media providers)
+- [x] OpenRouter QC usage/cost capture across all vision QC stages
+- [x] OpenAI-compatible LLM token/cost provenance when provider reports it
+- [ ] Remaining non-reporting provider coverage / account-billing reconciliation (Luma, ElevenLabs, stock)
 - [ ] Strategy analytics by hook/duration/style
 - [ ] Contextual exploration/exploitation policy
 - [x] Campaign budgets and autonomous daily planning

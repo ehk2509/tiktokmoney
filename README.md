@@ -83,7 +83,7 @@ The ledger never substitutes estimates for missing billing:
 
 Daily-plan jobs reconcile their planning estimate against that ledger. If coverage is incomplete, `actualCostUsd` and variance remain `null`; `observedCostUsd` and coverage are still reported. The plan-level `budget.reconciled` object follows the same rule, so incomplete provider billing can never masquerade as a complete production cost.
 
-Full all-provider cost coverage (LLM/QC and non-Runway media providers) remains a separate roadmap item.
+Cost provenance now also consumes OpenRouter QC `usage` (including reported `cost` when present) and OpenAI-compatible LLM token/cost metadata when the upstream provider returns it. Non-reporting providers still remain incomplete rather than being priced from hard-coded tables.
 
 ## Guarded TikTok publishing
 

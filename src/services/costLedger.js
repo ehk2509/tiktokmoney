@@ -1,22 +1,43 @@
-import { summarizeProviderUsage } from '../core/providerUsage.js';
+import { normalizeProviderUsage, summarizeProviderUsage } from '../core/providerUsage.js';
 
 export function buildProjectCostLedger(project) {
   const events = [];
   const seen = new Set();
 
-  walk(project, (value) => {
+  walk(project, (value, valuePath) => {
     if (!value || typeof value !== 'object') return;
+
     const usage = value.providerUsage;
-    if (!usage || typeof usage !== 'object') return;
-    const key = [
-      usage.provider || '',
-      usage.taskId || '',
-      usage.operation || '',
-      usage.model || '',
-    ].join(':');
-    if (seen.has(key)) return;
-    seen.add(key);
-    events.push({ ...usage });
+    if (usage && typeof usage === 'object') {
+      const key = [
+        usage.provider || '',
+        usage.taskId || '',
+        usage.operation || '',
+        usage.model || '',
+      ].join(':');
+      if (!seen.has(key)) {
+        seen.add(key);
+        events.push({ ...usage });
+      }
+    }
+
+    if (value.rawUsage && typeof value.rawUsage === 'object') {
+      const normalized = normalizeProviderUsage(
+        { usage: value.rawUsage },
+        {
+          provider: value.provider || inferProvider(valuePath),
+          operation: inferOperation(valuePath),
+          model: value.model || null,
+        },
+      );
+      if (normalized) {
+        const key = `raw:${valuePath}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          events.push(normalized);
+        }
+      }
+    }
   });
 
   const summary = summarizeProviderUsage(events);
@@ -54,14 +75,38 @@ export function reconcileEstimatedCost({
   };
 }
 
-function walk(value, visit) {
+function walk(value, visit, valuePath = 'project') {
   if (!value || typeof value !== 'object') return;
-  visit(value);
+  visit(value, valuePath);
   if (Array.isArray(value)) {
-    for (const item of value) walk(item, visit);
+    for (let index = 0; index < value.length; index += 1) {
+      walk(value[index], visit, `${valuePath}[${index}]`);
+    }
     return;
   }
-  for (const child of Object.values(value)) walk(child, visit);
+  for (const [key, child] of Object.entries(value)) {
+    walk(child, visit, `${valuePath}.${key}`);
+  }
+}
+
+function inferProvider(valuePath) {
+  return /realism|lipSync|speakerTurn|textArtifact|visualFactual|editorialVariety|productionIntegrity/i.test(valuePath)
+    ? 'openrouter'
+    : null;
+}
+
+function inferOperation(valuePath) {
+  const pairs = [
+    ['realism', 'realism-qc'],
+    ['lipSync', 'lip-sync-qc'],
+    ['speakerTurn', 'speaker-turn-qc'],
+    ['textArtifact', 'text-artifact-qc'],
+    ['visualFactual', 'visual-factual-qc'],
+    ['editorialVariety', 'editorial-variety-qc'],
+    ['productionIntegrity', 'production-integrity-qc'],
+  ];
+  const found = pairs.find(([needle]) => valuePath.includes(needle));
+  return found ? found[1] : 'provider-call';
 }
 
 function finiteOrNull(value) {

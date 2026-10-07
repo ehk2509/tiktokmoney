@@ -149,3 +149,42 @@ test('plan reconciliation supports legacy plans that have no budget object yet',
   assert.equal(result.actualUsd, null);
   assert.equal(result.observedUsd, 1.1);
 });
+
+
+test('project ledger captures OpenRouter raw usage with reported cost and token counts', () => {
+  const project = {
+    id: 'vid-openrouter',
+    scenes: [{
+      realismQc: {
+        provider: 'openrouter',
+        model: 'google/gemini-test',
+        rawUsage: {
+          cost: 0.0123,
+          prompt_tokens: 120,
+          completion_tokens: 30,
+          total_tokens: 150,
+        },
+      },
+      lipSyncQc: {
+        provider: 'openrouter',
+        model: 'google/gemini-test',
+        rawUsage: {
+          cost: 0.004,
+          prompt_tokens: 40,
+          completion_tokens: 10,
+          total_tokens: 50,
+        },
+      },
+    }],
+  };
+
+  const ledger = buildProjectCostLedger(project);
+  assert.equal(ledger.taskCount, 2);
+  assert.equal(ledger.costUsdComplete, true);
+  assert.equal(ledger.costUsd, 0.0163);
+  assert.deepEqual(
+    ledger.events.map((event) => event.operation).sort(),
+    ['lip-sync-qc', 'realism-qc'],
+  );
+  assert.equal(ledger.events[0].totalTokens + ledger.events[1].totalTokens, 200);
+});
