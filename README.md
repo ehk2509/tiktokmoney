@@ -107,6 +107,27 @@ node src/cli.js billing-reconcile --id "vid_..."
 
 Imported records are keyed by `provider + taskId/generationId`, upserted idempotently, and only attach to matching project provenance. Reconciled costs carry their source in the project ledger.
 
+## Closed-loop creative learning
+
+TikTok performance snapshots now feed a conservative evidence store instead of stopping at reporting.
+
+Each refreshed publication can persist an outcome containing:
+- winning creative candidate, format, emotional driver, hook and retention device;
+- views, likes, comments, shares and engagement rate;
+- complete actual cost when the project ledger is complete, otherwise observed cost only;
+- cost per 1,000 views only when complete cost evidence exists.
+
+Future audiovisual Creative Tournaments read this evidence automatically. Historical format/emotional-driver performance can adjust a judge score only after `PERFORMANCE_LEARNING_MIN_SAMPLES` is reached, and the adjustment is capped by `CREATIVE_LEARNING_MAX_ADJUSTMENT` (default 4 points).
+
+This is intentionally bounded evidence weighting, not autonomous retraining. One viral or failed post cannot dominate future selection.
+
+Inspect the evidence:
+
+```bash
+node src/cli.js performance-outcomes --limit 100
+node src/cli.js learning-context --audience "curious adults"
+```
+
 ## Guarded TikTok publishing
 
 TikTok publishing is available as an **explicitly confirmed** post-generation step. It is never invoked by `generate`, `plan`, or `run-plan`.

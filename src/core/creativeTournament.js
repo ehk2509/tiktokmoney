@@ -17,6 +17,8 @@ export class CreativeTournament {
     minWinnerScore = Number(process.env.CREATIVE_TOURNAMENT_MIN_WINNER_SCORE || 68),
     minMargin = Number(process.env.CREATIVE_TOURNAMENT_MIN_MARGIN || 2),
     weights = DEFAULT_WEIGHTS,
+    learningService = null,
+    maxLearningAdjustment = Number(process.env.CREATIVE_LEARNING_MAX_ADJUSTMENT || 4),
   } = {}) {
     this.llm = llm;
     this.enabled = Boolean(enabled);
@@ -24,6 +26,8 @@ export class CreativeTournament {
     this.minWinnerScore = clampScore(minWinnerScore, 68);
     this.minMargin = Math.max(0, Math.min(20, Number(minMargin) || 0));
     this.weights = normalizeWeights(weights);
+    this.learningService = learningService;
+    this.maxLearningAdjustment = Math.max(0, Math.min(10, Number(maxLearningAdjustment) || 0));
   }
 
   async run({
@@ -84,10 +88,19 @@ export class CreativeTournament {
       })
       : deterministicJudge(candidates);
 
-    const ranking = rankCandidates({
+    let ranking = rankCandidates({
       candidates,
       judgments: judged?.judgments ?? judged,
       weights: this.weights,
+    });
+    const performanceEvidence = this.learningService?.contextFor
+      ? await this.learningService.contextFor({ topic, audience })
+      : null;
+    ranking = applyPerformanceEvidence({
+      ranking,
+      candidates,
+      evidence: performanceEvidence,
+      maxAdjustment: this.maxLearningAdjustment,
     });
     if (!ranking.length) throw new Error('creative tournament did not produce a ranking');
 
@@ -125,7 +138,10 @@ export class CreativeTournament {
       judge: {
         source: judged?.source || 'deterministic',
         model: judged?.model || null,
+        providerUsage: judged?.providerUsage || null,
       },
+      generatorUsage: generated?.providerUsage || null,
+      performanceEvidence,
     };
   }
 }
@@ -459,4 +475,50 @@ function envBool(value, fallback) {
 
 function round(value) {
   return Math.round(Number(value) * 100) / 100;
+}
+
+
+export function applyPerformanceEvidence({
+  ranking,
+  candidates,
+  evidence,
+  maxAdjustment = 4,
+}) {
+  if (!evidence || !Array.isArray(ranking) || !ranking.length) return ranking;
+  const byId = new Map((candidates || []).map((candidate) => [candidate.id, candidate]));
+  const eligibleScores = [];
+
+  for (const bucket of [evidence.format, evidence.emotionalDriver]) {
+    for (const item of Object.values(bucket || {})) {
+      if (item?.eligible && Number.isFinite(Number(item.score))) eligibleScores.push(Number(item.score));
+    }
+  }
+  if (!eligibleScores.length) return ranking;
+
+  const baseline = eligibleScores.reduce((sum, value) => sum + value, 0) / eligibleScores.length;
+  const cap = Math.max(0, Math.min(10, Number(maxAdjustment) || 0));
+
+  return ranking
+    .map((row) => {
+      const candidate = byId.get(row.candidateId);
+      if (!candidate) return row;
+      const signals = [
+        evidence.format?.[String(candidate.format || '').trim().toLowerCase()],
+        evidence.emotionalDriver?.[String(candidate.emotionalDriver || '').trim().toLowerCase()],
+      ].filter((item) => item?.eligible && Number.isFinite(Number(item.score)));
+
+      if (!signals.length || cap === 0) {
+        return { ...row, baseScore: row.score, learningAdjustment: 0 };
+      }
+
+      const mean = signals.reduce((sum, item) => sum + Number(item.score), 0) / signals.length;
+      const adjustment = Math.max(-cap, Math.min(cap, (mean - baseline) * 1.5));
+      return {
+        ...row,
+        baseScore: row.score,
+        learningAdjustment: round(adjustment),
+        score: round(row.score + adjustment),
+      };
+    })
+    .sort((a, b) => b.score - a.score);
 }

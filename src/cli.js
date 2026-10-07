@@ -78,6 +78,15 @@ try {
     console.log(JSON.stringify(await app.listPublications({
       limit: options.limit ? Number(options.limit) : undefined,
     }), null, 2));
+  } else if (command === 'performance-outcomes') {
+    console.log(JSON.stringify(await app.listPerformanceOutcomes({
+      limit: options.limit ? Number(options.limit) : undefined,
+    }), null, 2));
+  } else if (command === 'learning-context') {
+    console.log(JSON.stringify(await app.performanceLearningContext({
+      topic: options.topic || null,
+      audience: options.audience || null,
+    }), null, 2));
   } else if (command === 'opportunities') {
     console.log(JSON.stringify(await app.opportunities(), null, 2));
   } else if (command === 'research') {
@@ -171,6 +180,8 @@ try {
       '  publication-refresh --id "pub_..."',
       '  publication-metrics --id "pub_..."',
       '  publications [--limit 50]',
+      '  performance-outcomes [--limit 100]',
+      '  learning-context [--topic "..."] [--audience "..."]',
       '  research --topic "..."',
       '  plan [--budget 6] [--max-videos 3]',
       '  run-plan --id "plan_..."',

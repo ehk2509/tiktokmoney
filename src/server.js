@@ -50,6 +50,18 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
+    if (req.method === 'GET' && req.url === '/api/performance/outcomes') {
+      return json(res, 200, { items: await app.listPerformanceOutcomes() });
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/api/performance/context')) {
+      const url = new URL(req.url, 'http://localhost');
+      return json(res, 200, await app.performanceLearningContext({
+        topic: url.searchParams.get('topic'),
+        audience: url.searchParams.get('audience'),
+      }));
+    }
+
     if (req.method === 'GET' && req.url === '/api/opportunities') {
       return json(res, 200, { items: await app.opportunities() });
     }

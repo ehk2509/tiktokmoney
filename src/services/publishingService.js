@@ -1,10 +1,17 @@
 import crypto from 'node:crypto';
 
 export class PublishingService {
-  constructor({ projectStore, publicationStore, publisher, now = () => new Date() }) {
+  constructor({
+    projectStore,
+    publicationStore,
+    publisher,
+    learningService = null,
+    now = () => new Date(),
+  }) {
     this.projectStore = projectStore;
     this.publicationStore = publicationStore;
     this.publisher = publisher;
+    this.learningService = learningService;
     this.now = now;
   }
 
@@ -93,6 +100,10 @@ export class PublishingService {
       });
       publication.updatedAt = this.now().toISOString();
       await this.publicationStore.savePublication(publication);
+      if (this.learningService?.recordPublication) {
+        publication.latestOutcome = await this.learningService.recordPublication(publication);
+        await this.publicationStore.savePublication(publication);
+      }
     }
     return publication;
   }

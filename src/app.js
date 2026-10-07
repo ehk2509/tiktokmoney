@@ -5,6 +5,8 @@ import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
 import { DailyPlanStore } from './storage/dailyPlanStore.js';
 import { PublicationStore } from './storage/publicationStore.js';
+import { PerformanceLearningStore } from './storage/performanceLearningStore.js';
+import { PerformanceLearningService } from './services/performanceLearningService.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
@@ -47,11 +49,19 @@ export function createApp(overrides = {}) {
   const publicationStore = overrides.publicationStore || new PublicationStore(
     process.env.PUBLICATION_STORE_PATH || './data/publications.json',
   );
+  const performanceLearningStore = overrides.performanceLearningStore || new PerformanceLearningStore(
+    process.env.PERFORMANCE_LEARNING_PATH || './data/performance-learning.json',
+  );
+  const learningService = overrides.learningService || new PerformanceLearningService({
+    store: performanceLearningStore,
+    projectStore: store,
+  });
   const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher();
   const publishingService = overrides.publishingService || new PublishingService({
     projectStore: store,
     publicationStore,
     publisher: tiktokPublisher,
+    learningService,
   });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
   const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
@@ -143,6 +153,7 @@ export function createApp(overrides = {}) {
       productionIntegrityQc,
       subtitleConfig: overrides.subtitleConfig,
       creativeTournament: overrides.creativeTournament,
+      learningService,
       trendIntelligence,
       keyframeDirector: overrides.keyframeDirector,
       motionRegionDirector: overrides.motionRegionDirector,
@@ -180,6 +191,8 @@ export function createApp(overrides = {}) {
     motionReferenceStore,
     motionLibraryBuilder,
     publishingService,
+    learningService,
+    performanceLearningStore,
     billingStore: store.billingStore || null,
     async importProviderBilling(records, options = {}) {
       if (!store.billingStore) throw new Error('provider billing store is not configured');
@@ -204,6 +217,12 @@ export function createApp(overrides = {}) {
     },
     async listPublications(options = {}) {
       return publishingService.listPublications(options);
+    },
+    async listPerformanceOutcomes(options = {}) {
+      return performanceLearningStore.listOutcomes(options);
+    },
+    async performanceLearningContext(options = {}) {
+      return learningService.contextFor(options);
     },
     async opportunities() {
       const items = await trends.list();
