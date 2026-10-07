@@ -41,6 +41,15 @@ try {
   } else if (command === 'tiktok-auth-refresh') {
     await app.refreshTikTokAuthorization();
     console.log(JSON.stringify(await app.tiktokAuthorizationStatus(), null, 2));
+  } else if (command === 'tiktok-webhooks') {
+    console.log(JSON.stringify(await app.listTikTokWebhooks({
+      limit: options.limit ? Number(options.limit) : undefined,
+      status: options.status || null,
+    }), null, 2));
+  } else if (command === 'tiktok-webhooks-process') {
+    console.log(JSON.stringify(await app.processPendingTikTokWebhooks({
+      limit: options.limit ? Number(options.limit) : undefined,
+    }), null, 2));
   } else if (command === 'billing-import') {
     const file = options.file || options.input;
     if (!file) throw new Error('Usage: node src/cli.js billing-import --file ./billing.json [--source provider-export]');
@@ -216,6 +225,8 @@ try {
       '  tiktok-auth-url',
       '  tiktok-auth-status',
       '  tiktok-auth-refresh',
+      '  tiktok-webhooks [--status RECEIVED]',
+      '  tiktok-webhooks-process [--limit 100]',
       '  billing-import --file ./billing.json [--source provider-export]',
       '  billing-reconcile --id "vid_..."',
       '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',

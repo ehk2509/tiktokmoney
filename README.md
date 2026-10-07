@@ -171,6 +171,41 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## TikTok webhook ingestion
+
+TikTokMoney now accepts verified TikTok webhook events at:
+
+```text
+POST /api/tiktok/webhooks
+```
+
+Configure that HTTPS callback URL in the TikTok Developer Portal Webhooks section. TikTok expects the endpoint to acknowledge receipt with HTTP 200 quickly and may deliver the same event more than once, so TikTokMoney verifies and persists the event first, responds, then processes it idempotently.
+
+Webhook signatures are validated from the `TikTok-Signature` header with HMAC-SHA256 over:
+
+```text
+timestamp.raw_request_body
+```
+
+using `TIKTOK_CLIENT_SECRET`. Events outside `TIKTOK_WEBHOOK_MAX_AGE_SECONDS` are rejected to reduce replay risk.
+
+Handled events include:
+- `authorization.removed`: clears the matching durable OAuth token because TikTok has already revoked it;
+- `post.publish.complete`: marks the matching publication complete and immediately refreshes TikTok post status;
+- `post.publish.failed`: persists the failure reason on the matching publication;
+- `post.publish.inbox_delivered`: marks inbox-delivery state;
+- legacy `video.publish.completed` / `video.upload.failed` events are also understood.
+
+Webhook delivery is at-least-once, so the event store hashes the signed payload into a stable event ID and ignores duplicate receipts. Failed downstream processing remains persisted as `RETRY` and is retried by the existing server orchestration poll.
+
+Operational commands:
+
+```bash
+node src/cli.js tiktok-webhooks
+node src/cli.js tiktok-webhooks --status RETRY
+node src/cli.js tiktok-webhooks-process
+```
+
 ## TikTok OAuth account lifecycle
 
 TikTokMoney can now manage a persistent TikTok Login Kit OAuth session instead of relying on a manually rotated access token.

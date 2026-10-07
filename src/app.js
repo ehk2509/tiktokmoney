@@ -7,11 +7,13 @@ import { DailyPlanStore } from './storage/dailyPlanStore.js';
 import { PublicationStore } from './storage/publicationStore.js';
 import { OrchestrationStore } from './storage/orchestrationStore.js';
 import { TikTokAuthStore } from './storage/tiktokAuthStore.js';
+import { TikTokWebhookStore } from './storage/tiktokWebhookStore.js';
 import { PerformanceLearningStore } from './storage/performanceLearningStore.js';
 import { PerformanceLearningService } from './services/performanceLearningService.js';
 import { ExperimentService } from './services/experimentService.js';
 import { PublicationOrchestrator } from './services/publicationOrchestrator.js';
 import { TikTokAuthService } from './services/tiktokAuthService.js';
+import { TikTokWebhookService } from './services/tiktokWebhookService.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
@@ -73,6 +75,9 @@ export function createApp(overrides = {}) {
   const tiktokAuthService = overrides.tiktokAuthService || new TikTokAuthService({
     store: tiktokAuthStore,
   });
+  const tiktokWebhookStore = overrides.tiktokWebhookStore || new TikTokWebhookStore(
+    process.env.TIKTOK_WEBHOOK_STORE_PATH || './data/tiktok-webhooks.json',
+  );
   const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher({
     authService: tiktokAuthService,
   });
@@ -88,6 +93,12 @@ export function createApp(overrides = {}) {
     publishingService,
     projectStore: store,
     experimentService,
+  });
+  const tiktokWebhookService = overrides.tiktokWebhookService || new TikTokWebhookService({
+    store: tiktokWebhookStore,
+    publicationStore,
+    publishingService,
+    authStore: tiktokAuthStore,
   });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
   const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
@@ -222,6 +233,8 @@ export function createApp(overrides = {}) {
     orchestrationStore,
     tiktokAuthStore,
     tiktokAuthService,
+    tiktokWebhookStore,
+    tiktokWebhookService,
     learningService,
     experimentService,
     performanceLearningStore,
@@ -261,6 +274,18 @@ export function createApp(overrides = {}) {
     },
     async tiktokAuthorizationStatus() {
       return tiktokAuthService.status();
+    },
+    async receiveTikTokWebhook(input = {}) {
+      return tiktokWebhookService.receive(input);
+    },
+    async processTikTokWebhook(eventId) {
+      return tiktokWebhookService.processEvent(eventId);
+    },
+    async processPendingTikTokWebhooks(options = {}) {
+      return tiktokWebhookService.processPending(options);
+    },
+    async listTikTokWebhooks(options = {}) {
+      return tiktokWebhookStore.listEvents(options);
     },
     async schedulePublication(projectId, options = {}) {
       return publicationOrchestrator.schedulePublish(projectId, options);

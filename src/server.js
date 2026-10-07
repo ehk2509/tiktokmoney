@@ -16,6 +16,31 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    if (req.method === 'POST' && req.url === '/api/tiktok/webhooks') {
+      const rawBody = await readRaw(req);
+      const received = await app.receiveTikTokWebhook({
+        rawBody,
+        signatureHeader: req.headers['tiktok-signature'],
+      });
+      json(res, 200, { ok: true, duplicate: received.duplicate, eventId: received.event.id });
+      setImmediate(async () => {
+        try {
+          await app.processTikTokWebhook(received.event.id);
+        } catch (error) {
+          console.error(`TikTok webhook processing failed: ${error.message}`);
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/api/tiktok/webhooks') {
+      return json(res, 200, { items: await app.listTikTokWebhooks() });
+    }
+
+    if (req.method === 'POST' && req.url === '/api/tiktok/webhooks/process') {
+      return json(res, 200, { items: await app.processPendingTikTokWebhooks() });
+    }
+
     if (req.method === 'GET' && req.url === '/api/tiktok/oauth/start') {
       const auth = await app.beginTikTokAuthorization();
       res.writeHead(302, { location: auth.url });
@@ -229,9 +254,14 @@ function json(res, status, body) {
 }
 
 async function readJson(req) {
+  const raw = await readRaw(req);
+  return raw ? JSON.parse(raw) : {};
+}
+
+async function readRaw(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
-  return raw ? JSON.parse(raw) : {};
+  return raw;
 }
 
 
@@ -247,6 +277,7 @@ if (orchestrationAutoRun) {
   const timer = setInterval(async () => {
     try {
       await app.runPublicationOrchestration();
+      await app.processPendingTikTokWebhooks();
     } catch (error) {
       console.error(`Publication orchestration tick failed: ${error.message}`);
     }
