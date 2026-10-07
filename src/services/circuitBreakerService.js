@@ -64,7 +64,8 @@ function operationBlockingCodes(operation) {
     return new Set([
       'project_failure_rate_high',
       'daily_budget_overrun',
-      'orchestration_failed_jobs',
+      'orchestration_retry_backlog',
+      'orchestration_stuck_jobs',
     ]);
   }
 
@@ -72,7 +73,8 @@ function operationBlockingCodes(operation) {
     return new Set([
       'tiktok_auth_missing',
       'tiktok_reauthorization_required',
-      'orchestration_failed_jobs',
+      'orchestration_retry_backlog',
+      'orchestration_stuck_jobs',
     ]);
   }
 
