@@ -1,6 +1,7 @@
 import { normalizeProviderUsage, summarizeProviderUsage } from '../core/providerUsage.js';
+import { matchBillingRecords } from './billingReconciliation.js';
 
-export function buildProjectCostLedger(project) {
+export function buildProjectCostLedger(project, { billingRecords = [] } = {}) {
   const events = [];
   const seen = new Set();
 
@@ -39,6 +40,28 @@ export function buildProjectCostLedger(project) {
       }
     }
   });
+
+  const reconciled = matchBillingRecords(project, billingRecords);
+  for (const event of reconciled) {
+    const key = [
+      event.provider || '',
+      event.taskId || '',
+      event.operation || '',
+      event.model || '',
+    ].join(':');
+    const existingIndex = events.findIndex((item) => (
+      [item.provider || '', item.taskId || '', item.operation || '', item.model || ''].join(':') === key
+    ));
+    if (existingIndex >= 0) {
+      events[existingIndex] = {
+        ...events[existingIndex],
+        ...event,
+        providerReported: true,
+      };
+    } else {
+      events.push(event);
+    }
+  }
 
   const summary = summarizeProviderUsage(events);
   return {
