@@ -140,7 +140,7 @@
 - [x] TikTok official publishing adapter with explicit-confirmation guard
 - [ ] Scheduling queue
 - [x] Post status + basic engagement metric snapshots
-- [ ] Creative feature extraction
+- [x] Creative feature extraction + TikTok outcome evidence
 - [ ] A/B experiment model
 
 Current M3 publishing intentionally requires an explicit per-post confirmation and a user access token. OAuth/token-refresh UX, scheduling, webhooks and experiment assignment remain open.
@@ -163,6 +163,6 @@ Current M3 publishing intentionally requires an explicit per-post confirmation a
 - [x] OpenAI-compatible LLM token/cost provenance when provider reports it
 - [x] External provider/account billing import and provenance reconciliation for non-reporting providers
 - [ ] Native automated account-billing adapters where provider APIs expose billing endpoints
-- [ ] Strategy analytics by hook/duration/style
+- [x] Conservative performance-learning context for future creative ranking by hook/duration/style
 - [ ] Contextual exploration/exploitation policy
 - [x] Campaign budgets and autonomous daily planning
