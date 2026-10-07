@@ -2,7 +2,7 @@
   "name": "tiktokmoney",
   "version": "0.26.0",
   "private": true,
-  "description": "Prototype autonomous short-form video engine: trend scoring, creative generation, scene planning and FFmpeg rendering.",
+  "description": "Autonomous short-form video engine for trend discovery, AI generation, quality control, TikTok publishing, analytics and closed-loop learning.",
   "type": "module",
   "engines": {
     "node": ">=22.9"
@@ -21,5 +21,27 @@
     "motion-library:list": "node --env-file-if-exists=.env src/cli.js motion-library",
     "benchmark:real": "node --env-file-if-exists=.env src/cli.js benchmark-real",
     "benchmark:summary": "node --env-file-if-exists=.env src/cli.js benchmark-summary"
-  }
+  },
+  "keywords": [
+    "ai-video",
+    "tiktok",
+    "short-form-video",
+    "video-generation",
+    "generative-ai",
+    "content-automation",
+    "social-media-automation",
+    "content-creation",
+    "ai-agents",
+    "text-to-video",
+    "video-editing",
+    "ffmpeg",
+    "tiktok-api",
+    "content-pipeline",
+    "audiovisual",
+    "llm",
+    "openrouter",
+    "runway",
+    "luma-ai",
+    "elevenlabs"
+  ]
 }
