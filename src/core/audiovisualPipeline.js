@@ -34,6 +34,7 @@ export class AudiovisualPipeline {
     subtitleConfig = null,
     referenceStore = null,
     creativeTournament = null,
+    learningService = null,
     trendIntelligence = null,
     realismDirector = null,
     keyframeDirector = null,
@@ -43,7 +44,7 @@ export class AudiovisualPipeline {
     preGenerationMaxRewrites = Number(process.env.PRE_GENERATION_QC_MAX_REWRITES || 1),
   }) {
     this.productionScriptGenerator = new ProductionScriptGenerator({ llm });
-    this.creativeTournament = creativeTournament || new CreativeTournament({ llm });
+    this.creativeTournament = creativeTournament || new CreativeTournament({ llm, learningService });
     this.trendIntelligence = trendIntelligence;
     this.realismDirector = realismDirector || new RealismDirector();
     this.keyframeDirector = keyframeDirector || new KeyframeDirector();
