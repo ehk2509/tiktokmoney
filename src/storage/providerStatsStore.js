@@ -86,6 +86,34 @@ export class ProviderStatsStore {
     return summarize(current, outcome.sceneClass);
   }
 
+  async recordFeedback(providerId, {
+    qualityScore = null,
+    actualCostUsd = null,
+    passed = true,
+  } = {}) {
+    const data = await this.readAll();
+    const current = normalize(data[providerId]);
+
+    if (Number.isFinite(Number(qualityScore))) {
+      current.qualityScoreTotal += Number(qualityScore);
+      current.qualityScoreCount += 1;
+    }
+    if (Number.isFinite(Number(actualCostUsd))) {
+      current.actualCostUsdObserved += Math.max(0, Number(actualCostUsd));
+      current.actualCostCount += 1;
+      if (passed) {
+        current.successCostUsdObserved += Math.max(0, Number(actualCostUsd));
+        current.successCostCount += 1;
+      }
+    }
+
+    current.updatedAt = new Date().toISOString();
+    data[providerId] = current;
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await writeFile(this.filePath, JSON.stringify(data, null, 2));
+    return summarize(current);
+  }
+
   async readAll() {
     try {
       return JSON.parse(await readFile(this.filePath, 'utf8'));
