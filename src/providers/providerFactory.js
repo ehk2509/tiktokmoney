@@ -35,7 +35,7 @@ export function createLlmProvider(env = process.env) {
   if (provider === 'template') return new TemplateLlmProvider();
   if (provider === 'openai-compatible' || provider === 'openai') {
     const models = unique([
-      env.LLM_MODEL,
+      env.LLM_MODEL || 'gpt-5.6-luna',
       ...csv(env.LLM_FALLBACK_MODELS),
     ].filter(Boolean));
     const entries = models.map((model, index) => ({
@@ -371,7 +371,7 @@ export function createDialogueQcProvider(env = process.env) {
   }
 
   const models = unique([
-    env.TRANSCRIPTION_MODEL,
+    env.TRANSCRIPTION_MODEL || 'gpt-transcribe',
     ...csv(env.TRANSCRIPTION_FALLBACK_MODELS),
   ].filter(Boolean));
   const entries = models.map((model) => ({
