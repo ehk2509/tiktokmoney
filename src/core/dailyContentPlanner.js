@@ -239,6 +239,7 @@ export class DailyContentPlanner {
           ? 'PARTIAL'
           : 'FAILED';
     plan.completedAt = new Date().toISOString();
+    plan.budget = plan.budget || {};
     plan.budget.reconciled = reconcilePlanBudget(plan);
     await this.store.savePlan(plan);
     return plan;
