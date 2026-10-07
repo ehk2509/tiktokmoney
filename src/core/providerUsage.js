@@ -24,6 +24,27 @@ export function normalizeProviderUsage(task, {
     billing.credits,
   );
 
+  const promptTokens = firstFinite(
+    task.promptTokens,
+    task.prompt_tokens,
+    usage.promptTokens,
+    usage.prompt_tokens,
+    usage.input_tokens,
+  );
+  const completionTokens = firstFinite(
+    task.completionTokens,
+    task.completion_tokens,
+    usage.completionTokens,
+    usage.completion_tokens,
+    usage.output_tokens,
+  );
+  const totalTokens = firstFinite(
+    task.totalTokens,
+    task.total_tokens,
+    usage.totalTokens,
+    usage.total_tokens,
+  );
+
   return {
     provider,
     operation,
@@ -32,26 +53,9 @@ export function normalizeProviderUsage(task, {
     model: task.model || task.modelId || task.model_id || model || null,
     costUsd,
     credits,
-    promptTokens: firstFinite(
-      task.promptTokens,
-      task.prompt_tokens,
-      usage.promptTokens,
-      usage.prompt_tokens,
-      usage.input_tokens,
-    ),
-    completionTokens: firstFinite(
-      task.completionTokens,
-      task.completion_tokens,
-      usage.completionTokens,
-      usage.completion_tokens,
-      usage.output_tokens,
-    ),
-    totalTokens: firstFinite(
-      task.totalTokens,
-      task.total_tokens,
-      usage.totalTokens,
-      usage.total_tokens,
-    ),
+    ...(promptTokens != null ? { promptTokens } : {}),
+    ...(completionTokens != null ? { completionTokens } : {}),
+    ...(totalTokens != null ? { totalTokens } : {}),
     providerReported: costUsd != null || credits != null,
   };
 }
