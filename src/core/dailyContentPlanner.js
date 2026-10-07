@@ -102,6 +102,9 @@ export class DailyContentPlanner {
       const desiredVideos = conviction ? this.maxVideosPerOpportunity : 1;
       const allocatedVideos = Math.min(desiredVideos, remainingSlots, affordableSlots);
 
+      const experimentId = allocatedVideos > 1
+        ? `exp_${crypto.randomUUID()}`
+        : null;
       for (let variantIndex = 0; variantIndex < allocatedVideos; variantIndex += 1) {
         const creativeCandidateCount = chooseCreativeCandidateCount(opportunity, conviction);
         jobs.push({
@@ -115,6 +118,14 @@ export class DailyContentPlanner {
           render: Boolean(render),
           variantIndex,
           variantCount: allocatedVideos,
+          experiment: experimentId ? {
+            id: experimentId,
+            arm: variantIndex === 0 ? 'control' : `challenger-${variantIndex}`,
+            armIndex: variantIndex,
+            armCount: allocatedVideos,
+            observationWindowHours: Number(process.env.EXPERIMENT_OBSERVATION_WINDOW_HOURS || 24),
+            comparisonToleranceHours: Number(process.env.EXPERIMENT_COMPARISON_TOLERANCE_HOURS || 3),
+          } : null,
           creativeCandidateCount,
           opportunityScore: round(opportunity.opportunityScore),
           velocity: round(opportunity.velocity),
@@ -207,6 +218,7 @@ export class DailyContentPlanner {
           researchPacket: job.researchPacket,
           creativeCandidateCount: job.creativeCandidateCount,
           productionVariantIndex: job.variantIndex,
+          experiment: job.experiment || null,
         });
 
         job.projectId = project.id || null;
