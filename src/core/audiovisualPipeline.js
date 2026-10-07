@@ -483,6 +483,9 @@ async function runQcAttempts({
           speakerDescription: speaker
             ? [speaker.name, speaker.description, speaker.physicalTraits].filter(Boolean).join('. ')
             : '',
+          // Multi-speaker acts: each line is judged against its own speaker.
+          turns: asset.dialogueTrack?.turns?.length ? asset.dialogueTrack.turns : segment.dialogueTurns,
+          characters: productionScript.characters,
         })
         : {
           passed: false,

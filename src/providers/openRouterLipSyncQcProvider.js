@@ -1,4 +1,5 @@
 import { FrameSampler } from '../services/frameSampler.js';
+import { normalizeScoreScale, SCORE_SCALE_INSTRUCTION } from './qcScores.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -35,6 +36,8 @@ export class OpenRouterLipSyncQcProvider {
     transcription,
     expectedText = '',
     speakerDescription = '',
+    turns = [],
+    characters = [],
   } = {}) {
     if (!asset?.localPath) throw new Error('lip-sync QC requires a local audiovisual asset');
 
@@ -57,7 +60,8 @@ export class OpenRouterLipSyncQcProvider {
       };
     }
 
-    const samples = buildLipSyncSamples(words, {
+    const speakers = assignSpeakers(words, turns, characters);
+    const samples = buildLipSyncSamples(speakers.words, {
       durationSeconds: Number(transcription?.duration) || inferDuration(words),
       maxFrames: this.maxFrames,
     });
@@ -75,6 +79,7 @@ export class OpenRouterLipSyncQcProvider {
           actualText: transcription?.text || '',
           speakerDescription,
           samples,
+          cast: speakers.cast,
         }),
       },
       ...frames.flatMap((frame, index) => ([
@@ -106,6 +111,7 @@ export class OpenRouterLipSyncQcProvider {
               'You are a strict audiovisual continuity reviewer.',
               'You are NOT given phoneme-level mouth landmarks, so do not claim phoneme-perfect sync.',
               'Judge whether visible mouth activity is plausibly aligned with the supplied speech-active and pause timestamps.',
+              SCORE_SCALE_INSTRUCTION,
               'Return JSON only.',
             ].join(' '),
           },
@@ -117,16 +123,15 @@ export class OpenRouterLipSyncQcProvider {
     const payload = await readJsonResponse(response);
     const raw = payload?.choices?.[0]?.message?.content;
     const parsed = parseJsonObject(raw);
-    const scores = {
+    let scores = {
       speakerVisibility: clampScore(parsed?.scores?.speakerVisibility),
       mouthActivityDuringSpeech: clampScore(parsed?.scores?.mouthActivityDuringSpeech),
       mouthStillnessDuringPauses: clampScore(parsed?.scores?.mouthStillnessDuringPauses),
       faceStability: clampScore(parsed?.scores?.faceStability),
       timingPlausibility: clampScore(parsed?.scores?.timingPlausibility),
     };
-    const score = clampScore(
-      parsed?.score ?? average(Object.values(scores)),
-    );
+    let score;
+    ({ score, scores } = normalizeScoreScale(parsed?.score, scores));
     const reported = normalizeIssues(parsed?.issues);
     // Issue-driven like factual/variety QC: regenerate for a concrete high/critical
     // defect seen across frames, or clearly broken sync below the hard floor.
@@ -175,6 +180,37 @@ export class OpenRouterLipSyncQcProvider {
   }
 }
 
+/**
+ * Attribute transcript words to dialogue turns by word order (the dialogue QC has
+ * already verified the words match the script), so multi-speaker acts are judged
+ * per line instead of against a single speaker.
+ */
+export function assignSpeakers(words = [], turns = [], characters = []) {
+  const ordered = (Array.isArray(turns) ? turns : []).filter((turn) => String(turn?.text || '').trim());
+  const speakerIds = [...new Set(ordered.map((turn) => turn.speakerCharacterId))];
+  if (speakerIds.length < 2) return { words, cast: [] };
+
+  const byId = new Map((characters || []).map((character) => [character.id, character]));
+  const nameOf = (id) => byId.get(id)?.name || String(id);
+  const cast = speakerIds.map((id) => ({
+    label: nameOf(id),
+    description: [byId.get(id)?.description, byId.get(id)?.physicalTraits].filter(Boolean).join('. ') || nameOf(id),
+  }));
+
+  const counts = ordered.map((turn) => String(turn.text).trim().split(/\s+/).filter(Boolean).length);
+  let turnIndex = 0;
+  let used = 0;
+  const labelled = words.map((word) => {
+    while (turnIndex < ordered.length - 1 && used >= counts[turnIndex]) {
+      turnIndex += 1;
+      used = 0;
+    }
+    used += 1;
+    return { ...word, speaker: nameOf(ordered[turnIndex].speakerCharacterId) };
+  });
+  return { words: labelled, cast };
+}
+
 export function lipContactSounds(word) {
   const lower = String(word || '').toLowerCase().replace(/[^a-z]/g, '');
   const found = [];
@@ -191,6 +227,7 @@ export function buildLipSyncSamples(words, {
     .filter((word) => Number.isFinite(Number(word.start)) && Number.isFinite(Number(word.end)))
     .map((word) => ({
       word: String(word.word || '').trim(),
+      speaker: word.speaker || null,
       start: Math.max(0, Number(word.start)),
       end: Math.max(Number(word.start), Number(word.end)),
     }))
@@ -203,13 +240,15 @@ export function buildLipSyncSamples(words, {
   const active = activeIndices.map((index) => {
     const word = cleanWords[index];
     const closures = lipContactSounds(word.word);
+    const who = word.speaker ? ` by ${word.speaker}` : '';
     return {
       kind: 'speech',
       word: word.word,
+      speaker: word.speaker || null,
       timestamp: round((word.start + word.end) / 2),
       label: closures
-        ? `SPEECH ACTIVE around word "${word.word}" (contains ${closures}: momentary closed lips or lip-teeth contact here is correct articulation)`
-        : `SPEECH ACTIVE around word "${word.word}"`,
+        ? `SPEECH ACTIVE${who} around word "${word.word}" (contains ${closures}: momentary closed lips or lip-teeth contact here is correct articulation)`
+        : `SPEECH ACTIVE${who} around word "${word.word}"`,
     };
   });
 
@@ -260,12 +299,19 @@ function buildPrompt({
   actualText,
   speakerDescription,
   samples,
+  cast = [],
 }) {
+  const multiSpeaker = cast.length > 1;
   return [
     'Evaluate visual speech timing for ONE generated audiovisual act.',
     `Expected screenplay dialogue: ${expectedText}`,
     `Independent transcript: ${actualText}`,
-    speakerDescription ? `Intended speaker: ${speakerDescription}` : '',
+    multiSpeaker
+      ? `Speakers, in order: ${cast.map((member) => `${member.label} = ${member.description}`).join(' | ')}`
+      : speakerDescription ? `Intended speaker: ${speakerDescription}` : '',
+    multiSpeaker
+      ? 'Each SPEECH ACTIVE frame names who is speaking at that moment. Judge THAT person\'s mouth for that frame; the other speakers should be quiet then. Report wrong-speaker only when someone other than the named speaker visibly articulates while the named speaker stays still.'
+      : '',
     '',
     'The supplied frames are sampled using independent word timestamps.',
     'Frames labeled SPEECH ACTIVE should normally show plausible visible articulation when the speaker face is visible.',

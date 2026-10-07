@@ -1,4 +1,5 @@
 import { FrameSampler } from '../services/frameSampler.js';
+import { SCORE_SCALE_INSTRUCTION } from './qcScores.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -80,6 +81,7 @@ export class OpenRouterVisualFactualQcProvider {
               'Do not require the video to prove every spoken claim.',
               'A narration line may preview an event or explanation that occurs in a later clip. If the current frames do not show that later event, treat it as not-yet-visualized evidence, not as a contradiction.',
               'The numeric score is diagnostic only. A low score without a high-confidence blocking contradiction must not fail the clip.',
+              SCORE_SCALE_INSTRUCTION,
               'Return JSON only.',
             ].join(' '),
           },

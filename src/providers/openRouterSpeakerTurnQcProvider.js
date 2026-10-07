@@ -1,4 +1,5 @@
 import { FrameSampler } from '../services/frameSampler.js';
+import { normalizeScoreScale, SCORE_SCALE_INSTRUCTION } from './qcScores.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -8,6 +9,7 @@ export class OpenRouterSpeakerTurnQcProvider {
     baseUrl = process.env.OPENROUTER_BASE_URL || DEFAULT_BASE_URL,
     model = process.env.SPEAKER_TURN_QC_MODEL || process.env.REALISM_QC_MODEL,
     threshold = Number(process.env.SPEAKER_TURN_QC_THRESHOLD || 82),
+    minScore = Number(process.env.SPEAKER_TURN_QC_MIN_SCORE || 55),
     frameWidth = Number(process.env.SPEAKER_TURN_QC_FRAME_WIDTH || 448),
     maxRegenerations = Number(process.env.SPEAKER_TURN_QC_MAX_REGENERATIONS || 1),
     frameSampler = new FrameSampler(),
@@ -21,6 +23,7 @@ export class OpenRouterSpeakerTurnQcProvider {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.model = model;
     this.threshold = clampScore(threshold);
+    this.minScore = clampScore(minScore);
     this.frameWidth = clampInt(frameWidth, 256, 768, 448);
     this.maxRegenerations = Math.max(0, Math.min(3, Number(maxRegenerations) || 0));
     this.frameSampler = frameSampler;
@@ -90,6 +93,7 @@ export class OpenRouterSpeakerTurnQcProvider {
             content: [
               'You are a strict dialogue blocking and speaker-attribution reviewer.',
               'Judge visible speaker identity and mouth activity only from the supplied frames and timing plan.',
+              SCORE_SCALE_INSTRUCTION,
               'Return JSON only.',
             ].join(' '),
           },
@@ -101,17 +105,35 @@ export class OpenRouterSpeakerTurnQcProvider {
     const payload = await readJsonResponse(response);
     const raw = payload?.choices?.[0]?.message?.content;
     const parsed = parseJsonObject(raw);
-    const scores = {
+    let scores = {
       speakerAttribution: clampScore(parsed?.scores?.speakerAttribution),
       activeSpeakerMouthMotion: clampScore(parsed?.scores?.activeSpeakerMouthMotion),
       listenerStillness: clampScore(parsed?.scores?.listenerStillness),
       castIdentityStability: clampScore(parsed?.scores?.castIdentityStability),
       turnTakingClarity: clampScore(parsed?.scores?.turnTakingClarity),
     };
-    const score = clampScore(parsed?.score ?? average(Object.values(scores)));
-    const issues = normalizeIssues(parsed?.issues);
-    const critical = issues.some((issue) => issue.severity === 'critical');
-    const passed = score >= this.threshold && !critical;
+    let score;
+    ({ score, scores } = normalizeScoreScale(parsed?.score, scores));
+    const reported = normalizeIssues(parsed?.issues);
+    // Issue-driven like the other vision gates: regenerate for a concrete
+    // high/critical attribution defect or clearly broken turn-taking below the floor.
+    const issues = reported.filter((issue) => ['high', 'critical'].includes(issue.severity));
+    const passed = issues.length === 0 && score >= this.minScore;
+    const warnings = [
+      ...reported.filter((issue) => !issues.includes(issue)).map((issue) => ({ ...issue, severity: 'warning' })),
+      ...(passed && score < this.threshold ? [{
+        code: 'speaker-turn-low',
+        severity: 'warning',
+        evidence: `Diagnostic speaker-turn score ${score} is below warning threshold ${this.threshold}, but no blocking defect was found.`,
+      }] : []),
+    ];
+    if (!passed && !issues.length) {
+      issues.push({
+        code: 'speaker-turn-score-floor',
+        severity: 'high',
+        evidence: `Speaker-turn score ${score} is below the minimum ${this.minScore}.`,
+      });
+    }
 
     return {
       provider: 'openrouter',
@@ -120,11 +142,14 @@ export class OpenRouterSpeakerTurnQcProvider {
       skipped: false,
       score,
       threshold: this.threshold,
+      minScore: this.minScore,
       scores,
       issues,
+      warnings,
       summary: stringOrEmpty(parsed?.summary),
-      regenerationGuidance: stringOrEmpty(parsed?.regenerationGuidance)
-        || buildGuidance(scores, issues, turns),
+      regenerationGuidance: passed
+        ? ''
+        : stringOrEmpty(parsed?.regenerationGuidance) || buildGuidance(scores, issues, turns),
       sampledFrames: frames.map((frame, index) => ({
         index: frame.index,
         timestamp: frame.timestamp,

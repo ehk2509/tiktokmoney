@@ -78,3 +78,57 @@ test('lip-contact sounds are identified for the reviewer', () => {
   assert.equal(lipContactSounds('fear'), 'f/v lip-teeth contact');
   assert.equal(lipContactSounds('could'), '');
 });
+
+test('multi-speaker acts attribute each transcribed word to its own speaker', async () => {
+  const { assignSpeakers } = await import('../src/providers/openRouterLipSyncQcProvider.js');
+  const words = ['Jalen,', 'what', 'do', 'you', 'feel?', 'Pressure.', 'Every', 'eye', 'waits']
+    .map((word, index) => ({ word, start: index * 0.4, end: index * 0.4 + 0.3 }));
+  const { words: labelled, cast } = assignSpeakers(words, [
+    { speakerCharacterId: 'coach', text: 'Jalen, what do you feel?' },
+    { speakerCharacterId: 'jalen', text: 'Pressure. Every eye waits for me to fail.' },
+  ], [
+    { id: 'coach', name: 'Coach Rivera', description: 'Head coach' },
+    { id: 'jalen', name: 'Jalen', description: 'Seated guard' },
+  ]);
+
+  assert.deepEqual(cast.map((member) => member.label), ['Coach Rivera', 'Jalen']);
+  assert.deepEqual(labelled.map((word) => word.speaker), [
+    'Coach Rivera', 'Coach Rivera', 'Coach Rivera', 'Coach Rivera', 'Coach Rivera',
+    'Jalen', 'Jalen', 'Jalen', 'Jalen',
+  ]);
+});
+
+test('lip-sync prompt names the active speaker on each speech frame', async () => {
+  let prompt = '';
+  const provider = new OpenRouterLipSyncQcProvider({
+    apiKey: 'router-key',
+    model: 'vision-model',
+    frameSampler: {
+      sampleAt: async (_path, timestamps) => timestamps.map((timestamp, index) => ({ index, timestamp, dataUrl: 'data:image/jpeg;base64,F' })),
+    },
+    fetchImpl: async (_url, options) => {
+      prompt = JSON.parse(options.body).messages[1].content.map((part) => part.text || '').join('\n');
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '{"score":82,"issues":[]}' } }] }) };
+    },
+  });
+  await provider.evaluate({ localPath: '/fake/act.mp4' }, {
+    transcription: {
+      text: 'Jalen, what do you feel? Pressure.',
+      duration: 5,
+      words: [
+        { word: 'Jalen,', start: 0.4, end: 0.8 },
+        { word: 'feel?', start: 0.9, end: 1.3 },
+        { word: 'Pressure.', start: 2.4, end: 3.0 },
+      ],
+    },
+    turns: [
+      { speakerCharacterId: 'coach', text: 'Jalen, feel?' },
+      { speakerCharacterId: 'jalen', text: 'Pressure.' },
+    ],
+    characters: [{ id: 'coach', name: 'Coach Rivera' }, { id: 'jalen', name: 'Jalen' }],
+  });
+
+  assert.match(prompt, /Speakers, in order: Coach Rivera = .* \| Jalen = /);
+  assert.match(prompt, /SPEECH ACTIVE by Coach Rivera around word "Jalen,"/);
+  assert.match(prompt, /SPEECH ACTIVE by Jalen around word "Pressure\."/);
+});

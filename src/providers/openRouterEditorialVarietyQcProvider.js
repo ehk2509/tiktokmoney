@@ -1,4 +1,5 @@
 import { FrameSampler } from '../services/frameSampler.js';
+import { normalizeScoreScale, SCORE_SCALE_INSTRUCTION } from './qcScores.js';
 
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -84,6 +85,7 @@ export class OpenRouterEditorialVarietyQcProvider {
               'Identity, wardrobe, location and object continuity may remain the same.',
               'Judge whether the new act creates a materially different composition that actually fulfills its requested shot type.',
               'Do not reward superficial subject motion when camera distance, angle and composition remain effectively unchanged.',
+              SCORE_SCALE_INSTRUCTION,
               'Return JSON only.',
             ].join(' '),
           },
@@ -114,7 +116,7 @@ export class OpenRouterEditorialVarietyQcProvider {
 
     const payload = await readJsonResponse(response);
     const parsed = parseJsonObject(payload?.choices?.[0]?.message?.content);
-    const scores = {
+    let scores = {
       transitionDistinctness: clampScore(
         parsed?.scores?.transitionDistinctness ?? parsed?.scores?.compositionDifference,
       ),
@@ -123,7 +125,8 @@ export class OpenRouterEditorialVarietyQcProvider {
       scaleOrAngleDifference: clampScore(parsed?.scores?.scaleOrAngleDifference),
       editorialNovelty: clampScore(parsed?.scores?.editorialNovelty),
     };
-    const score = clampScore(parsed?.score ?? average(Object.values(scores)));
+    let score;
+    ({ score, scores } = normalizeScoreScale(parsed?.score, scores));
     const reported = normalizeIssues(parsed?.issues);
     // Issue-driven like factual QC: only a concrete high/critical defect (e.g.
     // repeated-framing) regenerates. A low score with no such defect is a warning,
