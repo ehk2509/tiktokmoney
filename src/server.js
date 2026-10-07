@@ -23,6 +23,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await app.observabilitySnapshot());
     }
 
+    if (req.method === 'GET' && req.url === '/api/circuit-breakers') {
+      return json(res, 200, await app.circuitBreakerStatus());
+    }
+
     if (req.method === 'POST' && req.url === '/api/tiktok/webhooks') {
       const rawBody = await readRaw(req);
       const received = await app.receiveTikTokWebhook({

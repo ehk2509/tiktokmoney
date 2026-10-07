@@ -176,3 +176,13 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Stuck/retry backlog detection
 - [x] Project failure-rate and budget-overrun incident detection
 - [x] CLI/API health surfaces
+
+
+## M3.9 - Automatic incident response
+
+- [x] Operation-specific generation/publishing circuit breakers
+- [x] Automatic pause on critical failure, budget, auth and queue-health incidents
+- [x] Recovery-safe publish retry policy that avoids backlog deadlocks
+- [x] Automatic recovery when health signals clear
+- [x] Circuit status CLI/API
+- [x] Breaker disable switch for observability-only operation

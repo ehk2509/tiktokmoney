@@ -171,6 +171,33 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## Automatic incident-response circuit breakers
+
+TikTokMoney now turns observability signals into automatic operational gates.
+
+Circuit decisions are recalculated from the current health snapshot before each guarded action, so recovery is automatic as soon as the underlying incident clears. There is no manual reset latch.
+
+The default policy is operation-specific:
+
+- `generation` pauses on a critical project-failure rate, a daily-budget overrun, or an unhealthy/stuck orchestration backlog;
+- new `publishing` pauses when TikTok authorization is unavailable/expired or when orchestration is unhealthy;
+- already-approved queued publish jobs use a narrower `publishing-recovery` circuit so they can drain a retry backlog instead of deadlocking it;
+- status refresh, metrics refresh, OAuth recovery, webhook processing, and experiment evaluation stay available during incidents because they are recovery operations.
+
+Inspect current breaker decisions:
+
+```bash
+node src/cli.js circuit-breakers
+```
+
+or:
+
+```text
+GET /api/circuit-breakers
+```
+
+Set `CIRCUIT_BREAKERS_ENABLED=false` only when you intentionally want observability without enforcement.
+
 ## Reliability and observability
 
 TikTokMoney now exposes an operational health model instead of only reporting that the Node process is alive.

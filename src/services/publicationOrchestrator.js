@@ -6,6 +6,7 @@ export class PublicationOrchestrator {
     publishingService,
     projectStore,
     experimentService = null,
+    circuitBreakerService = null,
     now = () => new Date(),
     defaultMetricsDelayHours = Number(process.env.PUBLICATION_METRICS_DELAY_HOURS || 24),
     retryDelayMinutes = Number(process.env.PUBLICATION_RETRY_DELAY_MINUTES || 15),
@@ -19,6 +20,7 @@ export class PublicationOrchestrator {
     this.publishingService = publishingService;
     this.projectStore = projectStore;
     this.experimentService = experimentService;
+    this.circuitBreakerService = circuitBreakerService;
     this.now = now;
     this.defaultMetricsDelayHours = positive(defaultMetricsDelayHours, 24);
     this.retryDelayMinutes = positive(retryDelayMinutes, 15);
@@ -39,6 +41,9 @@ export class PublicationOrchestrator {
       throw new Error('scheduled publishing requires explicit confirmPublish=true');
     }
     if (!privacyLevel) throw new Error('privacyLevel is required for scheduled publishing');
+    if (this.circuitBreakerService?.assertAllowed) {
+      await this.circuitBreakerService.assertAllowed('publishing');
+    }
 
     const project = await this.projectStore.getProject(projectId);
     if (!project) throw new Error(`project ${projectId} was not found`);
@@ -87,6 +92,23 @@ export class PublicationOrchestrator {
     if (!job) throw new Error('orchestration job was not found');
     if (!['QUEUED', 'RETRY'].includes(job.status)) return job;
 
+    if (job.type === 'publish' && this.circuitBreakerService?.evaluate) {
+      const decision = await this.circuitBreakerService.evaluate('publishing-recovery');
+      if (!decision.allowed) {
+        job.status = 'RETRY';
+        job.lastError = `circuit breaker open: ${decision.blockingIncidents.map((item) => item.code).join(', ')}`;
+        job.circuitBreaker = {
+          operation: 'publishing-recovery',
+          blockedAt: this.now().toISOString(),
+          incidents: decision.blockingIncidents,
+        };
+        job.runAt = new Date(this.now().getTime() + this.retryDelayMinutes * 60000).toISOString();
+        job.updatedAt = this.now().toISOString();
+        await this.store.saveJob(job);
+        return job;
+      }
+    }
+
     job.status = 'RUNNING';
     job.attempts = (Number(job.attempts) || 0) + 1;
     job.updatedAt = this.now().toISOString();
@@ -99,6 +121,7 @@ export class PublicationOrchestrator {
       job.status = 'COMPLETED';
       job.completedAt = this.now().toISOString();
       job.lastError = null;
+      job.circuitBreaker = null;
     } catch (error) {
       job.lastError = error?.message || String(error);
       if (job.attempts >= this.maxAttempts) {
@@ -116,7 +139,10 @@ export class PublicationOrchestrator {
   }
 
   async executePublish(job) {
-    const publication = await this.publishingService.publishProject(job.projectId, job.payload || {});
+    const publication = await this.publishingService.publishProject(job.projectId, {
+      ...(job.payload || {}),
+      circuitOperation: 'publishing-recovery',
+    });
     job.publicationId = publication.id;
 
     const project = await this.projectStore.getProject(job.projectId);

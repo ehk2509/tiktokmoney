@@ -15,6 +15,7 @@ import { PublicationOrchestrator } from './services/publicationOrchestrator.js';
 import { TikTokAuthService } from './services/tiktokAuthService.js';
 import { TikTokWebhookService } from './services/tiktokWebhookService.js';
 import { ObservabilityService } from './services/observabilityService.js';
+import { CircuitBreakerService } from './services/circuitBreakerService.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
@@ -79,6 +80,17 @@ export function createApp(overrides = {}) {
   const tiktokWebhookStore = overrides.tiktokWebhookStore || new TikTokWebhookStore(
     process.env.TIKTOK_WEBHOOK_STORE_PATH || './data/tiktok-webhooks.json',
   );
+  const observabilityService = overrides.observabilityService || new ObservabilityService({
+    projectStore: store,
+    dailyPlanStore,
+    orchestrationStore,
+    webhookStore: tiktokWebhookStore,
+    authService: tiktokAuthService,
+    publicationStore,
+  });
+  const circuitBreakerService = overrides.circuitBreakerService || new CircuitBreakerService({
+    observabilityService,
+  });
   const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher({
     authService: tiktokAuthService,
   });
@@ -88,26 +100,20 @@ export function createApp(overrides = {}) {
     publisher: tiktokPublisher,
     learningService,
     experimentService,
+    circuitBreakerService,
   });
   const publicationOrchestrator = overrides.publicationOrchestrator || new PublicationOrchestrator({
     store: orchestrationStore,
     publishingService,
     projectStore: store,
     experimentService,
+    circuitBreakerService,
   });
   const tiktokWebhookService = overrides.tiktokWebhookService || new TikTokWebhookService({
     store: tiktokWebhookStore,
     publicationStore,
     publishingService,
     authStore: tiktokAuthStore,
-  });
-  const observabilityService = overrides.observabilityService || new ObservabilityService({
-    projectStore: store,
-    dailyPlanStore,
-    orchestrationStore,
-    webhookStore: tiktokWebhookStore,
-    authService: tiktokAuthService,
-    publicationStore,
   });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
   const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
@@ -222,6 +228,9 @@ export function createApp(overrides = {}) {
     });
   }
 
+  const rawPipeline = pipeline;
+  pipeline = guardPipeline(rawPipeline, circuitBreakerService);
+
   const dailyPlanner = overrides.dailyPlanner || new DailyContentPlanner({
     opportunitySource: { list: async () => {
       const items = await trends.list();
@@ -245,6 +254,7 @@ export function createApp(overrides = {}) {
     tiktokWebhookStore,
     tiktokWebhookService,
     observabilityService,
+    circuitBreakerService,
     learningService,
     experimentService,
     performanceLearningStore,
@@ -300,6 +310,9 @@ export function createApp(overrides = {}) {
     async observabilitySnapshot() {
       return observabilityService.snapshot();
     },
+    async circuitBreakerStatus() {
+      return circuitBreakerService.status();
+    },
     async schedulePublication(projectId, options = {}) {
       return publicationOrchestrator.schedulePublish(projectId, options);
     },
@@ -351,4 +364,23 @@ export function createApp(overrides = {}) {
       return motionLibraryBuilder.build(options);
     },
   };
+}
+
+
+function guardPipeline(pipeline, circuitBreakerService) {
+  if (!pipeline || !circuitBreakerService) return pipeline;
+  const guarded = Object.create(pipeline);
+  if (typeof pipeline.generate === 'function') {
+    guarded.generate = async (...args) => {
+      await circuitBreakerService.assertAllowed('generation');
+      return pipeline.generate(...args);
+    };
+  }
+  if (typeof pipeline.resume === 'function') {
+    guarded.resume = async (...args) => {
+      await circuitBreakerService.assertAllowed('generation');
+      return pipeline.resume(...args);
+    };
+  }
+  return guarded;
 }

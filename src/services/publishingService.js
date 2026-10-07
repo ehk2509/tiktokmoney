@@ -7,6 +7,7 @@ export class PublishingService {
     publisher,
     learningService = null,
     experimentService = null,
+    circuitBreakerService = null,
     now = () => new Date(),
   }) {
     this.projectStore = projectStore;
@@ -14,6 +15,7 @@ export class PublishingService {
     this.publisher = publisher;
     this.learningService = learningService;
     this.experimentService = experimentService;
+    this.circuitBreakerService = circuitBreakerService;
     this.now = now;
   }
 
@@ -25,9 +27,13 @@ export class PublishingService {
     disableDuet = false,
     disableStitch = false,
     videoCoverTimestampMs = 1000,
+    circuitOperation = 'publishing',
   } = {}) {
     if (!confirmPublish) {
       throw new Error('publishing is disabled by default; explicit confirmPublish=true is required');
+    }
+    if (this.circuitBreakerService?.assertAllowed) {
+      await this.circuitBreakerService.assertAllowed(circuitOperation);
     }
     if (!this.publisher?.configured) throw new Error('TikTok publisher is not configured');
     const project = await this.projectStore.getProject(projectId);
