@@ -17,6 +17,12 @@ export class ProviderStatsStore {
 
     current.attempts += 1;
     if (outcome.generationFailed) current.generationFailures += 1;
+    if (outcome.throttled) current.throttles += 1;
+    if (Number.isFinite(Number(outcome.latencyMs))) {
+      current.latencyMsTotal += Number(outcome.latencyMs);
+      current.latencyCount += 1;
+      current.maxLatencyMs = Math.max(current.maxLatencyMs, Number(outcome.latencyMs));
+    }
     if (outcome.passed) current.passes += 1;
     if (Number.isFinite(Number(outcome.overallScore))) {
       current.staticScoreTotal += Number(outcome.overallScore);
@@ -49,6 +55,15 @@ export class ProviderStatsStore {
     }
 
     current.estimatedSpendUsd += Math.max(0, Number(outcome.estimatedCostUsd) || 0);
+    current.recent.push({
+      at: new Date().toISOString(),
+      generationFailed: Boolean(outcome.generationFailed),
+      passed: Boolean(outcome.passed),
+      throttled: Boolean(outcome.throttled),
+      latencyMs: Number.isFinite(Number(outcome.latencyMs)) ? Number(outcome.latencyMs) : null,
+      sceneClass: outcome.sceneClass || null,
+    });
+    current.recent = current.recent.slice(-100);
     current.updatedAt = new Date().toISOString();
     data[providerId] = current;
 
@@ -88,6 +103,10 @@ function summarize(stats, sceneClass) {
       ? stats.generationFailures / stats.attempts
       : null,
     estimatedSpendUsd: stats.estimatedSpendUsd || 0,
+    throttleRate: stats.attempts ? stats.throttles / stats.attempts : null,
+    averageLatencyMs: stats.latencyCount ? stats.latencyMsTotal / stats.latencyCount : null,
+    maxLatencyMs: stats.maxLatencyMs || 0,
+    recent: stats.recent || [],
   };
 }
 
@@ -104,6 +123,11 @@ function normalize(value = {}) {
     sceneClasses: value.sceneClasses && typeof value.sceneClasses === 'object'
       ? value.sceneClasses
       : {},
+    throttles: Number(value.throttles) || 0,
+    latencyMsTotal: Number(value.latencyMsTotal) || 0,
+    latencyCount: Number(value.latencyCount) || 0,
+    maxLatencyMs: Number(value.maxLatencyMs) || 0,
+    recent: Array.isArray(value.recent) ? value.recent.slice(-100) : [],
     updatedAt: value.updatedAt || null,
   };
 }
