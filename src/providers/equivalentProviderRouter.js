@@ -190,11 +190,28 @@ export class EquivalentProviderRouter {
   }
 
   async reliabilitySnapshot() {
-    const states = {};
+    const candidates = [];
     for (const entry of this.providers) {
-      states[entry.id] = this.reliabilityService
+      const reliability = this.reliabilityService
         ? await this.reliabilityService.state(entry.id)
         : { providerId: entry.id, state: 'UNKNOWN', reasons: [] };
+      const stats = this.statsStore?.get ? await this.statsStore.get(entry.id) : null;
+      candidates.push({ ...entry, reliability, stats });
+    }
+
+    const rankedClosed = this.rankCandidates(
+      candidates.filter((candidate) => candidate.reliability?.state !== 'OPEN'),
+    );
+    const scoreById = new Map(rankedClosed.map((candidate) => [candidate.id, candidate]));
+
+    const states = {};
+    for (const candidate of candidates) {
+      const ranked = scoreById.get(candidate.id);
+      states[candidate.id] = {
+        ...candidate.reliability,
+        routingScore: ranked?.routingScore ?? null,
+        routingEvidence: ranked?.routingEvidence ?? null,
+      };
     }
     return states;
   }
