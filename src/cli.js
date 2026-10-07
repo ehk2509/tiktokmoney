@@ -33,6 +33,37 @@ try {
     }
     const project = await app.pipeline.resume(id, { render: options['no-render'] !== true });
     console.log(JSON.stringify(project, null, 2));
+  } else if (command === 'publish') {
+    const id = options.id || options.project;
+    if (!id) throw new Error('Usage: node src/cli.js publish --id vid_... --privacy SELF_ONLY --confirm-publish');
+    if (options['confirm-publish'] !== true) {
+      throw new Error('--confirm-publish is required before sending a video to TikTok');
+    }
+    if (!options.privacy) {
+      throw new Error('--privacy is required and must match TikTok creator privacy options');
+    }
+    const publication = await app.publishProject(id, {
+      confirmPublish: true,
+      title: options.title || null,
+      privacyLevel: options.privacy,
+      disableComment: options['disable-comment'] === true,
+      disableDuet: options['disable-duet'] === true,
+      disableStitch: options['disable-stitch'] === true,
+      videoCoverTimestampMs: options['cover-ms'] ? Number(options['cover-ms']) : 1000,
+    });
+    console.log(JSON.stringify(publication, null, 2));
+  } else if (command === 'publication-refresh') {
+    const id = options.id || options.publication;
+    if (!id) throw new Error('Usage: node src/cli.js publication-refresh --id pub_...');
+    console.log(JSON.stringify(await app.refreshPublication(id), null, 2));
+  } else if (command === 'publication-metrics') {
+    const id = options.id || options.publication;
+    if (!id) throw new Error('Usage: node src/cli.js publication-metrics --id pub_...');
+    console.log(JSON.stringify(await app.refreshPublicationMetrics(id), null, 2));
+  } else if (command === 'publications') {
+    console.log(JSON.stringify(await app.listPublications({
+      limit: options.limit ? Number(options.limit) : undefined,
+    }), null, 2));
   } else if (command === 'opportunities') {
     console.log(JSON.stringify(await app.opportunities(), null, 2));
   } else if (command === 'research') {
@@ -120,6 +151,10 @@ try {
       '  generate --topic "..." [--duration 35]',
       '  resume --id "vid_..." [--no-render]   continue a saved video from its first missing act',
       '  opportunities',
+      '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',
+      '  publication-refresh --id "pub_..."',
+      '  publication-metrics --id "pub_..."',
+      '  publications [--limit 50]',
       '  research --topic "..."',
       '  plan [--budget 6] [--max-videos 3]',
       '  run-plan --id "plan_..."',
@@ -131,6 +166,7 @@ try {
       '  motion-library',
       '',
       'benchmark-real is dry-run by default. --confirm-spend is required before paid provider calls.',
+      'publish is disabled by default. --confirm-publish and an explicit TikTok privacy level are required.',
     ].join('\n'));
   }
 } catch (error) {
