@@ -55,12 +55,26 @@ export class ProviderStatsStore {
     }
 
     current.estimatedSpendUsd += Math.max(0, Number(outcome.estimatedCostUsd) || 0);
+    if (Number.isFinite(Number(outcome.actualCostUsd))) {
+      current.actualCostUsdObserved += Math.max(0, Number(outcome.actualCostUsd));
+      current.actualCostCount += 1;
+      if (outcome.passed) {
+        current.successCostUsdObserved += Math.max(0, Number(outcome.actualCostUsd));
+        current.successCostCount += 1;
+      }
+    }
+    if (Number.isFinite(Number(outcome.qualityScore))) {
+      current.qualityScoreTotal += Number(outcome.qualityScore);
+      current.qualityScoreCount += 1;
+    }
     current.recent.push({
       at: new Date().toISOString(),
       generationFailed: Boolean(outcome.generationFailed),
       passed: Boolean(outcome.passed),
       throttled: Boolean(outcome.throttled),
       latencyMs: Number.isFinite(Number(outcome.latencyMs)) ? Number(outcome.latencyMs) : null,
+      actualCostUsd: Number.isFinite(Number(outcome.actualCostUsd)) ? Number(outcome.actualCostUsd) : null,
+      qualityScore: Number.isFinite(Number(outcome.qualityScore)) ? Number(outcome.qualityScore) : null,
       sceneClass: outcome.sceneClass || null,
     });
     current.recent = current.recent.slice(-100);
@@ -70,6 +84,34 @@ export class ProviderStatsStore {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(data, null, 2));
     return summarize(current, outcome.sceneClass);
+  }
+
+  async recordFeedback(providerId, {
+    qualityScore = null,
+    actualCostUsd = null,
+    passed = true,
+  } = {}) {
+    const data = await this.readAll();
+    const current = normalize(data[providerId]);
+
+    if (Number.isFinite(Number(qualityScore))) {
+      current.qualityScoreTotal += Number(qualityScore);
+      current.qualityScoreCount += 1;
+    }
+    if (Number.isFinite(Number(actualCostUsd))) {
+      current.actualCostUsdObserved += Math.max(0, Number(actualCostUsd));
+      current.actualCostCount += 1;
+      if (passed) {
+        current.successCostUsdObserved += Math.max(0, Number(actualCostUsd));
+        current.successCostCount += 1;
+      }
+    }
+
+    current.updatedAt = new Date().toISOString();
+    data[providerId] = current;
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await writeFile(this.filePath, JSON.stringify(data, null, 2));
+    return summarize(current);
   }
 
   async readAll() {
@@ -103,6 +145,17 @@ function summarize(stats, sceneClass) {
       ? stats.generationFailures / stats.attempts
       : null,
     estimatedSpendUsd: stats.estimatedSpendUsd || 0,
+    actualCostUsdObserved: stats.actualCostUsdObserved || 0,
+    actualCostCount: stats.actualCostCount || 0,
+    averageObservedCostUsd: stats.actualCostCount
+      ? stats.actualCostUsdObserved / stats.actualCostCount
+      : null,
+    costPerSuccessfulOutputUsd: stats.successCostCount
+      ? stats.successCostUsdObserved / stats.successCostCount
+      : null,
+    averageQualityScore: stats.qualityScoreCount
+      ? stats.qualityScoreTotal / stats.qualityScoreCount
+      : null,
     throttleRate: stats.attempts ? stats.throttles / stats.attempts : null,
     averageLatencyMs: stats.latencyCount ? stats.latencyMsTotal / stats.latencyCount : null,
     maxLatencyMs: stats.maxLatencyMs || 0,
@@ -120,6 +173,12 @@ function normalize(value = {}) {
     temporalScoreTotal: Number(value.temporalScoreTotal) || 0,
     temporalScoreCount: Number(value.temporalScoreCount) || 0,
     estimatedSpendUsd: Number(value.estimatedSpendUsd) || 0,
+    actualCostUsdObserved: Number(value.actualCostUsdObserved) || 0,
+    actualCostCount: Number(value.actualCostCount) || 0,
+    successCostUsdObserved: Number(value.successCostUsdObserved) || 0,
+    successCostCount: Number(value.successCostCount) || 0,
+    qualityScoreTotal: Number(value.qualityScoreTotal) || 0,
+    qualityScoreCount: Number(value.qualityScoreCount) || 0,
     sceneClasses: value.sceneClasses && typeof value.sceneClasses === 'object'
       ? value.sceneClasses
       : {},
