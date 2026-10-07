@@ -11,8 +11,10 @@ export function normalizeProviderUsage(task, {
     task.cost_usd,
     usage.costUsd,
     usage.cost_usd,
+    usage.cost,
     billing.costUsd,
     billing.cost_usd,
+    billing.cost,
   );
   const credits = firstFinite(
     task.credits,
@@ -25,11 +27,31 @@ export function normalizeProviderUsage(task, {
   return {
     provider,
     operation,
-    taskId: task.id || null,
+    taskId: task.id || task.request_id || null,
     status: task.status || null,
     model: task.model || task.modelId || task.model_id || model || null,
     costUsd,
     credits,
+    promptTokens: firstFinite(
+      task.promptTokens,
+      task.prompt_tokens,
+      usage.promptTokens,
+      usage.prompt_tokens,
+      usage.input_tokens,
+    ),
+    completionTokens: firstFinite(
+      task.completionTokens,
+      task.completion_tokens,
+      usage.completionTokens,
+      usage.completion_tokens,
+      usage.output_tokens,
+    ),
+    totalTokens: firstFinite(
+      task.totalTokens,
+      task.total_tokens,
+      usage.totalTokens,
+      usage.total_tokens,
+    ),
     providerReported: costUsd != null || credits != null,
   };
 }
