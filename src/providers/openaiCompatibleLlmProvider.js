@@ -1,3 +1,4 @@
+import { normalizeProviderUsage } from '../core/providerUsage.js';
 export class OpenAICompatibleLlmProvider {
   constructor({
     apiKey = process.env.OPENAI_API_KEY,
@@ -52,6 +53,7 @@ export class OpenAICompatibleLlmProvider {
       cta: parsed.cta?.trim() || '',
       source: 'openai-compatible',
       model: this.model,
+      providerUsage: parsed.providerUsage || null,
     };
   }
 
@@ -118,6 +120,7 @@ export class OpenAICompatibleLlmProvider {
       candidates: Array.isArray(parsed?.candidates) ? parsed.candidates : [],
       source: 'openai-compatible',
       model: this.model,
+      providerUsage: parsed.providerUsage || null,
     };
   }
 
@@ -189,6 +192,7 @@ export class OpenAICompatibleLlmProvider {
       judgments: Array.isArray(parsed?.judgments) ? parsed.judgments : [],
       source: 'openai-compatible-independent-judge',
       model: this.judgeModel,
+      providerUsage: parsed.providerUsage || null,
     };
   }
 
@@ -443,7 +447,15 @@ export class OpenAICompatibleLlmProvider {
     if (!raw) throw new Error('LLM response did not contain message content');
 
     try {
-      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (parsed && typeof parsed === 'object') {
+        parsed.providerUsage = normalizeProviderUsage(payload, {
+          provider: 'openai-compatible',
+          operation: 'llm-completion',
+          model,
+        });
+      }
+      return parsed;
     } catch (error) {
       throw new Error(`LLM returned invalid JSON: ${error.message}`);
     }
