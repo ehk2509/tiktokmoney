@@ -143,7 +143,7 @@
 - [x] Creative feature extraction + TikTok outcome evidence
 - [x] Controlled A/B experiment assignment + comparable-window evaluation
 
-Current M3 publishing intentionally requires explicit per-post confirmation. Durable OAuth/token refresh, scheduling, metrics orchestration, and experiment assignment are implemented; webhook-based event ingestion remains open.
+Current M3 publishing intentionally requires explicit per-post confirmation. Durable OAuth/token refresh, scheduling, metrics orchestration, experiment assignment, and verified webhook event ingestion are implemented.
 
 ## M3.5 - Autonomous production planning
 
