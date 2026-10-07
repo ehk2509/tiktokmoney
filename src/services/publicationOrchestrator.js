@@ -139,7 +139,10 @@ export class PublicationOrchestrator {
   }
 
   async executePublish(job) {
-    const publication = await this.publishingService.publishProject(job.projectId, job.payload || {});
+    const publication = await this.publishingService.publishProject(job.projectId, {
+      ...(job.payload || {}),
+      circuitOperation: 'publishing-recovery',
+    });
     job.publicationId = publication.id;
 
     const project = await this.projectStore.getProject(job.projectId);
