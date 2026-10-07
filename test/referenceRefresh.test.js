@@ -159,3 +159,100 @@ test('a third take after repeated-framing failures animates from a forced openin
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('keyframe image requests stay within Runway text_to_image limits', async () => {
+  const { fitPrompt } = await import('../src/providers/runwayAudiovisualProvider.js');
+  const long = `FIRST FRAME / STARTING STATE: waist-up huddle. ${'shared identity text '.repeat(120)}`;
+  const fitted = fitPrompt(long, 1000);
+  assert.ok(fitted.length <= 1000);
+  assert.match(fitted, /^FIRST FRAME \/ STARTING STATE: waist-up huddle\./);
+
+  let body = null;
+  const provider = new RunwayAudiovisualProvider({
+    apiKey: 'runway-key',
+    pollIntervalMs: 0,
+    maxPolls: 2,
+    sleepImpl: async () => {},
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).endsWith('/text_to_image')) {
+        body = JSON.parse(options.body);
+        return jsonResponse({ id: 'img' });
+      }
+      return jsonResponse({ id: 'img', status: 'SUCCEEDED', output: ['https://cdn.example/frame.png'] });
+    },
+  });
+  await provider.generateKeyframeImage({
+    prompt: long,
+    references: [1, 2, 3, 4, 5].map((n) => ({ uri: `https://ref.example/${n}.png`, tag: `ref${n}` })),
+  });
+  assert.ok(body.promptText.length <= 1000);
+  assert.equal(body.referenceImages.length, 3);
+});
+
+test('an internal failure on first+last keyframes retries with the opening frame only', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-keyframe-fallback-'));
+  const videoBodies = [];
+  try {
+    const provider = new RunwayAudiovisualProvider({
+      apiKey: 'runway-key',
+      assetDir: dir,
+      dialogueMode: 'native',
+      pollIntervalMs: 0,
+      maxPolls: 2,
+      sleepImpl: async () => {},
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        if (target.endsWith('/text_to_image')) {
+          const position = JSON.parse(options.body).promptText.includes('LAST FRAME') ? 'last' : 'first';
+          return jsonResponse({ id: `img-${position}` });
+        }
+        if (target.endsWith('/tasks/img-first')) return jsonResponse({ id: 'img-first', status: 'SUCCEEDED', output: ['https://cdn.example/first.png'] });
+        if (target.endsWith('/tasks/img-last')) return jsonResponse({ id: 'img-last', status: 'SUCCEEDED', output: ['https://cdn.example/last.png'] });
+        if (target.endsWith('/image_to_video')) {
+          videoBodies.push(JSON.parse(options.body));
+          return jsonResponse({ id: `video-${videoBodies.length}` });
+        }
+        if (target.endsWith('/tasks/video-1')) return jsonResponse({ id: 'video-1', status: 'FAILED', failure: 'Generation failed.', failureCode: 'INTERNAL' });
+        if (target.endsWith('/tasks/video-2')) return jsonResponse({ id: 'video-2', status: 'SUCCEEDED', output: ['https://cdn.example/act.mp4'] });
+        if (target === 'https://cdn.example/act.mp4') {
+          return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('clip').buffer };
+        }
+        throw new Error(`unexpected request: ${target}`);
+      },
+    });
+
+    const asset = await provider.generateSegment({
+      projectId: 'vid-fallback',
+      productionScript: {
+        characters: [{ id: 'coach', name: 'Coach', description: 'Head coach', onScreen: true }],
+        locations: [],
+        visualStyle: { description: 'Photoreal.', cameraRules: 'Stable.', lightingRules: 'Natural.' },
+        audioDirection: { mix: 'Clear.', musicPolicy: 'None.' },
+      },
+      segment: {
+        index: 4,
+        shotType: 'medium',
+        durationSeconds: 8,
+        dialogue: 'Together.',
+        speakerCharacterId: 'coach',
+        characterIds: ['coach'],
+        startState: 'Waist-up huddle.',
+        endState: 'Hands joined.',
+        action: 'The team joins hands.',
+        camera: 'Medium.',
+        ambience: 'Quiet.',
+        soundEffects: [],
+        music: '',
+        keyframeDirection: { enabled: true, policy: 'first-last', firstFrame: {}, lastFrame: {} },
+      },
+    });
+
+    assert.equal(videoBodies.length, 2);
+    assert.deepEqual(videoBodies[0].promptImage.map((image) => image.position), ['first', 'last']);
+    assert.deepEqual(videoBodies[1].promptImage.map((image) => image.position), ['first']);
+    assert.equal(asset.keyframeMode, 'first');
+    assert.match(asset.keyframeError, /retried with first frame only/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

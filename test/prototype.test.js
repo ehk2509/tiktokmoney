@@ -5947,7 +5947,7 @@ test('keyframe prompt preserves canonical identity and physically reachable endp
   assert.match(prompts.last, /physically reachable/i);
 });
 
-test('Runway audiovisual provider uses WAN first-last keyframes while preserving locked reference audio', async () => {
+test('Runway audiovisual provider uses WAN first-last keyframes with native speech instead of reference audio', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-wan-keyframes-'));
   const requests = [];
   let imageTask = 0;
@@ -6000,8 +6000,11 @@ test('Runway audiovisual provider uses WAN first-last keyframes while preserving
             { uri: 'https://cdn.example/first.jpg', position: 'first' },
             { uri: 'https://cdn.example/last.jpg', position: 'last' },
           ]);
-          assert.equal(body.referenceAudio[0].uri, 'https://cdn.example/keyframe-dialogue.mp3');
+          // Runway rejects keyframes combined with reference images, videos or audio.
+          assert.equal(body.referenceAudio, undefined);
+          assert.equal(body.referenceVideos, undefined);
           assert.equal(body.references, undefined);
+          assert.match(body.promptText, /says exactly \(spoken aloud only, never shown as text\)/);
           return jsonResponse({ id: 'wan-keyframe-video' });
         }
         if (target.endsWith('/tasks/wan-keyframe-video')) {
@@ -6087,6 +6090,7 @@ test('Runway audiovisual provider uses WAN first-last keyframes while preserving
     });
 
     assert.equal(asset.keyframeMode, 'first-last');
+    assert.equal(asset.audioMode, 'keyframe-native-speech');
     assert.equal(asset.keyframes.first.url, 'https://cdn.example/first.jpg');
     assert.equal(asset.keyframes.last.url, 'https://cdn.example/last.jpg');
     assert.equal(asset.referenceImageUrl, 'https://cdn.example/first.jpg');

@@ -90,6 +90,18 @@ export function selectKeyframePolicy({
 
 const CLOSE_SHOTS = new Set(['close-up', 'macro-detail']);
 
+function stripNames(text, characters) {
+  return (characters || []).reduce((value, character, index) => {
+    const name = String(character?.name || '').trim();
+    if (!name) return value;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return value.replace(new RegExp(`\\b${escaped}\\b`, 'g'), `Person ${index + 1}`);
+  }, String(text || ''));
+}
+
+// Leads every keyframe prompt so it survives trimming to the image prompt limit.
+const KEYFRAME_HARD_RULE = 'Photorealistic. No text, letters, numbers, names or logos anywhere, including on clothing and shoes; all garments plain and unbranded.';
+
 /**
  * A full room description pulls generators back to a wide view of the whole set.
  * Close shots keep only the lighting and state that the setting is out of frame.
@@ -131,8 +143,10 @@ export function buildKeyframePrompts({
   const canonicalStyle = storyBible?.visualStyle || productionScript?.visualStyle || {};
 
   const continuity = [
-    ...characters.map((character) => [
-      `${character.name}: ${character.description}.`,
+    // Image models print names they are given onto jerseys and signs, so people
+    // are introduced by position only.
+    ...characters.map((character, index) => [
+      `Person ${index + 1}: ${stripNames(character.description, characters)}.`,
       character.physicalTraits ? `Exact physical traits: ${character.physicalTraits}.` : '',
       character.wardrobe ? `Exact wardrobe: ${character.wardrobe}.` : '',
     ].filter(Boolean).join(' ')),
@@ -164,20 +178,30 @@ export function buildKeyframePrompts({
     'No text, captions, logos, watermarks, CGI sheen, waxy skin, beauty retouching, impossible reflections, duplicate limbs or distorted hands.',
   ].filter(Boolean).join(' ');
 
+  // The frame-specific state leads: image prompts are capped (1000 chars on Runway),
+  // so shared identity/style text is what gets trimmed, never the framing.
   const first = [
-    shared,
+    KEYFRAME_HARD_RULE,
     'FIRST FRAME / STARTING STATE:',
-    direction.firstFrame?.state || inferStartState(segment),
+    // Directions snapshot startState when planned; prefer the segment's current text
+    // so edits and screenplay rewrites cannot leave a stale keyframe behind.
+    stripNames(direction.firstFrame?.explicit
+      ? direction.firstFrame.state
+      : segment.startState || direction.firstFrame?.state || inferStartState(segment), characters),
     'Show the stable physical state immediately before the main action progresses.',
+    shared,
   ].filter(Boolean).join(' ');
 
   const last = direction.policy === 'first-last'
     ? [
-      shared,
+      KEYFRAME_HARD_RULE,
       'LAST FRAME / ENDING STATE:',
-      direction.lastFrame?.state || inferEndState(segment),
-      `The visible action that has progressed is: ${segment.action || 'the planned scene action'}.`,
+      stripNames(direction.lastFrame?.explicit
+        ? direction.lastFrame.state
+        : segment.endState || direction.lastFrame?.state || inferEndState(segment), characters),
+      `The visible action that has progressed is: ${stripNames(segment.action || 'the planned scene action', characters)}.`,
       'This must look like a physically reachable end state from the first frame, not a different shot, person, wardrobe, room or lighting setup.',
+      shared,
     ].filter(Boolean).join(' ')
     : null;
 

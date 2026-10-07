@@ -638,6 +638,9 @@ async function runQcAttempts({
     const historyEntry = {
       attempt,
       generationId: asset.generationId,
+      // Keyframes fail open; record it so a silently skipped keyframe is visible.
+      keyframeMode: asset.keyframeMode || null,
+      keyframeError: asset.keyframeError || null,
       ...(realism || {}),
       passed,
       realism,

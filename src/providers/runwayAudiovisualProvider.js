@@ -228,7 +228,7 @@ export class RunwayAudiovisualProvider {
           selectedReference: null,
         },
       };
-    const promptText = buildAudiovisualPrompt({
+    let promptText = buildAudiovisualPrompt({
       narrationInPost,
       segment: promptSegment,
       productionScript,
@@ -292,17 +292,33 @@ export class RunwayAudiovisualProvider {
       });
     }
 
-    const task = keyframePromptImages.length
-      ? await this.createTask('/image_to_video', {
-        model: this.model,
-        promptImage: keyframePromptImages,
-        promptText,
-        audio: true,
-        duration,
-        ratio: this.keyframeVideoRatio,
-        ...(referenceVideos.length ? { referenceVideos } : {}),
-        ...(referenceAudio.length ? { referenceAudio } : {}),
-      })
+    // Runway rejects keyframes combined with reference images, videos or audio.
+    // Keyframed acts with on-camera dialogue therefore speak natively from the exact
+    // lines (dialogue QC still verifies every word); voiceover is mixed in later anyway.
+    const keyframeNativeSpeech = keyframePromptImages.length > 0 && referenceAudio.length > 0;
+    if (keyframeNativeSpeech) {
+      promptText = buildAudiovisualPrompt({
+        narrationInPost,
+        segment: promptSegment,
+        productionScript,
+        characters,
+        primaryCharacter,
+        dialogueTurns,
+        dialogueTrack: null,
+        regeneration,
+        previousAsset: null,
+      });
+    }
+    const keyframeTask = (images) => this.createTask('/image_to_video', {
+      model: this.model,
+      promptImage: images,
+      promptText,
+      audio: true,
+      duration,
+      ratio: this.keyframeVideoRatio,
+    });
+    let task = keyframePromptImages.length
+      ? await keyframeTask(keyframePromptImages)
       : await this.createTextToVideoTask({
         model: this.model,
         promptText,
@@ -312,7 +328,22 @@ export class RunwayAudiovisualProvider {
         ...(referenceVideos.length ? { referenceVideos } : {}),
         ...(referenceAudio.length ? { referenceAudio } : {}),
       }, { references, previousAsset });
-    const completed = await this.wait(task.id);
+    let completed;
+    try {
+      completed = await this.wait(task.id);
+    } catch (error) {
+      // WAN fails internally on some first+last keyframe requests with audio; keep
+      // the opening frame (framing, wardrobe, identity) and retry once without the last.
+      const firstOnly = keyframePromptImages.filter((image) => image.position === 'first');
+      if (!/task failed/i.test(error.message) || firstOnly.length === keyframePromptImages.length || !firstOnly.length) {
+        throw error;
+      }
+      keyframeError = `first-last keyframes failed (${error.message}); retried with first frame only`;
+      keyframePromptImages.splice(0, keyframePromptImages.length, ...firstOnly);
+      if (keyframes) keyframes = { ...keyframes, last: null };
+      task = await keyframeTask(keyframePromptImages);
+      completed = await this.wait(task.id);
+    }
     const sourceUrl = firstOutputUrl(completed);
     if (!sourceUrl) throw new Error('Runway audiovisual task completed without output');
 
@@ -344,6 +375,8 @@ export class RunwayAudiovisualProvider {
       type: 'ai-video',
       audioMode: narrationInPost
         ? 'voiceover-post-mix'
+        : keyframeNativeSpeech
+        ? 'keyframe-native-speech'
         : this.dialogueMode === 'locked'
         ? multiSpeaker
           ? 'locked-multi-speaker-native-mix'
@@ -491,7 +524,7 @@ export class RunwayAudiovisualProvider {
       const lastReferences = uniqueTaggedReferences([
         { uri: first.url, tag: 'firstframe' },
         ...references,
-      ]).slice(0, 6);
+      ]).slice(0, MAX_KEYFRAME_REFERENCES);
       last = await this.generateKeyframeImage({
         prompt: prompts.last,
         references: lastReferences,
@@ -526,6 +559,7 @@ export class RunwayAudiovisualProvider {
           policy: 'first',
           firstFrame: {
             state: [shotTypeDirective(segment.shotType), segment.startState].filter(Boolean).join(' '),
+            explicit: true,
           },
         },
       },
@@ -573,11 +607,13 @@ export class RunwayAudiovisualProvider {
     segmentIndex = 0,
     position = 'first',
   }) {
+    const promptText = fitPrompt(prompt, MAX_IMAGE_PROMPT_CHARS);
+    const referenceImages = references.slice(0, MAX_KEYFRAME_REFERENCES);
     const task = await this.createTask('/text_to_image', {
       model: this.imageModel,
-      promptText: prompt,
+      promptText,
       ratio: this.keyframeImageRatio,
-      ...(references.length ? { referenceImages: references } : {}),
+      ...(referenceImages.length ? { referenceImages } : {}),
     });
     const completed = await this.wait(task.id);
     const url = firstOutputUrl(completed);
@@ -1060,7 +1096,7 @@ function collectKeyframeReferences(segment, storyBible, previousAsset) {
     || previousAsset?.referenceImageUrl;
   if (previousEnd) refs.push({ uri: previousEnd, tag: 'previousact' });
 
-  return uniqueTaggedReferences(refs).slice(0, 6);
+  return uniqueTaggedReferences(refs).slice(0, MAX_KEYFRAME_REFERENCES);
 }
 
 function collectImageReferences(segment, storyBible, previousAsset) {
@@ -1126,6 +1162,18 @@ function safe(value) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+// Runway text_to_image validation limits.
+const MAX_IMAGE_PROMPT_CHARS = 1000;
+const MAX_KEYFRAME_REFERENCES = 3;
+
+export function fitPrompt(prompt, maxChars) {
+  const text = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const boundary = cut.lastIndexOf(' ');
+  return (boundary > maxChars * 0.8 ? cut.slice(0, boundary) : cut).trim();
 }
 
 function supportsWanKeyframes(model) {

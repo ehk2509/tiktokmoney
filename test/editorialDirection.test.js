@@ -293,3 +293,52 @@ test('screenplay prompt states the per-shot action limit the realism director en
   assert.match(prompt, /at most two physical actions/);
   assert.match(prompt, /Handle at most one object per segment/);
 });
+
+test('keyframe prompts follow the current start/end state, not a stale planned copy', async () => {
+  const { buildKeyframePrompts } = await import('../src/core/keyframeDirector.js');
+  const segment = {
+    shotType: 'medium',
+    startState: 'Waist-up: four people in a tight semicircle; shoes out of frame.',
+    endState: 'Hands joined at chest height, faces visible.',
+    keyframeDirection: {
+      enabled: true,
+      policy: 'first-last',
+      firstFrame: { state: 'Vertical wide frontal shot of the whole room.' },
+      lastFrame: { state: 'Old ending.' },
+    },
+  };
+  const prompts = buildKeyframePrompts({ segment, productionScript: { characters: [], locations: [] } });
+  assert.match(prompts.first, /Waist-up: four people/);
+  assert.doesNotMatch(prompts.first, /wide frontal shot/);
+  assert.match(prompts.last, /Hands joined at chest height/);
+
+  const forced = buildKeyframePrompts({
+    segment: { ...segment, keyframeDirection: { enabled: true, policy: 'first', firstFrame: { state: 'FRAMING CONTRACT: close.', explicit: true } } },
+    productionScript: { characters: [], locations: [] },
+  });
+  assert.match(forced.first, /FRAMING CONTRACT: close\./);
+});
+
+test('keyframe prompts refer to people by position so names are not printed on clothing', async () => {
+  const { buildKeyframePrompts } = await import('../src/core/keyframeDirector.js');
+  const prompts = buildKeyframePrompts({
+    segment: {
+      characterIds: ['coach', 'jalen'],
+      startState: 'Coach Rivera faces Jalen in the locker room.',
+      endState: 'Jalen nods at Coach Rivera.',
+      keyframeDirection: { enabled: true, policy: 'first-last', firstFrame: {}, lastFrame: {} },
+    },
+    productionScript: {
+      characters: [
+        { id: 'coach', name: 'Coach Rivera', description: 'Head coach in a dark jacket' },
+        { id: 'jalen', name: 'Jalen', description: 'Young guard' },
+      ],
+      locations: [],
+    },
+  });
+  for (const prompt of [prompts.first, prompts.last]) {
+    assert.doesNotMatch(prompt, /Rivera|Jalen/);
+    assert.match(prompt, /Person 1/);
+    assert.match(prompt, /^Photorealistic\. No text, letters, numbers, names or logos/);
+  }
+});
