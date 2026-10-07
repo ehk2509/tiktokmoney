@@ -64,6 +64,36 @@ Rank sample opportunities:
 node src/cli.js opportunities
 ```
 
+## Guarded TikTok publishing
+
+TikTok publishing is available as an **explicitly confirmed** post-generation step. It is never invoked by `generate`, `plan`, or `run-plan`.
+
+Configure a TikTok user access token with `video.publish`:
+
+```bash
+export TIKTOK_ACCESS_TOKEN=...
+```
+
+Then publish an already rendered project:
+
+```bash
+node src/cli.js publish \
+  --id "vid_..." \
+  --privacy SELF_ONLY \
+  --confirm-publish
+```
+
+The command first queries TikTok creator info and rejects privacy values that are not currently available for that creator. It then uses the official Content Posting API file-upload flow and persists the returned `publish_id` in `data/publications.json`.
+
+Publishing status and basic engagement metrics can be refreshed later:
+
+```bash
+node src/cli.js publication-refresh --id "pub_..."
+node src/cli.js publication-metrics --id "pub_..."
+```
+
+Metrics require the TikTok `video.list` scope and are stored as timestamped snapshots so future learning code can use observed outcomes rather than overwrite history.
+
 ## HTTP API
 
 ```bash
@@ -230,7 +260,7 @@ docs/                    architecture and roadmap
 The next milestone is **not** auto-posting. It is improving `CreativeSpec -> high-quality TikTok` first:
 
 1. render/generation retry by failed stage
-2. publishing + performance learning
+2. validate the guarded publishing + performance-snapshot foundation
 3. actual provider cost ledger + budget reconciliation
 4. caption-style experiments driven by retention
 
