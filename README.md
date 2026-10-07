@@ -85,6 +85,28 @@ Daily-plan jobs reconcile their planning estimate against that ledger. If covera
 
 Cost provenance now also consumes OpenRouter QC `usage` (including reported `cost` when present) and OpenAI-compatible LLM token/cost metadata when the upstream provider returns it. Non-reporting providers still remain incomplete rather than being priced from hard-coded tables.
 
+## External provider billing reconciliation
+
+For providers whose generation responses do not expose actual billing, import a provider/account export instead of guessing with static price tables.
+
+Example billing file:
+
+```json
+[
+  {"provider":"luma","generationId":"gen_123","costUsd":1.42},
+  {"provider":"elevenlabs","taskId":"req_456","costUsd":0.08}
+]
+```
+
+Import and reconcile:
+
+```bash
+node src/cli.js billing-import --file ./billing.json --source provider-export
+node src/cli.js billing-reconcile --id "vid_..."
+```
+
+Imported records are keyed by `provider + taskId/generationId`, upserted idempotently, and only attach to matching project provenance. Reconciled costs carry their source in the project ledger.
+
 ## Guarded TikTok publishing
 
 TikTok publishing is available as an **explicitly confirmed** post-generation step. It is never invoked by `generate`, `plan`, or `run-plan`.
