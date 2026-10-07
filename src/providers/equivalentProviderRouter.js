@@ -183,6 +183,9 @@ export class EquivalentProviderRouter {
       qualityScore: Number.isFinite(Number(qualityScore)) ? Number(qualityScore) : null,
       actualCostUsd: Number.isFinite(Number(actualCostUsd)) ? Number(actualCostUsd) : null,
     };
+    if (this.statsStore?.recordFeedback) {
+      return this.statsStore.recordFeedback(providerId, outcome);
+    }
     return this.record(providerId, outcome);
   }
 
