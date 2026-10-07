@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { buildProjectCostLedger } from '../services/costLedger.js';
 import { ProviderBillingStore } from './providerBillingStore.js';
@@ -23,5 +23,29 @@ export class JsonStore {
   async getProject(id) {
     const file = path.join(this.rootDir, `${id}.json`);
     return JSON.parse(await readFile(file, 'utf8'));
+  }
+
+  async listProjects({ limit = 200 } = {}) {
+    let names = [];
+    try {
+      names = await readdir(this.rootDir);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+
+    const projects = [];
+    for (const name of names.filter((item) => /^vid_.*\.json$/.test(item))) {
+      try {
+        const project = JSON.parse(await readFile(path.join(this.rootDir, name), 'utf8'));
+        projects.push(project);
+      } catch {
+        // Ignore malformed project artifacts in observability listings.
+      }
+    }
+
+    return projects
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .slice(0, Math.max(1, Math.min(5000, Number(limit) || 200)));
   }
 }
