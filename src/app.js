@@ -4,10 +4,13 @@ import { FfmpegRenderer } from './renderers/ffmpegRenderer.js';
 import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
 import { DailyPlanStore } from './storage/dailyPlanStore.js';
+import { PublicationStore } from './storage/publicationStore.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
 import { PoseMotionExtractor } from './services/poseMotionExtractor.js';
+import { PublishingService } from './services/publishingService.js';
+import { TikTokPublisher } from './providers/tiktokPublisher.js';
 import { VideoPipeline } from './core/pipeline.js';
 import { AudiovisualPipeline } from './core/audiovisualPipeline.js';
 import {
@@ -41,6 +44,15 @@ export function createApp(overrides = {}) {
   const dailyPlanStore = overrides.dailyPlanStore || new DailyPlanStore(
     process.env.DAILY_PLAN_PATH || './data/daily-plans.json',
   );
+  const publicationStore = overrides.publicationStore || new PublicationStore(
+    process.env.PUBLICATION_STORE_PATH || './data/publications.json',
+  );
+  const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher();
+  const publishingService = overrides.publishingService || new PublishingService({
+    projectStore: store,
+    publicationStore,
+    publisher: tiktokPublisher,
+  });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
   const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
     process.env.MOTION_REFERENCE_LIBRARY_PATH || './data/motion-references.json',
@@ -61,6 +73,11 @@ export function createApp(overrides = {}) {
     motionLibrary: {
       builderAvailable: Boolean(motionLibraryBuilder.extractor?.available),
       libraryPath: motionReferenceStore.filePath,
+    },
+    publishing: {
+      tiktokConfigured: tiktokPublisher.configured,
+      explicitConfirmationRequired: true,
+      publicationStorePath: publicationStore.filePath,
     },
   };
   if (mode === 'audiovisual') {
@@ -162,6 +179,22 @@ export function createApp(overrides = {}) {
     capabilities,
     motionReferenceStore,
     motionLibraryBuilder,
+    publishingService,
+    async publishProject(projectId, options = {}) {
+      return publishingService.publishProject(projectId, options);
+    },
+    async refreshPublication(publicationId) {
+      return publishingService.refreshStatus(publicationId);
+    },
+    async refreshPublicationMetrics(publicationId) {
+      return publishingService.refreshMetrics(publicationId);
+    },
+    async getPublication(publicationId) {
+      return publishingService.getPublication(publicationId);
+    },
+    async listPublications(options = {}) {
+      return publishingService.listPublications(options);
+    },
     async opportunities() {
       const items = await trends.list();
       return trendIntelligence ? items : rankOpportunities(items);
