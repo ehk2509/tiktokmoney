@@ -50,6 +50,7 @@ export function createLlmProvider(env = process.env) {
           baseUrl: env.LLM_BASE_URL,
           model,
           judgeModel: index === 0 ? env.CREATIVE_JUDGE_MODEL : model,
+          providerName: 'openai',
         }),
       });
     });
@@ -64,6 +65,7 @@ export function createLlmProvider(env = process.env) {
             baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
             model,
             judgeModel: model,
+            providerName: 'openrouter',
           }),
         });
       });
@@ -82,6 +84,7 @@ export function createLlmProvider(env = process.env) {
           baseUrl: env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
           model,
           judgeModel: model,
+          providerName: 'openrouter',
         }),
       });
     });
@@ -95,6 +98,7 @@ export function createLlmProvider(env = process.env) {
             baseUrl: env.LLM_BASE_URL,
             model,
             judgeModel: model,
+            providerName: 'openai',
           }),
         });
       });
