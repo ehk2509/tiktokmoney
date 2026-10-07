@@ -314,10 +314,20 @@ export function createApp(overrides = {}) {
       return circuitBreakerService.status();
     },
     async providerReliabilityStatus() {
-      if (typeof visual?.ai?.reliabilitySnapshot === 'function') {
-        return visual.ai.reliabilitySnapshot();
+      const groups = {};
+      const sources = {
+        video: visual?.ai,
+        llm,
+        realismQc,
+        dialogueQc: mode === 'audiovisual' ? pipeline.dialogueQc : null,
+        voice: mode === 'scene-composer' ? pipeline.voice : null,
+      };
+      for (const [name, source] of Object.entries(sources)) {
+        if (typeof source?.reliabilitySnapshot === 'function') {
+          groups[name] = await source.reliabilitySnapshot();
+        }
       }
-      return {};
+      return groups;
     },
     async schedulePublication(projectId, options = {}) {
       return publicationOrchestrator.schedulePublish(projectId, options);
