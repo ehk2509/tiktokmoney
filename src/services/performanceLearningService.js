@@ -41,6 +41,10 @@ export class PerformanceLearningService {
           ? round((Number(ledger.costUsd) / metrics.viewCount) * 1000, 6)
           : null,
       },
+      experiment: normalizeExperiment(project.planning?.experiment),
+      observation: {
+        ageHours: observationAgeHours(snapshot),
+      },
       evidence: {
         metricsSource: 'tiktok-api',
         costSource: ledger.source || 'unavailable',
@@ -55,6 +59,7 @@ export class PerformanceLearningService {
     const relevant = outcomes.filter((item) => (
       (!audience || !item.audience || item.audience === audience)
       && item.metrics?.viewCount != null
+      && (!item.experiment || item.experiment.learningEligible === true)
     ));
 
     return {
@@ -137,4 +142,29 @@ function numberOrNull(value) {
 function round(value, digits = 2) {
   const scale = 10 ** digits;
   return Math.round(Number(value) * scale) / scale;
+}
+
+
+function normalizeExperiment(experiment) {
+  if (!experiment?.id) return null;
+  return {
+    id: String(experiment.id),
+    arm: String(experiment.arm || ''),
+    armIndex: Number(experiment.armIndex) || 0,
+    armCount: Number(experiment.armCount) || 0,
+    observationWindowHours: Number(experiment.observationWindowHours) || 24,
+    comparisonToleranceHours: Number(experiment.comparisonToleranceHours) || 3,
+    learningEligible: false,
+  };
+}
+
+function observationAgeHours(snapshot) {
+  const capturedAt = Date.parse(snapshot?.capturedAt || '');
+  const createdTimes = (snapshot?.videos || [])
+    .map((video) => Number(video?.createTime))
+    .filter(Number.isFinite)
+    .map((value) => value * 1000);
+  if (!Number.isFinite(capturedAt) || !createdTimes.length) return null;
+  const earliest = Math.min(...createdTimes);
+  return round(Math.max(0, capturedAt - earliest) / 3600000, 4);
 }

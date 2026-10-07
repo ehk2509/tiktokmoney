@@ -87,6 +87,7 @@ export class AudiovisualPipeline {
     researchPacket: providedResearchPacket = null,
     creativeCandidateCount = null,
     productionVariantIndex = 0,
+    experiment = null,
   }) {
     if (!topic?.trim()) throw new Error('topic is required');
     if (!this.audiovisual) throw new Error('audiovisual provider is required');
@@ -123,6 +124,7 @@ export class AudiovisualPipeline {
         creativeCandidateCount: creativeCandidateCount == null
           ? null
           : Number(creativeCandidateCount),
+        experiment,
       },
       creativeTournament: tournament,
       creativeBrief: tournament.winner || null,

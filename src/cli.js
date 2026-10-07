@@ -87,6 +87,12 @@ try {
       topic: options.topic || null,
       audience: options.audience || null,
     }), null, 2));
+  } else if (command === 'experiments') {
+    console.log(JSON.stringify(await app.listExperiments(), null, 2));
+  } else if (command === 'experiment-evaluate') {
+    const id = options.id || options.experiment;
+    if (!id) throw new Error('Usage: node src/cli.js experiment-evaluate --id exp_...');
+    console.log(JSON.stringify(await app.evaluateExperiment(id), null, 2));
   } else if (command === 'opportunities') {
     console.log(JSON.stringify(await app.opportunities(), null, 2));
   } else if (command === 'research') {
@@ -182,6 +188,8 @@ try {
       '  publications [--limit 50]',
       '  performance-outcomes [--limit 100]',
       '  learning-context [--topic "..."] [--audience "..."]',
+      '  experiments',
+      '  experiment-evaluate --id "exp_..."',
       '  research --topic "..."',
       '  plan [--budget 6] [--max-videos 3]',
       '  run-plan --id "plan_..."',

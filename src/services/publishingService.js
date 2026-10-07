@@ -6,12 +6,14 @@ export class PublishingService {
     publicationStore,
     publisher,
     learningService = null,
+    experimentService = null,
     now = () => new Date(),
   }) {
     this.projectStore = projectStore;
     this.publicationStore = publicationStore;
     this.publisher = publisher;
     this.learningService = learningService;
+    this.experimentService = experimentService;
     this.now = now;
   }
 
@@ -102,6 +104,11 @@ export class PublishingService {
       await this.publicationStore.savePublication(publication);
       if (this.learningService?.recordPublication) {
         publication.latestOutcome = await this.learningService.recordPublication(publication);
+        if (publication.latestOutcome?.experiment?.id && this.experimentService?.evaluate) {
+          publication.latestExperiment = await this.experimentService.evaluate(
+            publication.latestOutcome.experiment.id,
+          );
+        }
         await this.publicationStore.savePublication(publication);
       }
     }
