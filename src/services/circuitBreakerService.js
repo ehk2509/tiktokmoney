@@ -46,7 +46,7 @@ export class CircuitBreakerService {
   }
 
   async status() {
-    const operations = ['generation', 'publishing'];
+    const operations = ['generation', 'publishing', 'publishing-recovery'];
     const decisions = {};
     for (const operation of operations) {
       decisions[operation] = await this.evaluate(operation);
@@ -75,6 +75,13 @@ function operationBlockingCodes(operation) {
       'tiktok_reauthorization_required',
       'orchestration_retry_backlog',
       'orchestration_stuck_jobs',
+    ]);
+  }
+
+  if (operation === 'publishing-recovery') {
+    return new Set([
+      'tiktok_auth_missing',
+      'tiktok_reauthorization_required',
     ]);
   }
 
