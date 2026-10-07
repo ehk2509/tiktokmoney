@@ -146,7 +146,9 @@ export class TikTokAuthService {
       refreshToken: payload.refresh_token || previous?.refreshToken || null,
       tokenType: payload.token_type || 'Bearer',
       openId: payload.open_id || previous?.openId || null,
-      scopes: String(payload.scope || '').split(',').map((item) => item.trim()).filter(Boolean),
+      scopes: payload.scope
+        ? String(payload.scope).split(',').map((item) => item.trim()).filter(Boolean)
+        : previous?.scopes || [],
       accessTokenExpiresAt: accessExpiresIn
         ? new Date(now.getTime() + accessExpiresIn * 1000).toISOString()
         : null,
