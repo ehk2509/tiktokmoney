@@ -143,7 +143,7 @@
 - [x] Creative feature extraction + TikTok outcome evidence
 - [x] Controlled A/B experiment assignment + comparable-window evaluation
 
-Current M3 publishing intentionally requires explicit per-post confirmation. Durable OAuth/token refresh, scheduling, metrics orchestration, experiment assignment, and verified webhook event ingestion are implemented.
+Publishing remains explicitly authorized: direct posts require explicit confirmation, and scheduled posts require explicit confirmation when the schedule is created. Durable OAuth/token refresh, scheduling, metrics orchestration, experiment assignment, and verified webhook event ingestion are implemented.
 
 ## M3.5 - Autonomous production planning
 
@@ -195,7 +195,7 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Automatic failover across configured AI-video providers/models
 - [x] Automatic provider re-entry after cooldown
 - [x] Provider reliability CLI/API visibility
-- [x] Fail-closed behavior retained for single-provider QC/voice paths
+- [x] Fail-closed behavior retained whenever no healthy equivalent QC/voice provider is configured
 
 
 ## M3.11 - Capability provider failover
@@ -227,3 +227,17 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Feed Creative Tournament quality back to the exact routed LLM generator
 - [x] Record downstream quality without double-counting provider attempts
 - [x] Expose routing score and evidence in provider reliability status
+
+
+## Current remaining product/evidence gaps
+
+These are the highest-value gaps after M3.13:
+
+- [ ] Complete the first frozen 30-case paid-provider benchmark and preserve the suite hash for future release comparisons
+- [ ] Add repeated randomized experiment units / minimum posts per arm before treating creative experiments as causal evidence
+- [ ] Normalize non-experiment learning to one comparable observation window per publication so repeated refreshes cannot overweight a post
+- [ ] Add topic/cluster relevance to performance-learning context instead of audience-only filtering
+- [ ] Add native automated provider account-billing adapters where APIs expose trustworthy billing endpoints
+- [ ] Add revenue/conversion attribution so routing and creative learning can optimize business outcomes, not only engagement
+- [ ] Extend value-aware routing to task/context-specific evidence (for example ideation vs production script vs scene class)
+- [ ] Freeze/version completed experiment results for stronger auditability
