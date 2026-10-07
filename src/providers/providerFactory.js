@@ -10,6 +10,7 @@ import { AiFirstVisualProvider } from './visualRouter.js';
 import { OpenRouterRealismQcProvider } from './openRouterRealismQcProvider.js';
 import { ProviderStatsStore } from '../storage/providerStatsStore.js';
 import { ProviderReliabilityService } from '../services/providerReliabilityService.js';
+import { EquivalentProviderRouter } from './equivalentProviderRouter.js';
 import { RunwayAudiovisualProvider } from './runwayAudiovisualProvider.js';
 import { OpenAiTranscriptionProvider } from './openAiTranscriptionProvider.js';
 import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
@@ -33,11 +34,22 @@ export function createLlmProvider(env = process.env) {
 
   if (provider === 'template') return new TemplateLlmProvider();
   if (provider === 'openai-compatible' || provider === 'openai') {
-    return new OpenAICompatibleLlmProvider({
-      apiKey: env.OPENAI_API_KEY,
-      baseUrl: env.LLM_BASE_URL,
-      model: env.LLM_MODEL,
-      judgeModel: env.CREATIVE_JUDGE_MODEL,
+    const models = unique([
+      env.LLM_MODEL,
+      ...csv(env.LLM_FALLBACK_MODELS),
+    ].filter(Boolean));
+    const entries = models.map((model, index) => ({
+      id: `llm:${model}`,
+      provider: new OpenAICompatibleLlmProvider({
+        apiKey: env.OPENAI_API_KEY,
+        baseUrl: env.LLM_BASE_URL,
+        model,
+        judgeModel: index === 0 ? env.CREATIVE_JUDGE_MODEL : model,
+      }),
+    }));
+    return wrapEquivalent(entries, {
+      capability: 'llm',
+      env,
     });
   }
 
@@ -228,35 +240,46 @@ export function createRealismQcProvider(env = process.env) {
     throw new Error('REALISM_QC_MODEL is required when REALISM_QC_ENABLED=true');
   }
 
-  return new OpenRouterRealismQcProvider({
-    apiKey: env.OPENROUTER_API_KEY,
-    baseUrl: env.OPENROUTER_BASE_URL,
-    model: env.REALISM_QC_MODEL,
-    threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
-    temporalThreshold: env.REALISM_QC_TEMPORAL_THRESHOLD
-      ? Number(env.REALISM_QC_TEMPORAL_THRESHOLD)
-      : undefined,
-    continuityThreshold: env.REALISM_QC_CONTINUITY_THRESHOLD
-      ? Number(env.REALISM_QC_CONTINUITY_THRESHOLD)
-      : undefined,
-    keyframeThreshold: env.REALISM_QC_KEYFRAME_THRESHOLD
-      ? Number(env.REALISM_QC_KEYFRAME_THRESHOLD)
-      : undefined,
-    motionRegionThreshold: env.REALISM_QC_MOTION_REGION_THRESHOLD
-      ? Number(env.REALISM_QC_MOTION_REGION_THRESHOLD)
-      : undefined,
-    motionGuideThreshold: env.REALISM_QC_MOTION_GUIDE_THRESHOLD
-      ? Number(env.REALISM_QC_MOTION_GUIDE_THRESHOLD)
-      : undefined,
-    temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
-      ? undefined
-      : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),
-    maxRegenerations: env.REALISM_MAX_REGENERATIONS
-      ? Number(env.REALISM_MAX_REGENERATIONS)
-      : undefined,
-    failClosed: env.REALISM_QC_FAIL_CLOSED == null
-      ? undefined
-      : isEnabled(env.REALISM_QC_FAIL_CLOSED),
+  const models = unique([
+    env.REALISM_QC_MODEL,
+    ...csv(env.REALISM_QC_FALLBACK_MODELS),
+  ].filter(Boolean));
+  const entries = models.map((model) => ({
+    id: `qc:realism:${model}`,
+    provider: new OpenRouterRealismQcProvider({
+      apiKey: env.OPENROUTER_API_KEY,
+      baseUrl: env.OPENROUTER_BASE_URL,
+      model,
+      threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
+      temporalThreshold: env.REALISM_QC_TEMPORAL_THRESHOLD
+        ? Number(env.REALISM_QC_TEMPORAL_THRESHOLD)
+        : undefined,
+      continuityThreshold: env.REALISM_QC_CONTINUITY_THRESHOLD
+        ? Number(env.REALISM_QC_CONTINUITY_THRESHOLD)
+        : undefined,
+      keyframeThreshold: env.REALISM_QC_KEYFRAME_THRESHOLD
+        ? Number(env.REALISM_QC_KEYFRAME_THRESHOLD)
+        : undefined,
+      motionRegionThreshold: env.REALISM_QC_MOTION_REGION_THRESHOLD
+        ? Number(env.REALISM_QC_MOTION_REGION_THRESHOLD)
+        : undefined,
+      motionGuideThreshold: env.REALISM_QC_MOTION_GUIDE_THRESHOLD
+        ? Number(env.REALISM_QC_MOTION_GUIDE_THRESHOLD)
+        : undefined,
+      temporalEnabled: env.REALISM_QC_TEMPORAL_ENABLED == null
+        ? undefined
+        : isEnabled(env.REALISM_QC_TEMPORAL_ENABLED),
+      maxRegenerations: env.REALISM_MAX_REGENERATIONS
+        ? Number(env.REALISM_MAX_REGENERATIONS)
+        : undefined,
+      failClosed: env.REALISM_QC_FAIL_CLOSED == null
+        ? undefined
+        : isEnabled(env.REALISM_QC_FAIL_CLOSED),
+    }),
+  }));
+  return wrapEquivalent(entries, {
+    capability: 'qc:realism',
+    env,
   });
 }
 
@@ -347,17 +370,28 @@ export function createDialogueQcProvider(env = process.env) {
     throw new Error('TRANSCRIPTION_API_KEY or OPENAI_API_KEY is required when DIALOGUE_QC_ENABLED=true');
   }
 
-  return new OpenAiTranscriptionProvider({
-    apiKey,
-    baseUrl: env.TRANSCRIPTION_BASE_URL,
-    model: env.TRANSCRIPTION_MODEL,
-    maxWer: env.DIALOGUE_QC_MAX_WER ? Number(env.DIALOGUE_QC_MAX_WER) : undefined,
-    maxWordCountDelta: env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA
-      ? Number(env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA)
-      : undefined,
-    maxRegenerations: env.DIALOGUE_QC_MAX_REGENERATIONS
-      ? Number(env.DIALOGUE_QC_MAX_REGENERATIONS)
-      : undefined,
+  const models = unique([
+    env.TRANSCRIPTION_MODEL,
+    ...csv(env.TRANSCRIPTION_FALLBACK_MODELS),
+  ].filter(Boolean));
+  const entries = models.map((model) => ({
+    id: `qc:transcription:${model}`,
+    provider: new OpenAiTranscriptionProvider({
+      apiKey,
+      baseUrl: env.TRANSCRIPTION_BASE_URL,
+      model,
+      maxWer: env.DIALOGUE_QC_MAX_WER ? Number(env.DIALOGUE_QC_MAX_WER) : undefined,
+      maxWordCountDelta: env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA
+        ? Number(env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA)
+        : undefined,
+      maxRegenerations: env.DIALOGUE_QC_MAX_REGENERATIONS
+        ? Number(env.DIALOGUE_QC_MAX_REGENERATIONS)
+        : undefined,
+    }),
+  }));
+  return wrapEquivalent(entries, {
+    capability: 'qc:transcription',
+    env,
   });
 }
 
@@ -491,11 +525,22 @@ export function createVoiceProvider(env = process.env) {
     return new NullVoiceProvider();
   }
 
-  return new ElevenLabsVoiceProvider({
-    apiKey: env.ELEVENLABS_API_KEY,
-    voiceId: env.ELEVENLABS_VOICE_ID,
-    modelId: env.ELEVENLABS_MODEL_ID,
-    outputDir: env.OUTPUT_DIR,
+  const models = unique([
+    env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2',
+    ...csv(env.ELEVENLABS_FALLBACK_MODELS),
+  ]);
+  const entries = models.map((modelId) => ({
+    id: `voice:elevenlabs:${modelId}`,
+    provider: new ElevenLabsVoiceProvider({
+      apiKey: env.ELEVENLABS_API_KEY,
+      voiceId: env.ELEVENLABS_VOICE_ID,
+      modelId,
+      outputDir: env.OUTPUT_DIR,
+    }),
+  }));
+  return wrapEquivalent(entries, {
+    capability: 'voice',
+    env,
   });
 }
 
@@ -639,4 +684,43 @@ export function createTextArtifactQcProvider(env = process.env) {
       ? Number(env.TEXT_ARTIFACT_QC_MAX_REGENERATIONS)
       : undefined,
   });
+}
+
+
+function wrapEquivalent(entries, { capability, env }) {
+  if (entries.length === 1) return entries[0].provider;
+  const statsStore = new ProviderStatsStore(env.PROVIDER_STATS_PATH);
+  const reliabilityService = new ProviderReliabilityService({
+    statsStore,
+    minSamples: env.PROVIDER_RELIABILITY_MIN_SAMPLES
+      ? Number(env.PROVIDER_RELIABILITY_MIN_SAMPLES)
+      : undefined,
+    failureRateOpen: env.PROVIDER_FAILURE_RATE_OPEN
+      ? Number(env.PROVIDER_FAILURE_RATE_OPEN)
+      : undefined,
+    throttleRateOpen: env.PROVIDER_THROTTLE_RATE_OPEN
+      ? Number(env.PROVIDER_THROTTLE_RATE_OPEN)
+      : undefined,
+    latencyOpenMs: env.PROVIDER_LATENCY_OPEN_MS
+      ? Number(env.PROVIDER_LATENCY_OPEN_MS)
+      : undefined,
+    cooldownMinutes: env.PROVIDER_CIRCUIT_COOLDOWN_MINUTES
+      ? Number(env.PROVIDER_CIRCUIT_COOLDOWN_MINUTES)
+      : undefined,
+  });
+  return new EquivalentProviderRouter({
+    providers: entries,
+    statsStore,
+    reliabilityService,
+    capability,
+  });
+}
+
+function csv(value) {
+  if (!value) return [];
+  return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function unique(values) {
+  return [...new Set(values)];
 }
