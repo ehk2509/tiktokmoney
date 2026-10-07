@@ -137,3 +137,15 @@ test('daily plan budget only claims actual total when every job is complete', ()
   assert.equal(complete.varianceUsd, 0);
   assert.equal(complete.coverage, 1);
 });
+
+
+test('plan reconciliation supports legacy plans that have no budget object yet', () => {
+  const result = reconcilePlanBudget({
+    jobs: [
+      { estimatedCostUsd: 1.5, cost: { actualComplete: false, observedCostUsd: 1.1 } },
+    ],
+  });
+  assert.equal(result.estimatedUsd, 1.5);
+  assert.equal(result.actualUsd, null);
+  assert.equal(result.observedUsd, 1.1);
+});
