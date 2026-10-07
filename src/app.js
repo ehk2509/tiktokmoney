@@ -5,9 +5,11 @@ import { AudiovisualRenderer } from './renderers/audiovisualRenderer.js';
 import { JsonStore } from './storage/jsonStore.js';
 import { DailyPlanStore } from './storage/dailyPlanStore.js';
 import { PublicationStore } from './storage/publicationStore.js';
+import { OrchestrationStore } from './storage/orchestrationStore.js';
 import { PerformanceLearningStore } from './storage/performanceLearningStore.js';
 import { PerformanceLearningService } from './services/performanceLearningService.js';
 import { ExperimentService } from './services/experimentService.js';
+import { PublicationOrchestrator } from './services/publicationOrchestrator.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
@@ -60,12 +62,21 @@ export function createApp(overrides = {}) {
   const experimentService = overrides.experimentService || new ExperimentService({
     store: performanceLearningStore,
   });
+  const orchestrationStore = overrides.orchestrationStore || new OrchestrationStore(
+    process.env.ORCHESTRATION_STORE_PATH || './data/orchestration.json',
+  );
   const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher();
   const publishingService = overrides.publishingService || new PublishingService({
     projectStore: store,
     publicationStore,
     publisher: tiktokPublisher,
     learningService,
+    experimentService,
+  });
+  const publicationOrchestrator = overrides.publicationOrchestrator || new PublicationOrchestrator({
+    store: orchestrationStore,
+    publishingService,
+    projectStore: store,
     experimentService,
   });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
@@ -196,6 +207,8 @@ export function createApp(overrides = {}) {
     motionReferenceStore,
     motionLibraryBuilder,
     publishingService,
+    publicationOrchestrator,
+    orchestrationStore,
     learningService,
     experimentService,
     performanceLearningStore,
@@ -223,6 +236,15 @@ export function createApp(overrides = {}) {
     },
     async listPublications(options = {}) {
       return publishingService.listPublications(options);
+    },
+    async schedulePublication(projectId, options = {}) {
+      return publicationOrchestrator.schedulePublish(projectId, options);
+    },
+    async runPublicationOrchestration(options = {}) {
+      return publicationOrchestrator.runDue(options);
+    },
+    async listOrchestrationJobs(options = {}) {
+      return orchestrationStore.listJobs(options);
     },
     async listPerformanceOutcomes(options = {}) {
       return performanceLearningStore.listOutcomes(options);
