@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises';
 import { createApp } from './app.js';
 import {
   runRealGenerationBenchmark,
