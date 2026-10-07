@@ -26,7 +26,13 @@ export class VideoPipeline {
     this.subtitleConfig = subtitleConfig || subtitleConfigFromEnv();
   }
 
-  async generate({ topic, audience = 'curious adults', durationSeconds = 35, render = true }) {
+  async generate({
+    topic,
+    audience = 'curious adults',
+    durationSeconds = 35,
+    render = true,
+    experiment = null,
+  }) {
     if (!topic?.trim()) throw new Error('topic is required');
 
     const id = `vid_${crypto.randomUUID()}`;
@@ -45,6 +51,7 @@ export class VideoPipeline {
       topic: topic.trim(),
       audience,
       createdAt: new Date().toISOString(),
+      planning: { experiment },
       script,
       storyBible,
       scenes,
