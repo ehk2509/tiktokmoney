@@ -141,7 +141,7 @@
 - [ ] Scheduling queue
 - [x] Post status + basic engagement metric snapshots
 - [x] Creative feature extraction + TikTok outcome evidence
-- [ ] A/B experiment model
+- [x] Controlled A/B experiment assignment + comparable-window evaluation
 
 Current M3 publishing intentionally requires an explicit per-post confirmation and a user access token. OAuth/token-refresh UX, scheduling, webhooks and experiment assignment remain open.
 
@@ -164,5 +164,5 @@ Current M3 publishing intentionally requires an explicit per-post confirmation a
 - [x] External provider/account billing import and provenance reconciliation for non-reporting providers
 - [ ] Native automated account-billing adapters where provider APIs expose billing endpoints
 - [x] Conservative performance-learning context for future creative ranking by format/emotional driver
-- [ ] Contextual exploration/exploitation policy
+- [x] Bounded exploration via high-conviction control/challenger allocation
 - [x] Campaign budgets and autonomous daily planning
