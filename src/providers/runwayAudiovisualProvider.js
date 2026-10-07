@@ -9,6 +9,7 @@ import { buildMotionRegionPromptBlock } from '../core/motionRegionDirector.js';
 import { buildMotionGuidePromptBlock } from '../core/motionGuideDirector.js';
 import { PoseMotionExtractor } from '../services/poseMotionExtractor.js';
 import { summarizePoseSequence } from '../core/poseMotion.js';
+import { normalizeProviderUsage } from '../core/providerUsage.js';
 
 const DEFAULT_BASE_URL = 'https://api.dev.runwayml.com/v1';
 
@@ -165,6 +166,7 @@ export class RunwayAudiovisualProvider {
           voicePresetId: track.voicePresetId,
           exactText: track.exactText,
           localPath: track.localPath,
+          providerUsage: track.providerUsage || null,
         }));
 
         if (dialogueTrack.durationSeconds > 15.05) {
@@ -386,6 +388,11 @@ export class RunwayAudiovisualProvider {
       referenceEndImageUrl: keyframes?.last?.url || null,
       previousGenerationId: previousAsset?.generationId || null,
       previousActVideoReference: Boolean(continuePreviousShot && previousAsset?.sourceUrl),
+      providerUsage: normalizeProviderUsage(completed, {
+        provider: 'runway',
+        operation: 'video-generation',
+        model: this.model,
+      }),
     };
   }
 
@@ -585,6 +592,11 @@ export class RunwayAudiovisualProvider {
       position,
       projectId,
       segmentIndex,
+      providerUsage: normalizeProviderUsage(completed, {
+        provider: 'runway',
+        operation: 'keyframe-image',
+        model: this.imageModel,
+      }),
     };
   }
 
@@ -657,6 +669,11 @@ export class RunwayAudiovisualProvider {
       localPath,
       voicePresetId: character?.voice?.presetId || this.defaultVoice,
       exactText: text,
+      providerUsage: normalizeProviderUsage(completed, {
+        provider: 'runway',
+        operation: 'text-to-speech',
+        model: this.ttsModel,
+      }),
     };
   }
 

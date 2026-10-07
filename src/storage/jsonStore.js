@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { buildProjectCostLedger } from '../services/costLedger.js';
 
 export class JsonStore {
   constructor(rootDir = './data') {
@@ -7,6 +8,7 @@ export class JsonStore {
   }
 
   async saveProject(project) {
+    project.costLedger = buildProjectCostLedger(project);
     await mkdir(this.rootDir, { recursive: true });
     const file = path.join(this.rootDir, `${project.id}.json`);
     await writeFile(file, JSON.stringify(project, null, 2));

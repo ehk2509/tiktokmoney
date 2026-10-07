@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { similarity } from './trendIntelligence.js';
+import { reconcileEstimatedCost } from '../services/costLedger.js';
 
 export class DailyContentPlanner {
   constructor({
@@ -210,6 +211,10 @@ export class DailyContentPlanner {
 
         job.projectId = project.id || null;
         job.resultStatus = project.status || null;
+        job.cost = reconcileEstimatedCost({
+          estimatedCostUsd: job.estimatedCostUsd,
+          ledger: project.costLedger,
+        });
         job.completedAt = new Date().toISOString();
         job.status = successfulProjectStatus(project.status) ? 'COMPLETED' : 'REJECTED';
         job.error = project.error || null;
@@ -234,6 +239,8 @@ export class DailyContentPlanner {
           ? 'PARTIAL'
           : 'FAILED';
     plan.completedAt = new Date().toISOString();
+    plan.budget = plan.budget || {};
+    plan.budget.reconciled = reconcilePlanBudget(plan);
     await this.store.savePlan(plan);
     return plan;
   }
@@ -309,4 +316,40 @@ function clampRatio(value, fallback) {
 
 function round(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+
+export function reconcilePlanBudget(plan) {
+  const jobs = Array.isArray(plan?.jobs) ? plan.jobs : [];
+  const estimates = jobs
+    .map((job) => Number(job?.estimatedCostUsd))
+    .filter(Number.isFinite);
+  const actuals = jobs
+    .map((job) => job?.cost?.actualComplete ? Number(job.cost.actualCostUsd) : null)
+    .filter(Number.isFinite);
+  const observed = jobs
+    .map((job) => Number(job?.cost?.observedCostUsd))
+    .filter(Number.isFinite);
+  const completeJobs = jobs.filter((job) => job?.cost?.actualComplete).length;
+
+  const estimatedUsd = round(estimates.reduce((sum, value) => sum + value, 0));
+  const actualUsd = completeJobs === jobs.length && jobs.length
+    ? round(actuals.reduce((sum, value) => sum + value, 0))
+    : null;
+  const observedUsd = observed.length
+    ? round(observed.reduce((sum, value) => sum + value, 0))
+    : null;
+
+  return {
+    estimatedUsd,
+    actualUsd,
+    observedUsd,
+    completeJobs,
+    totalJobs: jobs.length,
+    coverage: jobs.length ? round(completeJobs / jobs.length) : 0,
+    varianceUsd: actualUsd != null ? round(actualUsd - estimatedUsd) : null,
+    variancePct: actualUsd != null && estimatedUsd > 0
+      ? round(((actualUsd - estimatedUsd) / estimatedUsd) * 100)
+      : null,
+  };
 }

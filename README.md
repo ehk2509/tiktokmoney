@@ -64,6 +64,27 @@ Rank sample opportunities:
 node src/cli.js opportunities
 ```
 
+## Provider cost ledger
+
+Every persisted project now includes a `costLedger` built from provider-reported billing attached to generation provenance. The first instrumented path covers Runway audiovisual video, locked-dialogue TTS, and generated keyframes.
+
+The ledger never substitutes estimates for missing billing:
+
+```json
+{
+  "taskCount": 4,
+  "usdReportedTaskCount": 3,
+  "costUsdObserved": 2.41,
+  "costUsdComplete": false,
+  "costUsd": null,
+  "source": "provider-reported-partial"
+}
+```
+
+Daily-plan jobs reconcile their planning estimate against that ledger. If coverage is incomplete, `actualCostUsd` and variance remain `null`; `observedCostUsd` and coverage are still reported. The plan-level `budget.reconciled` object follows the same rule, so incomplete provider billing can never masquerade as a complete production cost.
+
+Full all-provider cost coverage (LLM/QC and non-Runway media providers) remains a separate roadmap item.
+
 ## Guarded TikTok publishing
 
 TikTok publishing is available as an **explicitly confirmed** post-generation step. It is never invoked by `generate`, `plan`, or `run-plan`.
@@ -261,7 +282,7 @@ The next milestone is **not** auto-posting. It is improving `CreativeSpec -> hig
 
 1. render/generation retry by failed stage
 2. validate the guarded publishing + performance-snapshot foundation
-3. actual provider cost ledger + budget reconciliation
+3. extend provider cost coverage beyond the new Runway-backed ledger
 4. caption-style experiments driven by retention
 
 After quality is consistent, add live trend sources, publishing, analytics and the learning loop.
