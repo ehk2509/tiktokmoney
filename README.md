@@ -171,6 +171,44 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## Equivalent-provider failover for LLM, QC and voice
+
+Health-aware failover now extends beyond AI-video generation.
+
+The reusable equivalent-provider router can wrap providers that implement the same capability contract and applies the same provider reliability policy used by video routing. It tracks transport/API failures, throttling and latency per backend/model, skips equivalents whose provider circuit is OPEN, and falls through to the next healthy equivalent.
+
+Current opt-in groups:
+
+```env
+LLM_FALLBACK_MODELS=
+REALISM_QC_FALLBACK_MODELS=
+TRANSCRIPTION_FALLBACK_MODELS=
+ELEVENLABS_FALLBACK_MODELS=
+```
+
+Examples:
+
+```env
+LLM_MODEL=gpt-5.6-luna
+LLM_FALLBACK_MODELS=gpt-5.6-mini,gpt-5.6-nano
+
+REALISM_QC_MODEL=primary-vision-model
+REALISM_QC_FALLBACK_MODELS=backup-vision-model
+
+TRANSCRIPTION_MODEL=gpt-transcribe
+TRANSCRIPTION_FALLBACK_MODELS=backup-transcription-model
+```
+
+Fallbacks are disabled unless explicitly configured, so existing installations keep their current provider behavior.
+
+Important semantics:
+- an API/transport failure counts against provider reliability;
+- a legitimate QC rejection does **not** count as a provider infrastructure failure;
+- if every equivalent QC provider is unavailable, QC fails closed rather than being skipped;
+- voice failover only uses real configured ElevenLabs models and never silently falls back to `NullVoiceProvider`.
+
+Provider reliability status now includes video, LLM, realism QC, dialogue/transcription QC and voice groups when those groups have configured equivalents.
+
 ## Provider-level reliability routing
 
 The multi-provider AI-video router now tracks reliability per provider/model instead of treating all generation failures as one global problem.

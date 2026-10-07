@@ -196,3 +196,14 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Automatic provider re-entry after cooldown
 - [x] Provider reliability CLI/API visibility
 - [x] Fail-closed behavior retained for single-provider QC/voice paths
+
+
+## M3.11 - Capability provider failover
+
+- [x] Reusable equivalent-provider reliability router
+- [x] LLM fallback model group
+- [x] Realism QC fallback model group
+- [x] Dialogue/transcription QC fallback model group
+- [x] Voice fallback model group
+- [x] Fail-closed QC semantics when every equivalent is unavailable
+- [x] Provider health visibility across capability groups
