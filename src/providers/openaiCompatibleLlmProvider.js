@@ -5,6 +5,7 @@ export class OpenAICompatibleLlmProvider {
     baseUrl = process.env.LLM_BASE_URL || 'https://api.openai.com/v1',
     model = process.env.LLM_MODEL || 'gpt-5.6-luna',
     judgeModel = process.env.CREATIVE_JUDGE_MODEL || model,
+    providerName = 'openai-compatible',
     fetchImpl = globalThis.fetch,
   } = {}) {
     if (!apiKey) throw new Error('OPENAI_API_KEY is required for the OpenAI-compatible provider');
@@ -13,6 +14,7 @@ export class OpenAICompatibleLlmProvider {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.model = model;
     this.judgeModel = judgeModel;
+    this.providerName = providerName;
     this.fetch = fetchImpl;
   }
 
@@ -450,7 +452,7 @@ export class OpenAICompatibleLlmProvider {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
       if (parsed && typeof parsed === 'object' && payload?.usage && typeof payload.usage === 'object') {
         parsed.providerUsage = normalizeProviderUsage(payload, {
-          provider: 'openai-compatible',
+          provider: this.providerName,
           operation: 'llm-completion',
           model,
         });
