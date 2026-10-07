@@ -313,6 +313,12 @@ export function createApp(overrides = {}) {
     async circuitBreakerStatus() {
       return circuitBreakerService.status();
     },
+    async providerReliabilityStatus() {
+      if (typeof visual?.ai?.reliabilitySnapshot === 'function') {
+        return visual.ai.reliabilitySnapshot();
+      }
+      return {};
+    },
     async schedulePublication(projectId, options = {}) {
       return publicationOrchestrator.schedulePublish(projectId, options);
     },

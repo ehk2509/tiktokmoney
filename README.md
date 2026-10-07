@@ -171,6 +171,43 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## Provider-level reliability routing
+
+The multi-provider AI-video router now tracks reliability per provider/model instead of treating all generation failures as one global problem.
+
+Per-provider history includes:
+- generation failure rate;
+- throttling/rate-limit events;
+- average/max latency;
+- QC/pass history;
+- estimated spend already tracked by the router.
+
+Providers can enter an `OPEN` reliability circuit when recent failure, throttling, or latency crosses the configured thresholds. Open providers are removed from ranking, so scenes automatically fall through to another configured video provider/model. After the cooldown expires the provider is eligible again automatically and can prove recovery on the next attempt.
+
+Defaults:
+
+```env
+PROVIDER_RELIABILITY_MIN_SAMPLES=4
+PROVIDER_FAILURE_RATE_OPEN=0.60
+PROVIDER_THROTTLE_RATE_OPEN=0.50
+PROVIDER_LATENCY_OPEN_MS=120000
+PROVIDER_CIRCUIT_COOLDOWN_MINUTES=20
+```
+
+Inspect live provider state with:
+
+```bash
+node src/cli.js provider-reliability
+```
+
+or:
+
+```text
+GET /api/providers/reliability
+```
+
+Automatic rerouting is currently enabled only on the path that has equivalent alternatives today: the multi-model AI-video router (for example Luma Agents, Runway primary, and Runway Turbo when configured). QC and voice providers remain fail-closed rather than being silently skipped when no equivalent substitute is configured.
+
 ## Automatic incident-response circuit breakers
 
 TikTokMoney now turns observability signals into automatic operational gates.

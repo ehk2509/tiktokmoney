@@ -9,6 +9,7 @@ import { VideoModelRouter } from './videoModelRouter.js';
 import { AiFirstVisualProvider } from './visualRouter.js';
 import { OpenRouterRealismQcProvider } from './openRouterRealismQcProvider.js';
 import { ProviderStatsStore } from '../storage/providerStatsStore.js';
+import { ProviderReliabilityService } from '../services/providerReliabilityService.js';
 import { RunwayAudiovisualProvider } from './runwayAudiovisualProvider.js';
 import { OpenAiTranscriptionProvider } from './openAiTranscriptionProvider.js';
 import { OpenRouterLipSyncQcProvider } from './openRouterLipSyncQcProvider.js';
@@ -152,11 +153,31 @@ export function createAiVideoProvider(env = process.env) {
   }
 
   if (providers.length) {
+    const statsStore = new ProviderStatsStore(env.PROVIDER_STATS_PATH);
+    const reliabilityService = new ProviderReliabilityService({
+      statsStore,
+      minSamples: env.PROVIDER_RELIABILITY_MIN_SAMPLES
+        ? Number(env.PROVIDER_RELIABILITY_MIN_SAMPLES)
+        : undefined,
+      failureRateOpen: env.PROVIDER_FAILURE_RATE_OPEN
+        ? Number(env.PROVIDER_FAILURE_RATE_OPEN)
+        : undefined,
+      throttleRateOpen: env.PROVIDER_THROTTLE_RATE_OPEN
+        ? Number(env.PROVIDER_THROTTLE_RATE_OPEN)
+        : undefined,
+      latencyOpenMs: env.PROVIDER_LATENCY_OPEN_MS
+        ? Number(env.PROVIDER_LATENCY_OPEN_MS)
+        : undefined,
+      cooldownMinutes: env.PROVIDER_CIRCUIT_COOLDOWN_MINUTES
+        ? Number(env.PROVIDER_CIRCUIT_COOLDOWN_MINUTES)
+        : undefined,
+    });
     return new VideoModelRouter({
       providers,
       referenceProvider: providers.find((provider) => provider instanceof LumaAgentsVideoProvider)
         || providers[0],
-      statsStore: new ProviderStatsStore(env.PROVIDER_STATS_PATH),
+      statsStore,
+      reliabilityService,
       costWeight: env.VIDEO_ROUTER_COST_WEIGHT ? Number(env.VIDEO_ROUTER_COST_WEIGHT) : undefined,
       historyWeight: env.VIDEO_ROUTER_HISTORY_WEIGHT ? Number(env.VIDEO_ROUTER_HISTORY_WEIGHT) : undefined,
       switchOnQcFailure: env.VIDEO_ROUTER_SWITCH_ON_QC_FAILURE == null

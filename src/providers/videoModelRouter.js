@@ -3,6 +3,7 @@ export class VideoModelRouter {
     providers = [],
     referenceProvider = null,
     statsStore = null,
+    reliabilityService = null,
     costWeight = Number(process.env.VIDEO_ROUTER_COST_WEIGHT || 16),
     historyWeight = Number(process.env.VIDEO_ROUTER_HISTORY_WEIGHT || 22),
     switchOnQcFailure = parseBoolean(process.env.VIDEO_ROUTER_SWITCH_ON_QC_FAILURE, true),
@@ -10,6 +11,7 @@ export class VideoModelRouter {
     this.providers = providers.filter(Boolean);
     this.referenceProvider = referenceProvider || this.providers.find((provider) => provider.prepareSceneReference);
     this.statsStore = statsStore;
+    this.reliabilityService = reliabilityService;
     this.costWeight = Number(costWeight) || 0;
     this.historyWeight = Number(historyWeight) || 0;
     this.switchOnQcFailure = Boolean(switchOnQcFailure);
@@ -27,6 +29,9 @@ export class VideoModelRouter {
     const sceneClass = classifyScene(scene);
     const ranked = await this.rank(scene, sceneClass, context);
     const errors = [];
+    if (!ranked.length) {
+      throw new Error('all AI video providers are unavailable due to provider reliability circuits');
+    }
 
     let reference = null;
     if (this.referenceProvider?.prepareSceneReference) {
@@ -34,6 +39,7 @@ export class VideoModelRouter {
     }
 
     for (const candidate of ranked) {
+      const startedAt = Date.now();
       try {
         let asset;
         if (reference && candidate.provider.animateReference) {
@@ -54,6 +60,7 @@ export class VideoModelRouter {
             score: round(candidate.score),
             sceneClass,
             estimatedCostUsd: candidate.estimatedCostUsd,
+            latencyMs: Date.now() - startedAt,
             candidates: ranked.map((item) => ({
               providerId: item.id,
               score: round(item.score),
@@ -63,7 +70,10 @@ export class VideoModelRouter {
         };
       } catch (error) {
         errors.push({ providerId: candidate.id, message: error.message });
-        await this.recordGenerationFailure(candidate, sceneClass);
+        await this.recordGenerationFailure(candidate, sceneClass, {
+          latencyMs: Date.now() - startedAt,
+          throttled: isThrottleError(error),
+        });
       }
     }
 
@@ -85,6 +95,7 @@ export class VideoModelRouter {
       overallScore: qc?.overallScore,
       temporalScore: qc?.temporalScore,
       estimatedCostUsd: asset.estimatedCostUsd,
+      latencyMs: asset?.routing?.latencyMs,
       generationFailed: false,
     });
   }
@@ -95,6 +106,10 @@ export class VideoModelRouter {
     for (const provider of this.providers) {
       const profile = provider.profile || {};
       const id = profile.id || provider.id || provider.constructor.name;
+      const reliability = this.reliabilityService
+        ? await this.reliabilityService.state(id)
+        : null;
+      if (reliability?.state === 'OPEN') continue;
       const estimatedCostUsd = estimateCost(provider, scene);
       const history = this.statsStore ? await this.statsStore.get(id) : null;
       const bucket = history ? summarize(history, sceneClass) : null;
@@ -122,18 +137,35 @@ export class VideoModelRouter {
         score,
         estimatedCostUsd,
         history: bucket,
+        reliability,
       });
     }
 
     return results.sort((a, b) => b.score - a.score);
   }
 
-  async recordGenerationFailure(candidate, sceneClass) {
+  async reliabilitySnapshot() {
+    const states = {};
+    for (const provider of this.providers) {
+      const id = provider.profile?.id || provider.id || provider.constructor.name;
+      states[id] = this.reliabilityService
+        ? await this.reliabilityService.state(id)
+        : { providerId: id, state: 'UNKNOWN', reasons: [] };
+    }
+    return states;
+  }
+
+  async recordGenerationFailure(candidate, sceneClass, {
+    latencyMs = null,
+    throttled = false,
+  } = {}) {
     if (!this.statsStore) return;
     await this.statsStore.record(candidate.id, {
       sceneClass,
       passed: false,
       generationFailed: true,
+      throttled,
+      latencyMs,
       estimatedCostUsd: 0,
     });
   }
@@ -212,4 +244,11 @@ function parseBoolean(value, fallback) {
 
 function round(value) {
   return Math.round(Number(value) * 100) / 100;
+}
+
+
+function isThrottleError(error) {
+  const status = Number(error?.status || error?.statusCode || error?.response?.status);
+  if (status === 429) return true;
+  return /rate limit|too many requests|throttl|quota/i.test(String(error?.message || ''));
 }

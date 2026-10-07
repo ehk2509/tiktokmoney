@@ -54,6 +54,8 @@ try {
     console.log(JSON.stringify(await app.observabilitySnapshot(), null, 2));
   } else if (command === 'circuit-breakers') {
     console.log(JSON.stringify(await app.circuitBreakerStatus(), null, 2));
+  } else if (command === 'provider-reliability') {
+    console.log(JSON.stringify(await app.providerReliabilityStatus(), null, 2));
   } else if (command === 'billing-import') {
     const file = options.file || options.input;
     if (!file) throw new Error('Usage: node src/cli.js billing-import --file ./billing.json [--source provider-export]');
@@ -233,6 +235,7 @@ try {
       '  tiktok-webhooks-process [--limit 100]',
       '  health',
       '  circuit-breakers',
+      '  provider-reliability',
       '  billing-import --file ./billing.json [--source provider-export]',
       '  billing-reconcile --id "vid_..."',
       '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',
