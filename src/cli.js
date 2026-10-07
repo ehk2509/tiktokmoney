@@ -66,6 +66,32 @@ try {
       videoCoverTimestampMs: options['cover-ms'] ? Number(options['cover-ms']) : 1000,
     });
     console.log(JSON.stringify(publication, null, 2));
+  } else if (command === 'publish-schedule') {
+    const id = options.id || options.project;
+    if (!id) throw new Error('Usage: node src/cli.js publish-schedule --id vid_... --at 2026-10-08T12:00:00Z --privacy SELF_ONLY --confirm-publish');
+    if (options['confirm-publish'] !== true) {
+      throw new Error('--confirm-publish is required before scheduling a TikTok publication');
+    }
+    if (!options.privacy) throw new Error('--privacy is required');
+    console.log(JSON.stringify(await app.schedulePublication(id, {
+      runAt: options.at || options['run-at'],
+      confirmPublish: true,
+      privacyLevel: options.privacy,
+      title: options.title || null,
+      disableComment: options['disable-comment'] === true,
+      disableDuet: options['disable-duet'] === true,
+      disableStitch: options['disable-stitch'] === true,
+      videoCoverTimestampMs: options['cover-ms'] ? Number(options['cover-ms']) : 1000,
+    }), null, 2));
+  } else if (command === 'orchestration-run') {
+    console.log(JSON.stringify(await app.runPublicationOrchestration({
+      limit: options.limit ? Number(options.limit) : undefined,
+    }), null, 2));
+  } else if (command === 'orchestration-jobs') {
+    console.log(JSON.stringify(await app.listOrchestrationJobs({
+      limit: options.limit ? Number(options.limit) : undefined,
+      status: options.status || null,
+    }), null, 2));
   } else if (command === 'publication-refresh') {
     const id = options.id || options.publication;
     if (!id) throw new Error('Usage: node src/cli.js publication-refresh --id pub_...');
@@ -183,6 +209,9 @@ try {
       '  billing-import --file ./billing.json [--source provider-export]',
       '  billing-reconcile --id "vid_..."',
       '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',
+      '  publish-schedule --id "vid_..." --at "2026-10-08T12:00:00Z" --privacy SELF_ONLY --confirm-publish',
+      '  orchestration-run [--limit 50]',
+      '  orchestration-jobs [--status QUEUED]',
       '  publication-refresh --id "pub_..."',
       '  publication-metrics --id "pub_..."',
       '  publications [--limit 50]',

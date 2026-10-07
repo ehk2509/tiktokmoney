@@ -32,6 +32,36 @@ const server = http.createServer(async (req, res) => {
         : json(res, 404, { error: 'publication_not_found' });
     }
 
+    const schedulePublicationMatch = req.url?.match(/^\/api\/videos\/([^/?]+)\/schedule$/);
+    if (req.method === 'POST' && schedulePublicationMatch) {
+      const body = await readJson(req);
+      if (body.confirmPublish !== true) {
+        return json(res, 400, { error: 'confirmPublish=true is required' });
+      }
+      if (!body.privacyLevel) return json(res, 400, { error: 'privacyLevel is required' });
+      return json(res, 201, await app.schedulePublication(
+        decodeURIComponent(schedulePublicationMatch[1]),
+        {
+          runAt: body.runAt,
+          confirmPublish: true,
+          privacyLevel: body.privacyLevel,
+          title: body.title || null,
+          disableComment: Boolean(body.disableComment),
+          disableDuet: Boolean(body.disableDuet),
+          disableStitch: Boolean(body.disableStitch),
+          videoCoverTimestampMs: body.videoCoverTimestampMs,
+        },
+      ));
+    }
+
+    if (req.method === 'GET' && req.url === '/api/orchestration/jobs') {
+      return json(res, 200, { items: await app.listOrchestrationJobs() });
+    }
+
+    if (req.method === 'POST' && req.url === '/api/orchestration/run') {
+      return json(res, 200, { items: await app.runPublicationOrchestration() });
+    }
+
     const publicationRefreshMatch = req.url?.match(/^\/api\/publications\/([^/?]+)\/refresh$/);
     if (req.method === 'POST' && publicationRefreshMatch) {
       return json(
@@ -168,4 +198,24 @@ async function readJson(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
   return raw ? JSON.parse(raw) : {};
+}
+
+
+const orchestrationPollMs = Math.max(
+  10000,
+  Number(process.env.ORCHESTRATION_POLL_MS || 60000),
+);
+const orchestrationAutoRun = process.env.ORCHESTRATION_AUTO_RUN == null
+  ? true
+  : ['1', 'true', 'yes', 'on'].includes(String(process.env.ORCHESTRATION_AUTO_RUN).toLowerCase());
+
+if (orchestrationAutoRun) {
+  const timer = setInterval(async () => {
+    try {
+      await app.runPublicationOrchestration();
+    } catch (error) {
+      console.error(`Publication orchestration tick failed: ${error.message}`);
+    }
+  }, orchestrationPollMs);
+  timer.unref();
 }

@@ -138,7 +138,7 @@
 ## M3 - Publishing + analytics
 
 - [x] TikTok official publishing adapter with explicit-confirmation guard
-- [ ] Scheduling queue
+- [x] Durable scheduling queue + automatic publish/metrics orchestration
 - [x] Post status + basic engagement metric snapshots
 - [x] Creative feature extraction + TikTok outcome evidence
 - [x] Controlled A/B experiment assignment + comparable-window evaluation
