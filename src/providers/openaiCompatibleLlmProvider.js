@@ -448,7 +448,7 @@ export class OpenAICompatibleLlmProvider {
 
     try {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (parsed && typeof parsed === 'object') {
+      if (parsed && typeof parsed === 'object' && payload?.usage && typeof payload.usage === 'object') {
         parsed.providerUsage = normalizeProviderUsage(payload, {
           provider: 'openai-compatible',
           operation: 'llm-completion',
