@@ -34,6 +34,13 @@ try {
     }
     const project = await app.pipeline.resume(id, { render: options['no-render'] !== true });
     console.log(JSON.stringify(project, null, 2));
+  } else if (command === 'tiktok-auth-url') {
+    console.log(JSON.stringify(await app.beginTikTokAuthorization(), null, 2));
+  } else if (command === 'tiktok-auth-status') {
+    console.log(JSON.stringify(await app.tiktokAuthorizationStatus(), null, 2));
+  } else if (command === 'tiktok-auth-refresh') {
+    await app.refreshTikTokAuthorization();
+    console.log(JSON.stringify(await app.tiktokAuthorizationStatus(), null, 2));
   } else if (command === 'billing-import') {
     const file = options.file || options.input;
     if (!file) throw new Error('Usage: node src/cli.js billing-import --file ./billing.json [--source provider-export]');
@@ -206,6 +213,9 @@ try {
       '  generate --topic "..." [--duration 35]',
       '  resume --id "vid_..." [--no-render]   continue a saved video from its first missing act',
       '  opportunities',
+      '  tiktok-auth-url',
+      '  tiktok-auth-status',
+      '  tiktok-auth-refresh',
       '  billing-import --file ./billing.json [--source provider-export]',
       '  billing-reconcile --id "vid_..."',
       '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',
