@@ -62,6 +62,15 @@ const server = http.createServer(async (req, res) => {
       }));
     }
 
+    if (req.method === 'GET' && req.url === '/api/experiments') {
+      return json(res, 200, { items: await app.listExperiments() });
+    }
+
+    const experimentMatch = req.url?.match(/^\/api\/experiments\/([^/?]+)\/evaluate$/);
+    if (req.method === 'POST' && experimentMatch) {
+      return json(res, 200, await app.evaluateExperiment(decodeURIComponent(experimentMatch[1])));
+    }
+
     if (req.method === 'GET' && req.url === '/api/opportunities') {
       return json(res, 200, { items: await app.opportunities() });
     }
