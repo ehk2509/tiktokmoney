@@ -179,7 +179,7 @@ TikTokMoney now accepts verified TikTok webhook events at:
 POST /api/tiktok/webhooks
 ```
 
-Configure that HTTPS callback URL in the TikTok Developer Portal Webhooks section. TikTok expects the endpoint to acknowledge receipt with HTTP 200 quickly and may deliver the same event more than once, so TikTokMoney verifies and persists the event first, responds, then processes it idempotently. citeturn999563search1turn999563search2
+Configure that HTTPS callback URL in the TikTok Developer Portal Webhooks section. TikTok expects the endpoint to acknowledge receipt with HTTP 200 quickly and may deliver the same event more than once, so TikTokMoney verifies and persists the event first, responds, then processes it idempotently.
 
 Webhook signatures are validated from the `TikTok-Signature` header with HMAC-SHA256 over:
 
@@ -194,7 +194,7 @@ Handled events include:
 - `post.publish.complete`: marks the matching publication complete and immediately refreshes TikTok post status;
 - `post.publish.failed`: persists the failure reason on the matching publication;
 - `post.publish.inbox_delivered`: marks inbox-delivery state;
-- legacy `video.publish.completed` / `video.upload.failed` events are also understood. citeturn844235view0turn999563search4
+- legacy `video.publish.completed` / `video.upload.failed` events are also understood.
 
 Webhook delivery is at-least-once, so the event store hashes the signed payload into a stable event ID and ignores duplicate receipts. Failed downstream processing remains persisted as `RETRY` and is retried by the existing server orchestration poll.
 
