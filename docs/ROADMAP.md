@@ -137,11 +137,13 @@
 
 ## M3 - Publishing + analytics
 
-- [ ] TikTok official publishing adapter
+- [x] TikTok official publishing adapter with explicit-confirmation guard
 - [ ] Scheduling queue
-- [ ] Post metrics snapshots
+- [x] Post status + basic engagement metric snapshots
 - [ ] Creative feature extraction
 - [ ] A/B experiment model
+
+Current M3 publishing intentionally requires an explicit per-post confirmation and a user access token. OAuth/token-refresh UX, scheduling, webhooks and experiment assignment remain open.
 
 ## M3.5 - Autonomous production planning
 
