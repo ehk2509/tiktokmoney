@@ -16,6 +16,40 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    if (req.method === 'GET' && req.url === '/api/tiktok/oauth/start') {
+      const auth = await app.beginTikTokAuthorization();
+      res.writeHead(302, { location: auth.url });
+      return res.end();
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/api/tiktok/oauth/callback')) {
+      const url = new URL(req.url, 'http://localhost');
+      const token = await app.completeTikTokAuthorization({
+        code: url.searchParams.get('code'),
+        state: url.searchParams.get('state'),
+        error: url.searchParams.get('error'),
+        errorDescription: url.searchParams.get('error_description'),
+      });
+      const status = await app.tiktokAuthorizationStatus();
+      return json(res, 200, {
+        ok: true,
+        authorized: true,
+        scopes: status.scopes,
+        openId: status.openId,
+        accessTokenExpiresAt: status.accessTokenExpiresAt,
+        refreshTokenExpiresAt: status.refreshTokenExpiresAt,
+      });
+    }
+
+    if (req.method === 'GET' && req.url === '/api/tiktok/oauth/status') {
+      return json(res, 200, await app.tiktokAuthorizationStatus());
+    }
+
+    if (req.method === 'POST' && req.url === '/api/tiktok/oauth/refresh') {
+      await app.refreshTikTokAuthorization();
+      return json(res, 200, await app.tiktokAuthorizationStatus());
+    }
+
     if (req.method === 'GET' && req.url === '/api/motion-library') {
       return json(res, 200, { items: await app.listMotionLibrary() });
     }
