@@ -171,6 +171,44 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## Value-aware provider routing
+
+Healthy equivalent providers are no longer tried only in static primary → backup order.
+
+TikTokMoney now ranks eligible providers using measured evidence:
+
+- successful execution rate;
+- downstream provider-quality evidence when explicitly attributable;
+- average latency;
+- observed provider-reported cost per successful output.
+
+Missing cost or quality evidence stays neutral. It is never interpreted as free or bad.
+
+Default weights:
+
+```env
+PROVIDER_RANKING_MIN_SAMPLES=3
+PROVIDER_ROUTING_SUCCESS_WEIGHT=0.45
+PROVIDER_ROUTING_QUALITY_WEIGHT=0.20
+PROVIDER_ROUTING_LATENCY_WEIGHT=0.15
+PROVIDER_ROUTING_COST_WEIGHT=0.20
+PROVIDER_ROUTING_EXPLORATION_RATE=0.05
+PROVIDER_ROUTING_LATENCY_REFERENCE_MS=60000
+PROVIDER_ROUTING_COST_REFERENCE_USD=1
+```
+
+Ranking only becomes evidence-driven after the minimum sample threshold. Before that, provider order remains stable. Exploration is bounded and only activates when every eligible candidate has enough evidence.
+
+Provider-reported cost is recorded only when a backend actually reports USD cost; missing billing never becomes zero-cost evidence.
+
+For LLM creative generation, TikTokMoney now feeds the independent Creative Tournament score of the generated candidate batch back to the exact routed generator provider. That gives the routing quality term real downstream evidence rather than using the model's own confidence.
+
+The existing provider-reliability endpoint now includes routing score and evidence for each healthy equivalent:
+
+```text
+GET /api/providers/reliability
+```
+
 ## Cross-vendor capability failover
 
 TikTokMoney can now fail over across vendors, not only across models inside one vendor.
