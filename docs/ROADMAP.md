@@ -186,3 +186,13 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Automatic recovery when health signals clear
 - [x] Circuit status CLI/API
 - [x] Breaker disable switch for observability-only operation
+
+
+## M3.10 - Provider reliability routing
+
+- [x] Per-provider/model failure, throttling and latency history
+- [x] Provider-level reliability circuits
+- [x] Automatic failover across configured AI-video providers/models
+- [x] Automatic provider re-entry after cooldown
+- [x] Provider reliability CLI/API visibility
+- [x] Fail-closed behavior retained for single-provider QC/voice paths
