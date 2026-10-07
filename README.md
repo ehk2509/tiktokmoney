@@ -8,6 +8,23 @@ live signals -> trend history -> cluster -> opportunity -> research -> creative 
 
 TikTokMoney now supports two production paths. The original **scene-composer** remains available and can work with zero API keys. The new **Audiovisual Director** writes a complete production screenplay and uses a specialized native-audio video model to generate picture, dialogue, ambience and effects together.
 
+
+## Current state
+
+TikTokMoney is now a guarded autonomous short-form production system rather than only a generation prototype. The shipped loop covers:
+
+- live trend/research ingestion, clustering and opportunity scoring;
+- creative tournaments, pre-generation spend/quality gates and controlled variants;
+- scene-composer and native-audio audiovisual generation paths;
+- realism, dialogue, lip-sync, motion, factual, text-artifact and production-integrity QC;
+- provider-reported cost provenance plus external billing reconciliation;
+- provider/model reliability circuits, cross-vendor failover and value-aware routing;
+- explicit-confirmation TikTok publishing, durable scheduling, OAuth refresh and signed webhooks;
+- metrics snapshots, comparable-window experiments and bounded creative learning;
+- health/incident observability plus operation-specific circuit breakers.
+
+The system still does **not** claim guaranteed profitability or statistical causal lift. The major evidence gaps are the first complete paid 30-case provider benchmark, repeated multi-post experiment units, native account-billing adapters where available, and revenue attribution.
+
 ## Why this architecture
 
 The goal is not another `prompt -> video` wrapper. Each generated project retains enough provenance to later learn which creative decisions improve retention and monetization.
@@ -340,7 +357,7 @@ or:
 GET /api/providers/reliability
 ```
 
-Automatic rerouting is currently enabled only on the path that has equivalent alternatives today: the multi-model AI-video router (for example Luma Agents, Runway primary, and Runway Turbo when configured). QC and voice providers remain fail-closed rather than being silently skipped when no equivalent substitute is configured.
+Automatic rerouting is enabled anywhere a real equivalent is configured. AI-video routing supports Luma/Runway alternatives; LLM, realism-QC, transcription-QC and voice can use opt-in equivalent model groups; LLM and realism-QC can also cross vendors between OpenAI-compatible backends and OpenRouter, while scene-composer voice can fall back from ElevenLabs to OpenAI TTS. Safety-critical QC remains fail-closed when no healthy equivalent exists.
 
 ## Automatic incident-response circuit breakers
 
@@ -468,11 +485,7 @@ node src/cli.js tiktok-auth-refresh
 
 TikTok publishing is available as an **explicitly confirmed** post-generation step. It is never invoked by `generate`, `plan`, or `run-plan`.
 
-Configure a TikTok user access token with `video.publish`:
-
-```bash
-export TIKTOK_ACCESS_TOKEN=...
-```
+Durable OAuth is the preferred path. Configure `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, and `TIKTOK_REDIRECT_URI`, authorize the account through `/api/tiktok/oauth/start`, and keep `TIKTOK_ACCESS_TOKEN` only as a backward-compatible static-token override.
 
 Then publish an already rendered project:
 
@@ -520,27 +533,48 @@ Discover/rank opportunities:
 curl http://localhost:3000/api/opportunities
 ```
 
-## Current pipeline
+
+Operational surfaces:
 
 ```text
-SampleTrendProvider
-      |
-OpportunityScorer
-      |
-   topic
-      |
-ScriptGenerator
-      |
-ScenePlanner
-      |
-QualityGate
-      |
-FfmpegRenderer
-      |
-1080x1920 MP4 + JSON provenance
+GET  /api/observability
+GET  /api/circuit-breakers
+GET  /api/providers/reliability
+GET  /api/tiktok/oauth/status
+POST /api/tiktok/webhooks
+GET  /api/orchestration/jobs
 ```
 
-The fallback script provider is deterministic so development and tests do not spend API money. Real providers can be swapped in behind the same interface.
+## Current architecture
+
+```text
+signals / feeds
+      ↓
+trend history → clustering → opportunity scoring → research packet
+      ↓
+creative tournament → pre-generation QC/spend gate → experiment assignment
+      ↓
+scene-composer OR audiovisual-director
+      ↓
+provider/model router
+  ├─ reliability circuit
+  ├─ cross-vendor failover
+  └─ success + quality + latency + observed-cost ranking
+      ↓
+generation → deterministic / model-based QC → bounded regeneration
+      ↓
+render + provenance + conservative cost ledger
+      ↓
+explicit publish approval → durable schedule → TikTok OAuth/API
+      ↓
+signed webhooks + status/metrics snapshots
+      ↓
+comparable experiment evaluation → bounded creative learning
+      ↓
+health / incidents / circuit breakers around the whole runtime
+```
+
+The zero-key deterministic path remains available for local development and tests. Production providers are optional and are wrapped behind capability interfaces so reliability, cost and routing policy can evolve without changing the pipeline contract.
 
 ## Provider-backed M1 mode
 
