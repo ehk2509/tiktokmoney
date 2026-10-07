@@ -93,7 +93,8 @@ test('orchestrator defers publish jobs without burning retry attempts while circ
     async getJob(id) { return jobs.find((job) => job.id === id) || null; },
     async saveJob(job) {
       const index = jobs.findIndex((item) => item.id === job.id);
-      jobs[index] = structuredClone(job);
+      if (index >= 0) jobs[index] = structuredClone(job);
+      else jobs.push(structuredClone(job));
       return job;
     },
     async dueJobs() { return jobs; },
