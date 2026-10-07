@@ -20,6 +20,36 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { items: await app.listMotionLibrary() });
     }
 
+    if (req.method === 'GET' && req.url === '/api/publications') {
+      return json(res, 200, { items: await app.listPublications() });
+    }
+
+    const publicationMatch = req.url?.match(/^\/api\/publications\/([^/?]+)$/);
+    if (req.method === 'GET' && publicationMatch) {
+      const publication = await app.getPublication(decodeURIComponent(publicationMatch[1]));
+      return publication
+        ? json(res, 200, publication)
+        : json(res, 404, { error: 'publication_not_found' });
+    }
+
+    const publicationRefreshMatch = req.url?.match(/^\/api\/publications\/([^/?]+)\/refresh$/);
+    if (req.method === 'POST' && publicationRefreshMatch) {
+      return json(
+        res,
+        200,
+        await app.refreshPublication(decodeURIComponent(publicationRefreshMatch[1])),
+      );
+    }
+
+    const publicationMetricsMatch = req.url?.match(/^\/api\/publications\/([^/?]+)\/metrics$/);
+    if (req.method === 'POST' && publicationMetricsMatch) {
+      return json(
+        res,
+        200,
+        await app.refreshPublicationMetrics(decodeURIComponent(publicationMetricsMatch[1])),
+      );
+    }
+
     if (req.method === 'GET' && req.url === '/api/opportunities') {
       return json(res, 200, { items: await app.opportunities() });
     }
@@ -64,6 +94,27 @@ const server = http.createServer(async (req, res) => {
         stopOnFailure: Boolean(body.stopOnFailure),
       });
       return json(res, 200, plan);
+    }
+
+    const publishVideoMatch = req.url?.match(/^\/api\/videos\/([^/?]+)\/publish$/);
+    if (req.method === 'POST' && publishVideoMatch) {
+      const body = await readJson(req);
+      if (body.confirmPublish !== true) {
+        return json(res, 400, { error: 'confirmPublish=true is required' });
+      }
+      if (!body.privacyLevel) {
+        return json(res, 400, { error: 'privacyLevel is required' });
+      }
+      const publication = await app.publishProject(decodeURIComponent(publishVideoMatch[1]), {
+        confirmPublish: true,
+        title: body.title || null,
+        privacyLevel: body.privacyLevel,
+        disableComment: Boolean(body.disableComment),
+        disableDuet: Boolean(body.disableDuet),
+        disableStitch: Boolean(body.disableStitch),
+        videoCoverTimestampMs: body.videoCoverTimestampMs,
+      });
+      return json(res, 202, publication);
     }
 
     if (req.method === 'POST' && req.url === '/api/videos') {
