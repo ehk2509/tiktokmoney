@@ -217,3 +217,13 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] ElevenLabs ↔ OpenAI TTS voice failover
 - [x] Opt-in configuration preserving existing defaults
 - [x] Cross-vendor reliability IDs and automatic health-aware selection
+
+
+## M3.13 - Value-aware provider routing
+
+- [x] Rank healthy equivalent providers by measured success, downstream quality, latency and observed cost
+- [x] Preserve null-not-zero semantics for missing provider cost
+- [x] Bound exploration until every candidate has enough evidence
+- [x] Feed Creative Tournament quality back to the exact routed LLM generator
+- [x] Record downstream quality without double-counting provider attempts
+- [x] Expose routing score and evidence in provider reliability status
