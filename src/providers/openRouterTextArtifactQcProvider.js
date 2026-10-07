@@ -84,19 +84,29 @@ export class OpenRouterTextArtifactQcProvider {
           frame: clampInt(item.frame, 1, frames.length, 1),
           text: stringOrEmpty(item.text).slice(0, 120),
           kind: stringOrEmpty(item.kind).slice(0, 40) || 'text',
+          placement: stringOrEmpty(item.placement).slice(0, 20) || 'unknown',
         }))
         .slice(0, 12)
       : [];
-    const hasText = parsed?.hasText === true || detections.length > 0;
+    // A lone locker or jersey number is ordinary set dressing; captions, labels,
+    // words and garbled text are what this gate exists to stop.
+    const blocking = detections.filter((item) => !isIncidentalMarking(item));
+    const incidental = detections.filter((item) => isIncidentalMarking(item));
+    const hasText = blocking.length > 0 || (parsed?.hasText === true && detections.length === 0);
     const issues = hasText
       ? [{
         code: 'generated-text',
         severity: 'critical',
-        evidence: detections.length
-          ? `Model-rendered text visible: ${detections.map((item) => `"${item.text || item.kind}" (frame ${item.frame})`).join(', ')}.`
+        evidence: blocking.length
+          ? `Model-rendered text visible: ${blocking.map((item) => `"${item.text || item.kind}" (frame ${item.frame})`).join(', ')}.`
           : 'Model-rendered text is visible in the frame.',
       }]
       : [];
+    const warnings = incidental.map((item) => ({
+      code: 'incidental-marking',
+      severity: 'warning',
+      evidence: `Short marking "${item.text}" on a background object (frame ${item.frame}).`,
+    }));
 
     return {
       provider: 'openrouter',
@@ -106,6 +116,7 @@ export class OpenRouterTextArtifactQcProvider {
       hasText,
       detections,
       issues,
+      warnings,
       regenerationGuidance: hasText
         ? 'Remove every written element from the picture: no labels, callouts, captions, diagram text, signage, letters or numbers. Show the subject itself; explanations are added after generation.'
         : '',
@@ -115,12 +126,21 @@ export class OpenRouterTextArtifactQcProvider {
   }
 }
 
+export function isIncidentalMarking(detection) {
+  const characters = String(detection?.text || '').replace(/[^\p{L}\p{N}]/gu, '');
+  return characters.length > 0
+    && characters.length <= 2
+    && detection.placement !== 'overlay'
+    && !['caption', 'watermark', 'pseudo-text', 'label'].includes(String(detection.kind || '').toLowerCase());
+}
+
 function buildPrompt() {
   return [
     'Inspect every frame for written text rendered into the picture: labels, callouts, captions, infographic or diagram text, signage, logos with letters, watermarks, numbers, or letter-like pseudo-text.',
     'Ignore shapes, glows or arrows that contain no letters or digits.',
     'Return JSON with this shape:',
-    '{"hasText": false, "detections": [{"frame": 1, "text": "exact or approximate characters", "kind": "label|caption|sign|watermark|pseudo-text|number"}]}',
+    'For each detection, set placement to "overlay" if it floats on top of the image (captions, titles, watermarks, callouts) or "object" if it is printed on something in the scene (a locker, jersey, sign, equipment).',
+    '{"hasText": false, "detections": [{"frame": 1, "text": "exact or approximate characters", "kind": "label|caption|sign|watermark|pseudo-text|number", "placement": "overlay|object"}]}',
   ].join('\n');
 }
 

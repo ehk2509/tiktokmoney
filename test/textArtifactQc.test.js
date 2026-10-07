@@ -107,3 +107,26 @@ test('audiovisual pipeline regenerates an act when generated text is detected', 
   assert.match(regenerations[1].guidance, /Remove every written element/);
   assert.deepEqual(regenerations[1].triggeredBy, ['textArtifact']);
 });
+
+test('a lone locker or jersey number is a warning, while captions and words still block', async () => {
+  const { isIncidentalMarking } = await import('../src/providers/openRouterTextArtifactQcProvider.js');
+  assert.equal(isIncidentalMarking({ text: 'D', kind: 'sign', placement: 'object' }), true);
+  assert.equal(isIncidentalMarking({ text: '0', kind: 'number', placement: 'object' }), true);
+  assert.equal(isIncidentalMarking({ text: '24', kind: 'number', placement: 'unknown' }), true);
+  assert.equal(isIncidentalMarking({ text: 'EXIT', kind: 'sign', placement: 'object' }), false);
+  assert.equal(isIncidentalMarking({ text: 'D', kind: 'caption', placement: 'overlay' }), false);
+  assert.equal(isIncidentalMarking({ text: 'Jalen, what do you feal?', kind: 'caption', placement: 'overlay' }), false);
+
+  const incidental = await providerReturning({
+    hasText: true,
+    detections: [{ frame: 4, text: 'D', kind: 'sign', placement: 'object' }],
+  }).evaluate({ localPath: '/fake/act.mp4', durationSeconds: 8 });
+  assert.equal(incidental.passed, true);
+  assert.deepEqual(incidental.warnings.map((warning) => warning.code), ['incidental-marking']);
+
+  const caption = await providerReturning({
+    hasText: true,
+    detections: [{ frame: 1, text: 'Every aye waits', kind: 'caption', placement: 'overlay' }],
+  }).evaluate({ localPath: '/fake/act.mp4', durationSeconds: 8 });
+  assert.equal(caption.passed, false);
+});
