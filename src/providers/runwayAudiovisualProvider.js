@@ -166,6 +166,7 @@ export class RunwayAudiovisualProvider {
           voicePresetId: track.voicePresetId,
           exactText: track.exactText,
           localPath: track.localPath,
+          providerUsage: track.providerUsage || null,
         }));
 
         if (dialogueTrack.durationSeconds > 15.05) {
