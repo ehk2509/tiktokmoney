@@ -50,6 +50,8 @@ try {
     console.log(JSON.stringify(await app.processPendingTikTokWebhooks({
       limit: options.limit ? Number(options.limit) : undefined,
     }), null, 2));
+  } else if (command === 'health') {
+    console.log(JSON.stringify(await app.observabilitySnapshot(), null, 2));
   } else if (command === 'billing-import') {
     const file = options.file || options.input;
     if (!file) throw new Error('Usage: node src/cli.js billing-import --file ./billing.json [--source provider-export]');
@@ -227,6 +229,7 @@ try {
       '  tiktok-auth-refresh',
       '  tiktok-webhooks [--status RECEIVED]',
       '  tiktok-webhooks-process [--limit 100]',
+      '  health',
       '  billing-import --file ./billing.json [--source provider-export]',
       '  billing-reconcile --id "vid_..."',
       '  publish --id "vid_..." --privacy SELF_ONLY --confirm-publish',

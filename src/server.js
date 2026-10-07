@@ -7,13 +7,20 @@ const port = Number(process.env.PORT || 3000);
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      return json(res, 200, {
-        ok: true,
+      const health = await app.observabilitySnapshot();
+      const statusCode = health.status === 'critical' ? 503 : 200;
+      return json(res, statusCode, {
+        ok: health.status !== 'critical',
         service: 'tiktokmoney',
         version: process.env.npm_package_version || '0.24.0',
         mode: app.mode,
         capabilities: app.capabilities,
+        health,
       });
+    }
+
+    if (req.method === 'GET' && req.url === '/api/observability') {
+      return json(res, 200, await app.observabilitySnapshot());
     }
 
     if (req.method === 'POST' && req.url === '/api/tiktok/webhooks') {

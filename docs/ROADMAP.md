@@ -166,3 +166,13 @@ Current M3 publishing intentionally requires explicit per-post confirmation. Dur
 - [x] Conservative performance-learning context for future creative ranking by format/emotional driver
 - [x] Bounded exploration via high-conviction control/challenger allocation
 - [x] Campaign budgets and autonomous daily planning
+
+
+## M3.8 - Reliability + observability
+
+- [x] Unified health snapshot across auth, orchestration, webhooks, projects, publications and cost coverage
+- [x] Configurable warning/critical thresholds
+- [x] HTTP 503 health semantics for critical incidents
+- [x] Stuck/retry backlog detection
+- [x] Project failure-rate and budget-overrun incident detection
+- [x] CLI/API health surfaces

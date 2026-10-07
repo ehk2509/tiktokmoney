@@ -171,6 +171,33 @@ node src/cli.js performance-outcomes --limit 100
 node src/cli.js learning-context --audience "curious adults"
 ```
 
+## Reliability and observability
+
+TikTokMoney now exposes an operational health model instead of only reporting that the Node process is alive.
+
+```text
+GET /health
+GET /api/observability
+```
+
+`/health` returns HTTP 503 when a critical incident exists. The observability snapshot aggregates:
+
+- TikTok authorization availability and token expiry;
+- orchestration retry, failed, and stuck-job counts;
+- webhook retry backlog and retry age;
+- recent project generation/QC failure rate;
+- incomplete provider-cost coverage;
+- daily-plan budget overruns;
+- publication failures.
+
+The CLI exposes the same snapshot:
+
+```bash
+node src/cli.js health
+```
+
+Thresholds are configurable through the `OBS_*` variables in `.env.example`. Warning incidents make the service `degraded`; critical incidents make it `critical` and cause the health endpoint to return 503, which is suitable for container/orchestrator probes and external monitoring.
+
 ## TikTok webhook ingestion
 
 TikTokMoney now accepts verified TikTok webhook events at:
