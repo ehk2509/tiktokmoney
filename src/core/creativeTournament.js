@@ -110,6 +110,16 @@ export class CreativeTournament {
     const accepted = winner.score >= this.minWinnerScore;
     const confidence = margin >= this.minMargin ? 'clear' : 'close';
 
+    if (typeof this.llm?.recordOutcome === 'function' && generated?.providerRouting?.providerId) {
+      const meanGeneratedQuality = ranking.length
+        ? ranking.reduce((sum, row) => sum + Number(row.score || 0), 0) / ranking.length
+        : null;
+      await this.llm.recordOutcome(generated, {
+        qualityScore: meanGeneratedQuality,
+        passed: accepted,
+      });
+    }
+
     return {
       enabled: true,
       skipped: false,
