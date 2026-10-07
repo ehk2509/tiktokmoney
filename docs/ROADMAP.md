@@ -163,6 +163,6 @@ Current M3 publishing intentionally requires an explicit per-post confirmation a
 - [x] OpenAI-compatible LLM token/cost provenance when provider reports it
 - [x] External provider/account billing import and provenance reconciliation for non-reporting providers
 - [ ] Native automated account-billing adapters where provider APIs expose billing endpoints
-- [x] Conservative performance-learning context for future creative ranking by hook/duration/style
+- [x] Conservative performance-learning context for future creative ranking by format/emotional driver
 - [ ] Contextual exploration/exploitation policy
 - [x] Campaign budgets and autonomous daily planning
