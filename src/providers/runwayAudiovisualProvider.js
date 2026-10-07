@@ -812,11 +812,28 @@ export function buildAudiovisualPrompt({
     const timing = Number.isFinite(start) && Number.isFinite(end)
       ? `${start.toFixed(2)}-${end.toFixed(2)}s`
       : `turn ${index + 1}`;
-    return `${timing} ${String(turn.speakerCharacterId).toUpperCase()} says exactly: "${turn.text}"`;
+    // With locked reference audio the words are already in the soundtrack; quoting
+    // them invites the model to render them as burned-in captions.
+    return dialogueTrack
+      ? `${timing} ${String(turn.speakerCharacterId).toUpperCase()} speaks line ${index + 1} of the supplied audio`
+      : `${timing} ${String(turn.speakerCharacterId).toUpperCase()} says exactly (spoken aloud only, never shown as text): "${turn.text}"`;
   });
+  const speakingOrder = [...new Set(timedTurns.map((turn) => String(turn.speakerCharacterId).toUpperCase()))];
+  // Long prompts dilute trailing constraints, so the non-negotiables come first.
+  const hardRules = [
+    'HARD RULES:',
+    'no on-screen text, captions, subtitles, letters or numbers anywhere in the picture; spoken words are audio only.',
+    brandPolicy.mode === 'unbranded'
+      ? 'Every garment, shoe, ball and prop is plain and unbranded: no logos, swooshes, stripes or insignia.'
+      : '',
+    speakingOrder.length > 1 && visibleSpeakersOnly
+      ? `Speaking order: ${speakingOrder.join(', then ')}; only the character speaking at that moment moves their mouth.`
+      : '',
+  ].filter(Boolean).join(' ');
 
   return [
     'Create a single continuous photorealistic vertical short-form video act with synchronized audiovisual output.',
+    hardRules,
     `ACT PURPOSE: ${segment.purpose}.`,
     castLines.length ? `CAST: ${castLines.join(' | ')}` : '',
     location ? `LOCATION: ${describeLocationForShot(location, segment.shotType)}` : '',

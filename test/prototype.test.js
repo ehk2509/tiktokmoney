@@ -4108,8 +4108,10 @@ test('Runway audiovisual provider composes distinct speaker voices into one WAN 
           assert.equal(body.referenceAudio.length, 1);
           assert.equal(body.referenceAudio[0].uri, 'data:audio/mpeg;base64,TUFTVEVS');
           assert.match(body.promptText, /MULTI-SPEAKER DIALOGUE BLOCKING/);
-          assert.match(body.promptText, /ALEX says exactly/);
-          assert.match(body.promptText, /MAYA says exactly/);
+          assert.match(body.promptText, /ALEX speaks line 1 of the supplied audio/);
+          assert.match(body.promptText, /MAYA speaks line 2 of the supplied audio/);
+          assert.doesNotMatch(body.promptText, /Is starting now too late/);
+          assert.match(body.promptText, /^Create[^]*HARD RULES: no on-screen text[^]*Speaking order: ALEX, then MAYA/);
           assert.match(body.promptText, /ONLY the named active visible speaker talks/i);
           return jsonResponse({ id: 'video-task' });
         }
@@ -4273,8 +4275,10 @@ test('Runway audiovisual provider stretches an act to fit a longer multi-speaker
           assert.equal(body.referenceAudio.length, 1);
           assert.equal(body.referenceAudio[0].uri, 'data:audio/mpeg;base64,TUFTVEVS');
           assert.match(body.promptText, /MULTI-SPEAKER DIALOGUE BLOCKING/);
-          assert.match(body.promptText, /ALEX says exactly/);
-          assert.match(body.promptText, /MAYA says exactly/);
+          assert.match(body.promptText, /ALEX speaks line 1 of the supplied audio/);
+          assert.match(body.promptText, /MAYA speaks line 2 of the supplied audio/);
+          assert.doesNotMatch(body.promptText, /Is starting now too late/);
+          assert.match(body.promptText, /^Create[^]*HARD RULES: no on-screen text[^]*Speaking order: ALEX, then MAYA/);
           assert.match(body.promptText, /ONLY the named active visible speaker talks/i);
           return jsonResponse({ id: 'video-task' });
         }

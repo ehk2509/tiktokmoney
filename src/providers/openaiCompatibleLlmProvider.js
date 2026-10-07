@@ -280,6 +280,7 @@ export class OpenAICompatibleLlmProvider {
       '- Define every person who is named, speaks, or must perform a specific visible action as a character, and list them in characterIds of each segment they appear in. People who are not defined may appear only as unnamed, out-of-focus background figures that are never required in a specific action.',
       '- Each segment is one continuous shot with at most two physical actions in total, and only one when hands handle an object or several people move. Handle at most one object per segment. Never chain several beats (crossings, nods, claps, placements, hand-offs) into one shot; give extra beats their own segment.',
       '- A segment may contain 1-3 speaking characters and at most 5 ordered dialogueTurns.',
+      '- Camera and action text must agree with dialogueTurns: never describe a character who speaks in that segment as listening, silent or quiet, and frame each speaker so their face is visible while they talk.',
       '- Set onScreen to false only for an unseen voiceover narrator who never appears in frame; every onScreen character must show a clearly visible face and mouth while speaking.',
       '- Only real humans may be speaking characters. Animals, objects and body parts must never speak; if the creative brief personifies one, deliver those lines through an off-screen narrator.',
       '- Use dialogueTurns for multi-speaker exchanges. Each turn must name a valid character id and contain exact spoken words.',
