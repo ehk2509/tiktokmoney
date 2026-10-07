@@ -6,10 +6,12 @@ import { JsonStore } from './storage/jsonStore.js';
 import { DailyPlanStore } from './storage/dailyPlanStore.js';
 import { PublicationStore } from './storage/publicationStore.js';
 import { OrchestrationStore } from './storage/orchestrationStore.js';
+import { TikTokAuthStore } from './storage/tiktokAuthStore.js';
 import { PerformanceLearningStore } from './storage/performanceLearningStore.js';
 import { PerformanceLearningService } from './services/performanceLearningService.js';
 import { ExperimentService } from './services/experimentService.js';
 import { PublicationOrchestrator } from './services/publicationOrchestrator.js';
+import { TikTokAuthService } from './services/tiktokAuthService.js';
 import { DailyContentPlanner } from './core/dailyContentPlanner.js';
 import { MotionReferenceStore } from './storage/motionReferenceStore.js';
 import { MotionLibraryBuilder } from './services/motionLibraryBuilder.js';
@@ -65,7 +67,15 @@ export function createApp(overrides = {}) {
   const orchestrationStore = overrides.orchestrationStore || new OrchestrationStore(
     process.env.ORCHESTRATION_STORE_PATH || './data/orchestration.json',
   );
-  const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher();
+  const tiktokAuthStore = overrides.tiktokAuthStore || new TikTokAuthStore(
+    process.env.TIKTOK_AUTH_STORE_PATH || './data/tiktok-auth.json',
+  );
+  const tiktokAuthService = overrides.tiktokAuthService || new TikTokAuthService({
+    store: tiktokAuthStore,
+  });
+  const tiktokPublisher = overrides.tiktokPublisher || new TikTokPublisher({
+    authService: tiktokAuthService,
+  });
   const publishingService = overrides.publishingService || new PublishingService({
     projectStore: store,
     publicationStore,
@@ -102,6 +112,7 @@ export function createApp(overrides = {}) {
     },
     publishing: {
       tiktokConfigured: tiktokPublisher.configured,
+      oauthConfigured: tiktokAuthService.configured,
       explicitConfirmationRequired: true,
       publicationStorePath: publicationStore.filePath,
     },
@@ -209,6 +220,8 @@ export function createApp(overrides = {}) {
     publishingService,
     publicationOrchestrator,
     orchestrationStore,
+    tiktokAuthStore,
+    tiktokAuthService,
     learningService,
     experimentService,
     performanceLearningStore,
@@ -236,6 +249,18 @@ export function createApp(overrides = {}) {
     },
     async listPublications(options = {}) {
       return publishingService.listPublications(options);
+    },
+    async beginTikTokAuthorization() {
+      return tiktokAuthService.createAuthorizationUrl();
+    },
+    async completeTikTokAuthorization(params = {}) {
+      return tiktokAuthService.handleCallback(params);
+    },
+    async refreshTikTokAuthorization() {
+      return tiktokAuthService.refresh();
+    },
+    async tiktokAuthorizationStatus() {
+      return tiktokAuthService.status();
     },
     async schedulePublication(projectId, options = {}) {
       return publicationOrchestrator.schedulePublish(projectId, options);
