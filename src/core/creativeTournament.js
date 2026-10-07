@@ -138,7 +138,9 @@ export class CreativeTournament {
       judge: {
         source: judged?.source || 'deterministic',
         model: judged?.model || null,
+        providerUsage: judged?.providerUsage || null,
       },
+      generatorUsage: generated?.providerUsage || null,
       performanceEvidence,
     };
   }
