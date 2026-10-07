@@ -107,6 +107,26 @@ node src/cli.js billing-reconcile --id "vid_..."
 
 Imported records are keyed by `provider + taskId/generationId`, upserted idempotently, and only attach to matching project provenance. Reconciled costs carry their source in the project ledger.
 
+## Controlled creative experiments
+
+High-conviction opportunities that receive multiple production variants are now treated as controlled experiments. The first variant is the control and later variants are challengers under one persisted experiment ID.
+
+Experiment outcomes do not enter normal learning immediately. TikTok snapshots must first satisfy a comparable observation window:
+
+```env
+EXPERIMENT_OBSERVATION_WINDOW_HOURS=24
+EXPERIMENT_COMPARISON_TOLERANCE_HOURS=3
+```
+
+An experiment completes only when every arm has a snapshot at or beyond the target age and selected arm snapshots are within the configured tolerance. Only those comparable snapshots become eligible for future creative-learning evidence.
+
+Inspect or re-evaluate experiments:
+
+```bash
+node src/cli.js experiments
+node src/cli.js experiment-evaluate --id "exp_..."
+```
+
 ## Closed-loop creative learning
 
 TikTok performance snapshots now feed a conservative evidence store instead of stopping at reporting.
