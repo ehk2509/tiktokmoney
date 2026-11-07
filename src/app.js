@@ -116,6 +116,9 @@ export function createApp(overrides = {}) {
     authStore: tiktokAuthStore,
   });
   const mode = overrides.mode || process.env.VIDEO_PIPELINE_MODE || 'scene-composer';
+  if (String(process.env.AI_RUNTIME || '').toLowerCase() === 'local' && mode !== 'audiovisual') {
+    throw new Error('AI_RUNTIME=local requires VIDEO_PIPELINE_MODE=audiovisual for locally generated video');
+  }
   const motionReferenceStore = overrides.motionReferenceStore || new MotionReferenceStore(
     process.env.MOTION_REFERENCE_LIBRARY_PATH || './data/motion-references.json',
   );
