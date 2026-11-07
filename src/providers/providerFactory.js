@@ -411,6 +411,8 @@ export function createAudiovisualProvider(env = process.env) {
     return new LocalComfyUiAudiovisualProvider({
       baseUrl: env.COMFYUI_BASE_URL || 'http://127.0.0.1:8188',
       workflowPath: env.COMFYUI_WORKFLOW_PATH,
+      firstFrameWorkflowPath: env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH,
+      initialImagePath: env.COMFYUI_INITIAL_IMAGE_PATH,
       assetDir: env.ASSET_DIR,
       fps: env.COMFYUI_FPS ? Number(env.COMFYUI_FPS) : undefined,
       width: env.COMFYUI_WIDTH ? Number(env.COMFYUI_WIDTH) : undefined,
