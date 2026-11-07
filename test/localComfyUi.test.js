@@ -7,6 +7,7 @@ import {
   LocalComfyUiAudiovisualProvider, bindWorkflow, selectVideoOutput, buildLocalVideoPrompt,
 } from '../src/providers/localComfyUiAudiovisualProvider.js';
 import { assertLocalEndpoint } from '../src/providers/localEndpoints.js';
+import { LocalSpeechProvider } from '../src/providers/localSpeechProvider.js';
 import { createLlmProvider, createAudiovisualProvider, createVisualProvider,
   createRealismQcProvider, createDialogueQcProvider } from '../src/providers/providerFactory.js';
 
@@ -197,6 +198,75 @@ test('image-to-video workflow bootstraps first frame using a second local ComfyU
     assert.equal(await readFile(asset.localPath, 'utf8'), 'local-bytes');
     assert.deepEqual(calls, ['/prompt', '/history/image-1', '/view', '/upload/image',
       '/prompt', '/history/video-1', '/view']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('local TTS API streams speech to disk and refuses public hosted TTS', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-tts-test-'));
+  try {
+    const provider = new LocalSpeechProvider({
+      baseUrl: 'http://127.0.0.1:8880/v1', assetDir: dir,
+      fetchImpl: async (url, opts) => {
+        assert.equal(url, 'http://127.0.0.1:8880/v1/audio/speech');
+        const payload = JSON.parse(opts.body);
+        assert.equal(payload.input, 'Hello');
+        assert.equal(payload.voice, 'af_heart');
+        return new Response('generated-audio', { status: 200 });
+      },
+    });
+    const result = await provider.synthesize({ text: 'Hello', projectId: 'p', segmentIndex: 1 });
+    assert.equal(result.provider, 'local-tts');
+    assert.equal(await readFile(result.localPath, 'utf8'), 'generated-audio');
+    assert.throws(() => new LocalSpeechProvider({ baseUrl: 'https://api.openai.com/v1' }),
+      /local\/private/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ComfyUI provider uses local speech and FFmpeg voiceover if video has no audio', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-voiceover-test-'));
+  try {
+    const workflowPath = path.join(dir, 'api.json');
+    await writeFile(workflowPath, JSON.stringify({
+      '1': { class_type: 'TextEncode', inputs: { text: '{{PROMPT}}' } },
+    }));
+    const fetchImpl = async input => {
+      const url = new URL(input);
+      if (url.pathname === '/prompt') return Response.json({ prompt_id: 'silent-1' });
+      if (url.pathname === '/history/silent-1') {
+        return Response.json({ 'silent-1': { outputs: { '9': {
+          videos: [{ filename: 'silent.mp4', type: 'output' }],
+        } } } });
+      }
+      if (url.pathname === '/view') return new Response('silent-video', { status: 200 });
+      throw new Error('Unexpected fetch');
+    };
+    let ttsText = null;
+    let mixed = false;
+    const provider = new LocalComfyUiAudiovisualProvider({
+      workflowPath, assetDir: dir, requireAudio: true, fetchImpl,
+      runCommand: async () => '', // ffprobe returns no audio stream
+      localTts: { synthesize: async ({ text }) => {
+        ttsText = text;
+        return { localPath: path.join(dir, 'voice.wav'), model: 'kokoro' };
+      } },
+      dialogueComposer: { mixVoiceover: async () => {
+        mixed = true;
+        return path.join(dir, 'final-voiceover.mp4');
+      } },
+    });
+    const asset = await provider.generateSegment({
+      segment: { index: 0, durationSeconds: 5, action: 'walk', dialogue: 'Local audio' },
+      productionScript: {}, projectId: 'p',
+    });
+    assert.equal(ttsText, 'Local audio');
+    assert.equal(mixed, true);
+    assert.equal(asset.audioMode, 'voiceover-post-mix');
+    assert.equal(asset.dialogueTrack.provider, 'local-tts');
+    assert.equal(asset.localPath, path.join(dir, 'final-voiceover.mp4'));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
