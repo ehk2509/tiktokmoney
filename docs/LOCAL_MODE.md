@@ -14,7 +14,8 @@ separate internet features; leave their keys unset for offline runs.
   and JSON response format. For example, install Ollama, run
   `ollama pull qwen3:8b` and start its service on port 11434.
 - A **working LTX audiovisual** or comparable **ComfyUI video+audio**
-  workflow already tested in ComfyUI. Model checkpoints are downloaded
+  workflow already tested in ComfyUI. Silent-video workflows (e.g. some
+  Wan configurations) can also be used with optional local TTS voiceover. Model checkpoints are downloaded
   into ComfyUI locally. On a 24 GB GPU, use the model's quantized/offload
   variants as appropriate; performance/VRAM varies by workflow.
 
@@ -91,10 +92,25 @@ an actionable message. Without this input, continuity is prompted but
 not visually anchored.
 
 For a production TikTok clip, **include generated audio in the output
-video**. `COMFYUI_REQUIRE_AUDIO=true` verifies the MP4/WebM has an audio
-stream; it fails explicitly instead of silently publishing a mute video.
-Set it to false only when testing visual-only workflows; the final renderer
-still performs audio-quality checks.
+video**. `COMFYUI_REQUIRE_AUDIO=true` checks for an audio stream; if the
+clip is silent and `LOCAL_TTS_BASE_URL` is configured, the app generates
+narration with a self-hosted OpenAI-compatible TTS API and post-mixes it
+with FFmpeg. For example:
+
+```dotenv
+LOCAL_TTS_BASE_URL=http://127.0.0.1:8880/v1
+LOCAL_TTS_MODEL=kokoro
+LOCAL_TTS_VOICE=af_heart
+LOCAL_TTS_FORMAT=wav
+```
+
+Kokoro-FastAPI or an equivalent server needs to be installed locally.
+This TTS fallback creates **voiceover**, not synchronized lip movement:
+use native LTX dialogue audio for visible speakers. If neither native
+audio nor local TTS is available, generation fails rather than silently
+publishing mute content. Set `COMFYUI_REQUIRE_AUDIO=false` only when
+testing visual-only workflows; the final renderer still performs
+audio-quality checks.
 
 ### 3. Generate and inspect
 
@@ -153,8 +169,10 @@ as passed.
   installed checkpoints; it does not install or invent a video model.
 - For an image-conditioned model, automatic first-frame generation needs an
   additional working local ComfyUI image workflow or a provided local image.
-- Native audiovisual output is needed for complete video+audio generation.
-  Model fidelity and identity consistency depend on the workflow.
+- Native audiovisual output is preferred for visible dialogue and lip sync.
+  Optional local TTS can voice silent clips, but does not synchronize
+  mouth movement. Model fidelity and identity consistency depend on the
+  workflows.
 - Server availability and real GPU throughput cannot be tested in CI.
   `npm run local:check` checks connectivity and configuration, while CI
   uses a mocked ComfyUI API.
