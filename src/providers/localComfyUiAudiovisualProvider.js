@@ -12,6 +12,8 @@ export class LocalComfyUiAudiovisualProvider {
   constructor({
     baseUrl = process.env.COMFYUI_BASE_URL || 'http://127.0.0.1:8188',
     workflowPath = process.env.COMFYUI_WORKFLOW_PATH,
+    firstFrameWorkflowPath = process.env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH,
+    initialImagePath = process.env.COMFYUI_INITIAL_IMAGE_PATH,
     assetDir = process.env.ASSET_DIR || './data/assets',
     fps = Number(process.env.COMFYUI_FPS || 24),
     width = Number(process.env.COMFYUI_WIDTH || 720),
@@ -27,6 +29,8 @@ export class LocalComfyUiAudiovisualProvider {
     if (!workflowPath) throw new Error('COMFYUI_WORKFLOW_PATH is required for local audiovisual generation');
     if (!fetchImpl) throw new Error('fetch is required');
     this.workflowPath = workflowPath;
+    this.firstFrameWorkflowPath = firstFrameWorkflowPath;
+    this.initialImagePath = initialImagePath;
     this.assetDir = assetDir;
     this.fps = positiveInteger(fps, 'COMFYUI_FPS');
     this.width = positiveInteger(width, 'COMFYUI_WIDTH');
@@ -56,8 +60,18 @@ export class LocalComfyUiAudiovisualProvider {
     const seed = crypto.randomInt(1, 2147483647);
     const frames = Math.max(9, Math.round((seconds * this.fps - 1) / 8) * 8 + 1);
     let firstFrame = '';
-    if (previousAsset?.localPath && hasPlaceholder(template, 'FIRST_FRAME')) {
-      firstFrame = await this.uploadLastFrame(previousAsset.localPath, projectId);
+    if (hasPlaceholder(template, 'FIRST_FRAME')) {
+      if (previousAsset?.localPath) {
+        firstFrame = await this.uploadLastFrame(previousAsset.localPath, projectId);
+      } else if (this.initialImagePath) {
+        firstFrame = await this.uploadImage(
+          await readFile(this.initialImagePath), path.basename(this.initialImagePath),
+        );
+      } else if (this.firstFrameWorkflowPath) {
+        firstFrame = await this.generateFirstFrame(prompt);
+      } else {
+        throw new Error('Workflow uses {{FIRST_FRAME}} but no initial image is available. Set COMFYUI_FIRST_FRAME_WORKFLOW_PATH for automatic local image generation, COMFYUI_INITIAL_IMAGE_PATH for a prepared image, or use a text-to-video workflow.');
+      }
     }
     const replacements = {
       PROMPT: prompt,
@@ -147,20 +161,55 @@ export class LocalComfyUiAudiovisualProvider {
     try {
       await this.runCommand('ffmpeg', ['-y', '-sseof', '-0.15', '-i', videoPath,
         '-frames:v', '1', png]);
-      const bytes = await readFile(png);
-      const form = new FormData();
-      form.append('image', new Blob([bytes], { type: 'image/png' }), path.basename(png));
-      form.append('overwrite', 'false');
-      const response = await this.fetch(this.baseUrl + '/upload/image', {
-        method: 'POST', body: form, signal: AbortSignal.timeout(60000),
-      });
-      if (!response.ok) throw new Error('ComfyUI image upload failed (' + response.status + ')');
-      const result = await response.json();
-      if (!result.name) throw new Error('ComfyUI image upload did not return a name');
-      return result.subfolder ? result.subfolder + '/' + result.name : result.name;
+      return await this.uploadImage(await readFile(png), path.basename(png));
     } finally {
       await unlink(png).catch(() => {});
     }
+  }
+
+  async uploadImage(bytes, filename) {
+    const ext = path.extname(filename).toLowerCase();
+    const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+      : ext === '.webp' ? 'image/webp' : 'image/png';
+    const form = new FormData();
+    form.append('image', new Blob([bytes], { type: mime }), filename);
+    form.append('overwrite', 'false');
+    const response = await this.fetch(this.baseUrl + '/upload/image', {
+      method: 'POST', body: form, signal: AbortSignal.timeout(60000),
+    });
+    if (!response.ok) throw new Error('ComfyUI image upload failed (' + response.status + ')');
+    const result = await response.json();
+    if (!result.name) throw new Error('ComfyUI image upload did not return a name');
+    return result.subfolder ? result.subfolder + '/' + result.name : result.name;
+  }
+
+  async generateFirstFrame(prompt) {
+    const raw = JSON.parse(await readFile(this.firstFrameWorkflowPath, 'utf8'));
+    const template = raw.workflow || raw.prompt || raw;
+    if (!hasPlaceholder(template, 'PROMPT')) {
+      throw new Error('COMFYUI_FIRST_FRAME_WORKFLOW_PATH must include {{PROMPT}}');
+    }
+    const workflow = bindWorkflow(template, {
+      PROMPT: prompt, NEGATIVE_PROMPT: 'bad anatomy, deformed objects, fake skin, text artifacts',
+      SEED: crypto.randomInt(1, 2147483647), WIDTH: this.width, HEIGHT: this.height,
+      FPS: this.fps, FRAMES: 1, DURATION_SECONDS: 0, FIRST_FRAME: '', DIALOGUE: '',
+    });
+    const queued = await this.requestJson('/prompt', {
+      method: 'POST', body: { prompt: workflow, client_id: crypto.randomUUID() },
+    });
+    if (!queued.prompt_id) throw new Error('ComfyUI image workflow did not return prompt_id');
+    const history = await this.waitForHistory(queued.prompt_id);
+    const media = selectImageOutput(history.outputs);
+    if (!media) throw new Error('ComfyUI first-frame image workflow did not emit a PNG/JPEG/WebP image');
+    const params = new URLSearchParams({
+      filename: media.filename, subfolder: media.subfolder || '',
+      type: media.type || 'output',
+    });
+    const response = await this.fetch(this.baseUrl + '/view?' + params, {
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) throw new Error('Failed to download first-frame image (' + response.status + ')');
+    return this.uploadImage(new Uint8Array(await response.arrayBuffer()), path.basename(media.filename));
   }
 
   async waitForHistory(promptId) {
@@ -168,11 +217,10 @@ export class LocalComfyUiAudiovisualProvider {
     while (Date.now() < deadline) {
       const response = await this.requestJson('/history/' + encodeURIComponent(promptId));
       const entry = response[promptId] || response;
-      if (entry?.outputs) return entry;
-      if (entry?.status?.status_str === 'error' ||
-          entry?.status?.completed === false && entry?.status?.status_str === 'error') {
+      if (entry?.status?.status_str === 'error') {
         throw new Error('ComfyUI execution failed: ' + JSON.stringify(entry.status?.messages || []));
       }
+      if (entry?.outputs) return entry;
       await new Promise(resolve => setTimeout(resolve, this.pollIntervalMs));
     }
     throw new Error('ComfyUI generation timed out after ' + this.timeoutMs + 'ms (prompt ' + promptId + ')');
@@ -222,8 +270,14 @@ export function hasPlaceholder(value, name) {
 
 export function selectVideoOutput(outputs = {}) {
   const files = Object.values(outputs || {}).flatMap(result =>
-    ['videos', 'gifs', 'files'].flatMap(key => Array.isArray(result?.[key]) ? result[key] : []));
+    ['videos', 'video', 'gifs', 'files', 'images'].flatMap(key => Array.isArray(result?.[key]) ? result[key] : []));
   return files.find(file => /\.(mp4|webm|mov)$/i.test(file?.filename || '')) || null;
+}
+
+export function selectImageOutput(outputs = {}) {
+  const files = Object.values(outputs || {}).flatMap(result =>
+    ['images', 'files'].flatMap(key => Array.isArray(result?.[key]) ? result[key] : []));
+  return files.find(file => /\.(png|jpe?g|webp)$/i.test(file?.filename || '')) || null;
 }
 
 export function buildLocalVideoPrompt({ segment, productionScript, storyBible, regeneration }) {
