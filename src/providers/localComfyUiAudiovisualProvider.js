@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { assertLocalEndpoint } from './localEndpoints.js';
+import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
 
 // Accepts a ComfyUI workflow exported in API format. Add {{PROMPT}}, {{SEED}},
 // {{FRAMES}} etc. as input values in that workflow; no node IDs are assumed.
@@ -22,6 +23,8 @@ export class LocalComfyUiAudiovisualProvider {
     pollIntervalMs = Number(process.env.COMFYUI_POLL_INTERVAL_MS || 2000),
     timeoutMs = Number(process.env.COMFYUI_TIMEOUT_MS || 900000),
     requireAudio = process.env.COMFYUI_REQUIRE_AUDIO !== 'false',
+    localTts = null,
+    dialogueComposer = null,
     fetchImpl = globalThis.fetch,
     runCommand = run,
   } = {}) {
@@ -39,6 +42,8 @@ export class LocalComfyUiAudiovisualProvider {
     this.pollIntervalMs = positiveInteger(pollIntervalMs, 'COMFYUI_POLL_INTERVAL_MS');
     this.timeoutMs = positiveInteger(timeoutMs, 'COMFYUI_TIMEOUT_MS');
     this.requireAudio = requireAudio;
+    this.localTts = localTts;
+    this.dialogueComposer = dialogueComposer || new DialogueAudioComposer({ assetDir });
     this.fetch = fetchImpl;
     this.runCommand = runCommand;
   }
@@ -113,13 +118,33 @@ export class LocalComfyUiAudiovisualProvider {
     if (!res.ok || !res.body) {
       throw new Error('ComfyUI video download failed (' + res.status + ')');
     }
+    let finalPath = localPath;
+    let dialogueTrack = null;
+    let audioMode = this.requireAudio ? 'native' : 'unknown';
     try {
       await pipeline(res.body, createWriteStream(localPath));
-      if (this.requireAudio) {
-        const hasAudio = await probeAudio(localPath, this.runCommand);
-        if (!hasAudio) {
-          throw new Error('Generated video has no audio. Use an LTX audiovisual workflow with native audio (or set COMFYUI_REQUIRE_AUDIO=false for video-only testing).');
+      if (this.requireAudio && !(await probeAudio(localPath, this.runCommand))) {
+        if (!this.localTts) {
+          throw new Error('Generated video has no audio. Use an LTX audiovisual workflow with native audio, configure LOCAL_TTS_BASE_URL for post-mixed narration, or set COMFYUI_REQUIRE_AUDIO=false for video-only testing.');
         }
+        const spokenText = segment.dialogueTurns?.length
+          ? segment.dialogueTurns.map(turn => turn.text).filter(Boolean).join(' ')
+          : String(segment.dialogue || '');
+        if (!spokenText.trim()) {
+          throw new Error('Silent video needs spoken dialogue for local TTS. Use a native audiovisual workflow for non-dialogue scenes.');
+        }
+        const speech = await this.localTts.synthesize({
+          text: spokenText, projectId, segmentIndex: segment.index,
+        });
+        finalPath = await this.dialogueComposer.mixVoiceover({
+          videoPath: localPath, voicePath: speech.localPath,
+          projectId, segmentIndex: segment.index, generationId: promptId, ambienceGain: 0,
+        });
+        dialogueTrack = {
+          localPath: speech.localPath, turns: segment.dialogueTurns || [],
+          provider: 'local-tts', model: speech.model,
+        };
+        audioMode = 'voiceover-post-mix';
       }
     } catch (error) {
       await unlink(localPath).catch(() => {});
@@ -131,14 +156,15 @@ export class LocalComfyUiAudiovisualProvider {
       providerModelId: 'comfyui-local-audiovisual',
       type: 'ai-video',
       model: 'comfyui-workflow',
-      audioMode: this.requireAudio ? 'native' : 'unknown',
-      localPath,
+      audioMode,
+      localPath: finalPath,
       rawLocalPath: localPath,
       generationId: promptId,
       generatedDuration: seconds + 's',
       durationSeconds: seconds,
       aspectRatio: this.width + ':' + this.height,
       prompt,
+      dialogueTrack,
       dialogueTurns: segment.dialogueTurns || [],
       speakerCharacterIds: [...new Set((segment.dialogueTurns || []).map(t => t.speakerCharacterId).filter(Boolean))],
       referenceImageCount: firstFrame ? 1 : 0,
