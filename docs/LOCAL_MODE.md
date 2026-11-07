@@ -80,8 +80,15 @@ in ComfyUI history. The app downloads it from the local `/view` endpoint.
 
 If you wire the optional `{{FIRST_FRAME}}` input to a LoadImage node in an
 **image-to-video compatible** workflow, each next act uses the previous
-act's final frame via local ComfyUI image upload. Without this input, clip
-continuity is prompted but not visually anchored.
+act's final frame via local ComfyUI image upload. For the **first act**, set
+`COMFYUI_INITIAL_IMAGE_PATH` to a local PNG/JPEG/WebP, or set
+`COMFYUI_FIRST_FRAME_WORKFLOW_PATH` to a **second working ComfyUI image
+workflow** (API JSON, with `{{PROMPT}}` in its positive text input and a
+SaveImage output). The app generates the first frame locally, uploads it
+to ComfyUI, then generates the first video. Without any initial image or
+image workflow, a video graph requiring `{{FIRST_FRAME}}` fails early with
+an actionable message. Without this input, continuity is prompted but
+not visually anchored.
 
 For a production TikTok clip, **include generated audio in the output
 video**. `COMFYUI_REQUIRE_AUDIO=true` verifies the MP4/WebM has an audio
@@ -144,6 +151,8 @@ as passed.
 
 - The adapter requires a **real working ComfyUI API export** and locally
   installed checkpoints; it does not install or invent a video model.
+- For an image-conditioned model, automatic first-frame generation needs an
+  additional working local ComfyUI image workflow or a provided local image.
 - Native audiovisual output is needed for complete video+audio generation.
   Model fidelity and identity consistency depend on the workflow.
 - Server availability and real GPU throughput cannot be tested in CI.
