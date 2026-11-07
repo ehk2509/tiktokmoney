@@ -144,3 +144,60 @@ test('local video prompt includes concrete actions, dialogue and regeneration fe
   assert.match(prompt, /Good morning/);
   assert.match(prompt, /Avoid flicker/);
 });
+
+test('image-to-video workflow bootstraps first frame using a second local ComfyUI workflow', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-i2v-test-'));
+  try {
+    const workflowPath = path.join(dir, 'video.json');
+    const firstFrameWorkflowPath = path.join(dir, 'image.json');
+    await writeFile(workflowPath, JSON.stringify({
+      '1': { class_type: 'LoadImage', inputs: { image: '{{FIRST_FRAME}}' } },
+      '2': { class_type: 'TextEncode', inputs: { text: '{{PROMPT}}' } },
+    }));
+    await writeFile(firstFrameWorkflowPath, JSON.stringify({
+      '1': { class_type: 'TextEncode', inputs: { text: '{{PROMPT}}' } },
+    }));
+    const calls = [];
+    const fetchImpl = async (input, opts = {}) => {
+      const url = new URL(input);
+      calls.push(url.pathname);
+      if (url.pathname === '/prompt') {
+        const job = calls.filter(p => p === '/prompt').length === 1 ? 'image-1' : 'video-1';
+        if (job === 'video-1') {
+          const request = JSON.parse(opts.body);
+          assert.equal(request.prompt['1'].inputs.image, 'reference.png');
+        }
+        return Response.json({ prompt_id: job });
+      }
+      if (url.pathname === '/history/image-1') {
+        return Response.json({ 'image-1': { outputs: {
+          '12': { images: [{ filename: 'first.png', type: 'output' }] },
+        } } });
+      }
+      if (url.pathname === '/history/video-1') {
+        return Response.json({ 'video-1': { outputs: {
+          '20': { videos: [{ filename: 'clip.mp4', type: 'output' }] },
+        } } });
+      }
+      if (url.pathname === '/view') return new Response('local-bytes');
+      if (url.pathname === '/upload/image') {
+        assert.equal(opts.method, 'POST');
+        return Response.json({ name: 'reference.png' });
+      }
+      throw new Error('Unexpected route ' + url.pathname);
+    };
+    const provider = new LocalComfyUiAudiovisualProvider({
+      workflowPath, firstFrameWorkflowPath, assetDir: dir, requireAudio: false, fetchImpl,
+    });
+    const asset = await provider.generateSegment({
+      segment: { index: 0, durationSeconds: 5, action: 'Morning coffee', dialogue: 'Hi' },
+      productionScript: { characters: [] }, projectId: 'with-image',
+    });
+    assert.equal(asset.referenceImageCount, 1);
+    assert.equal(await readFile(asset.localPath, 'utf8'), 'local-bytes');
+    assert.deepEqual(calls, ['/prompt', '/history/image-1', '/view', '/upload/image',
+      '/prompt', '/history/video-1', '/view']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
