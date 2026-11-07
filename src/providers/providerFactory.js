@@ -1,6 +1,7 @@
 import { TemplateLlmProvider } from '../providers.js';
 import { LocalComfyUiAudiovisualProvider } from './localComfyUiAudiovisualProvider.js';
 import { LocalVisionQcProvider } from './localVisionQcProvider.js';
+import { LocalSpeechProvider } from './localSpeechProvider.js';
 import { assertLocalEndpoint, localAiEnabled } from './localEndpoints.js';
 import { OpenAICompatibleLlmProvider } from './openaiCompatibleLlmProvider.js';
 import { PexelsStockProvider, NullStockProvider } from './pexelsStockProvider.js';
@@ -413,6 +414,13 @@ export function createAudiovisualProvider(env = process.env) {
       workflowPath: env.COMFYUI_WORKFLOW_PATH,
       firstFrameWorkflowPath: env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH,
       initialImagePath: env.COMFYUI_INITIAL_IMAGE_PATH,
+      localTts: env.LOCAL_TTS_BASE_URL ? new LocalSpeechProvider({
+        baseUrl: env.LOCAL_TTS_BASE_URL,
+        model: env.LOCAL_TTS_MODEL || 'kokoro',
+        voice: env.LOCAL_TTS_VOICE || 'af_heart',
+        responseFormat: env.LOCAL_TTS_FORMAT || 'wav',
+        assetDir: env.ASSET_DIR,
+      }) : null,
       assetDir: env.ASSET_DIR,
       fps: env.COMFYUI_FPS ? Number(env.COMFYUI_FPS) : undefined,
       width: env.COMFYUI_WIDTH ? Number(env.COMFYUI_WIDTH) : undefined,
