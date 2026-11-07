@@ -1,5 +1,7 @@
 # TikTokMoney
 
+**Local AI runtime:** TikTokMoney can now generate scripts with Ollama/LM Studio and audiovisual clips with an on-device ComfyUI workflow (including LTX native audio), without cloud AI calls. Copy `.env.local.example` to `.env`, supply an API-format ComfyUI workflow with `{{PROMPT}}` placeholders, run `npm run local:check`, then `npm run generate -- --topic "..." --duration 30`. Setup, constraints and optional local VLM/Whisper QC: [docs/LOCAL_MODE.md](docs/LOCAL_MODE.md).
+
 Prototype autonomous short-form video engine inspired by the production-pipeline strengths of MoneyPrinterTurbo, but designed around a larger loop:
 
 ```text
