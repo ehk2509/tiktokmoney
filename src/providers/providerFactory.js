@@ -1,4 +1,7 @@
 import { TemplateLlmProvider } from '../providers.js';
+import { LocalComfyUiAudiovisualProvider } from './localComfyUiAudiovisualProvider.js';
+import { LocalVisionQcProvider } from './localVisionQcProvider.js';
+import { assertLocalEndpoint, localAiEnabled } from './localEndpoints.js';
 import { OpenAICompatibleLlmProvider } from './openaiCompatibleLlmProvider.js';
 import { PexelsStockProvider, NullStockProvider } from './pexelsStockProvider.js';
 import { ElevenLabsVoiceProvider, NullVoiceProvider } from './elevenLabsVoiceProvider.js';
@@ -31,6 +34,16 @@ import { TrendIntelligence } from '../core/trendIntelligence.js';
 import { TrendHistoryStore } from '../storage/trendHistoryStore.js';
 
 export function createLlmProvider(env = process.env) {
+  if (localAiEnabled(env)) {
+    const baseUrl = assertLocalEndpoint(env.LOCAL_LLM_BASE_URL || 'http://127.0.0.1:11434/v1', 'LOCAL_LLM_BASE_URL');
+    return new OpenAICompatibleLlmProvider({
+      apiKey: 'local',
+      baseUrl,
+      model: env.LOCAL_LLM_MODEL || 'qwen3:8b',
+      judgeModel: env.LOCAL_CREATIVE_JUDGE_MODEL || env.LOCAL_LLM_MODEL || 'qwen3:8b',
+      providerName: 'local',
+    });
+  }
   const provider = (env.LLM_PROVIDER || 'template').toLowerCase();
 
   if (provider === 'template') return new TemplateLlmProvider();
@@ -167,6 +180,7 @@ export function createTrendIntelligence(env = process.env) {
 }
 
 export function createStockProvider(env = process.env) {
+  if (localAiEnabled(env)) return new NullStockProvider();
   if (!env.PEXELS_API_KEY) return new NullStockProvider();
   return new PexelsStockProvider({
     apiKey: env.PEXELS_API_KEY,
@@ -175,6 +189,7 @@ export function createStockProvider(env = process.env) {
 }
 
 export function createAiVideoProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Audiovisual video uses local ComfyUI instead.
   const providers = [];
 
   if (env.LUMA_AGENTS_API_KEY) {
@@ -281,6 +296,7 @@ export function createAiVideoProvider(env = process.env) {
 }
 
 export function createVisualProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // No cloud images or Pexels fetches in local mode.
   const ai = createAiVideoProvider(env);
   const stock = env.PEXELS_API_KEY ? createStockProvider(env) : null;
   if (!ai && !stock) return null;
@@ -288,6 +304,18 @@ export function createVisualProvider(env = process.env) {
 }
 
 export function createRealismQcProvider(env = process.env) {
+  if (localAiEnabled(env)) {
+    if (!isEnabled(env.REALISM_QC_ENABLED)) return null;
+    if (!env.LOCAL_VISION_MODEL) {
+      throw new Error('LOCAL_VISION_MODEL is required when REALISM_QC_ENABLED=true in local mode');
+    }
+    return new LocalVisionQcProvider({
+      baseUrl: assertLocalEndpoint(env.LOCAL_VISION_BASE_URL || env.LOCAL_LLM_BASE_URL || 'http://127.0.0.1:11434/v1', 'LOCAL_VISION_BASE_URL'),
+      model: env.LOCAL_VISION_MODEL,
+      threshold: env.REALISM_QC_THRESHOLD ? Number(env.REALISM_QC_THRESHOLD) : undefined,
+      maxRegenerations: env.REALISM_MAX_REGENERATIONS ? Number(env.REALISM_MAX_REGENERATIONS) : undefined,
+    });
+  }
   if (!isEnabled(env.REALISM_QC_ENABLED)) return null;
 
   const primaryModel = env.REALISM_QC_MODEL;
@@ -379,6 +407,20 @@ export function createPoseMotionQcProvider(env = process.env) {
 }
 
 export function createAudiovisualProvider(env = process.env) {
+  if (localAiEnabled(env)) {
+    return new LocalComfyUiAudiovisualProvider({
+      baseUrl: env.COMFYUI_BASE_URL || 'http://127.0.0.1:8188',
+      workflowPath: env.COMFYUI_WORKFLOW_PATH,
+      assetDir: env.ASSET_DIR,
+      fps: env.COMFYUI_FPS ? Number(env.COMFYUI_FPS) : undefined,
+      width: env.COMFYUI_WIDTH ? Number(env.COMFYUI_WIDTH) : undefined,
+      height: env.COMFYUI_HEIGHT ? Number(env.COMFYUI_HEIGHT) : undefined,
+      maxSegmentSeconds: env.COMFYUI_MAX_SEGMENT_SECONDS ? Number(env.COMFYUI_MAX_SEGMENT_SECONDS) : undefined,
+      pollIntervalMs: env.COMFYUI_POLL_INTERVAL_MS ? Number(env.COMFYUI_POLL_INTERVAL_MS) : undefined,
+      timeoutMs: env.COMFYUI_TIMEOUT_MS ? Number(env.COMFYUI_TIMEOUT_MS) : undefined,
+      requireAudio: env.COMFYUI_REQUIRE_AUDIO == null ? true : isEnabled(env.COMFYUI_REQUIRE_AUDIO),
+    });
+  }
   if (!env.RUNWAYML_API_SECRET) return null;
 
   return new RunwayAudiovisualProvider({
@@ -415,6 +457,19 @@ export function createAudiovisualProvider(env = process.env) {
 }
 
 export function createDialogueQcProvider(env = process.env) {
+  if (localAiEnabled(env)) {
+    if (!env.LOCAL_TRANSCRIPTION_BASE_URL || !isEnabled(env.LOCAL_TRANSCRIPTION_ENABLED)) return null;
+    return new OpenAiTranscriptionProvider({
+      apiKey: 'local',
+      baseUrl: assertLocalEndpoint(env.LOCAL_TRANSCRIPTION_BASE_URL, 'LOCAL_TRANSCRIPTION_BASE_URL'),
+      model: env.LOCAL_TRANSCRIPTION_MODEL || 'whisper-1',
+      maxWer: env.DIALOGUE_QC_MAX_WER ? Number(env.DIALOGUE_QC_MAX_WER) : undefined,
+      maxWordCountDelta: env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA
+        ? Number(env.DIALOGUE_QC_MAX_WORD_COUNT_DELTA) : undefined,
+      maxRegenerations: env.DIALOGUE_QC_MAX_REGENERATIONS
+        ? Number(env.DIALOGUE_QC_MAX_REGENERATIONS) : undefined,
+    });
+  }
   const enabled = env.DIALOGUE_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.TRANSCRIPTION_API_KEY || env.OPENAI_API_KEY)
@@ -453,6 +508,7 @@ export function createDialogueQcProvider(env = process.env) {
 }
 
 export function createLipSyncQcProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Never fall back to OpenRouter in local mode.
   const enabled = env.LIPSYNC_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.OPENROUTER_API_KEY)
@@ -547,6 +603,7 @@ export function createPhonemeVisemeQcProvider(env = process.env) {
 }
 
 export function createSpeakerTurnQcProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Never fall back to OpenRouter in local mode.
   const enabled = env.SPEAKER_TURN_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.OPENROUTER_API_KEY)
@@ -578,6 +635,7 @@ export function createSpeakerTurnQcProvider(env = process.env) {
 }
 
 export function createVoiceProvider(env = process.env) {
+  if (localAiEnabled(env)) return new NullVoiceProvider(); // Native audiovisual audio is generated by ComfyUI.
   const entries = [];
 
   if (env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID) {
@@ -634,6 +692,7 @@ function isEnabledDefaultTrue(value) {
 }
 
 export function createEditorialVarietyQcProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Never fall back to OpenRouter in local mode.
   const enabled = env.EDITORIAL_VARIETY_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.OPENROUTER_API_KEY)
@@ -668,6 +727,7 @@ export function createEditorialVarietyQcProvider(env = process.env) {
 }
 
 export function createProductionIntegrityQcProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Never fall back to OpenRouter in local mode.
   const enabled = env.PRODUCTION_INTEGRITY_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.OPENROUTER_API_KEY)
@@ -705,6 +765,7 @@ export function createProductionIntegrityQcProvider(env = process.env) {
 }
 
 export function createVisualFactualQcProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Never fall back to OpenRouter in local mode.
   const enabled = env.VISUAL_FACT_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.OPENROUTER_API_KEY)
@@ -740,6 +801,7 @@ export function createVisualFactualQcProvider(env = process.env) {
 }
 
 export function createTextArtifactQcProvider(env = process.env) {
+  if (localAiEnabled(env)) return null; // Never fall back to OpenRouter in local mode.
   const enabled = env.TEXT_ARTIFACT_QC_ENABLED == null
     ? env.VIDEO_PIPELINE_MODE === 'audiovisual'
       && Boolean(env.OPENROUTER_API_KEY)
