@@ -63,6 +63,33 @@ if (env.COMFYUI_WORKFLOW_PATH) {
 if (env.REALISM_QC_ENABLED === 'true') {
   report('Local vision QC model', Boolean(env.LOCAL_VISION_MODEL),
     env.LOCAL_VISION_MODEL || 'set LOCAL_VISION_MODEL or disable REALISM_QC_ENABLED');
+  if (env.LOCAL_VISION_MODEL) {
+    await checkServer('Local vision server',
+      env.LOCAL_VISION_BASE_URL || env.LOCAL_LLM_BASE_URL || 'http://127.0.0.1:11434/v1',
+      '/models', env.LOCAL_VISION_MODEL);
+  }
+}
+if (env.LOCAL_TTS_BASE_URL) {
+  await checkServer('Local speech server', env.LOCAL_TTS_BASE_URL,
+    '/models', env.LOCAL_TTS_MODEL || 'kokoro');
+}
+if (env.LOCAL_TRANSCRIPTION_ENABLED === 'true') {
+  if (!env.LOCAL_TRANSCRIPTION_BASE_URL) {
+    report('Local transcription server', false, 'set LOCAL_TRANSCRIPTION_BASE_URL');
+  } else {
+    await checkServer('Local transcription server', env.LOCAL_TRANSCRIPTION_BASE_URL,
+      '/models', env.LOCAL_TRANSCRIPTION_MODEL || 'whisper-1');
+  }
+}
+if (env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH) {
+  try {
+    const data = JSON.parse(await readFile(env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH, 'utf8'));
+    report('First-frame image workflow has {{PROMPT}}',
+      hasPlaceholder(data.workflow || data.prompt || data, 'PROMPT'),
+      env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH);
+  } catch (error) {
+    report('First-frame image workflow', false, error.message);
+  }
 }
 
 console.log([...checks, ...failures].join('\n'));
