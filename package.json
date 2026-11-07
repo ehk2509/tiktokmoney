@@ -1,6 +1,6 @@
 {
   "name": "tiktokmoney",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "private": true,
   "description": "Autonomous short-form video engine for trend discovery, AI generation, quality control, TikTok publishing, analytics and closed-loop learning.",
   "type": "module",
@@ -20,7 +20,8 @@
     "motion-library:build": "node --env-file-if-exists=.env src/cli.js motion-library-build",
     "motion-library:list": "node --env-file-if-exists=.env src/cli.js motion-library",
     "benchmark:real": "node --env-file-if-exists=.env src/cli.js benchmark-real",
-    "benchmark:summary": "node --env-file-if-exists=.env src/cli.js benchmark-summary"
+    "benchmark:summary": "node --env-file-if-exists=.env src/cli.js benchmark-summary",
+    "local:check": "node --env-file-if-exists=.env scripts/check-local.mjs"
   },
   "keywords": [
     "ai-video",
