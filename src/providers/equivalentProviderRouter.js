@@ -47,6 +47,8 @@ export class EquivalentProviderRouter {
   async judgeCreativeCandidates(args) { return this.invoke('judgeCreativeCandidates', [args]); }
   async generateProductionScript(args) { return this.invoke('generateProductionScript', [args]); }
   async reviewProductionPlan(args) { return this.invoke('reviewProductionPlan', [args]); }
+  async factCheckProductionScript(args) { return this.invoke('factCheckProductionScript', [args]); }
+  async generateFactSheet(args) { return this.invoke('generateFactSheet', [args]); }
   async generateStoryBible(args) { return this.invoke('generateStoryBible', [args]); }
   async generateJson(args) { return this.invoke('generateJson', [args]); }
   async evaluate(...args) { return this.invoke('evaluate', args); }

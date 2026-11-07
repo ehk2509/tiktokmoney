@@ -6,6 +6,10 @@ import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { assertLocalEndpoint } from './localEndpoints.js';
 import { DialogueAudioComposer } from '../services/dialogueAudioComposer.js';
+import {
+  buildInfiniteTalkWorkflow, buildInfiniteTalkPrompt, infiniteTalkPassCount,
+  infiniteTalkFrameCount, INFINITETALK_FPS,
+} from './localInfiniteTalk.js';
 
 // Accepts a ComfyUI workflow exported in API format. Add {{PROMPT}}, {{SEED}},
 // {{FRAMES}} etc. as input values in that workflow; no node IDs are assumed.
@@ -15,6 +19,27 @@ export class LocalComfyUiAudiovisualProvider {
     workflowPath = process.env.COMFYUI_WORKFLOW_PATH,
     firstFrameWorkflowPath = process.env.COMFYUI_FIRST_FRAME_WORKFLOW_PATH,
     initialImagePath = process.env.COMFYUI_INITIAL_IMAGE_PATH,
+    // Image already in ComfyUI's input folder used when a {{CHARACTER_REFERENCE}} slot has
+    // no reference yet (e.g. a tiny placeholder that the workflow treats as "no reference").
+    emptyReferenceImage = process.env.COMFYUI_EMPTY_REFERENCE_IMAGE || '',
+    // Speaking acts whose generated voice starts later than this are re-rendered, because the
+    // model animates the lips from frame 0 and the gap reads as silent mouthing / dropped sound.
+    maxSpeechOnsetSeconds = Number(process.env.COMFYUI_MAX_SPEECH_ONSET_SECONDS ?? 0.6),
+    speechOnsetRetries = Number(process.env.COMFYUI_SPEECH_ONSET_RETRIES ?? 1),
+    // Optional lip-sync pass with Wan 2.1 InfiniteTalk for on-camera speech.
+    infiniteTalk = process.env.COMFYUI_INFINITETALK_ENABLED === 'true' ? {
+      width: Number(process.env.COMFYUI_INFINITETALK_WIDTH || 480),
+      height: Number(process.env.COMFYUI_INFINITETALK_HEIGHT || 832),
+      steps: Number(process.env.COMFYUI_INFINITETALK_STEPS || 6),
+      models: {
+        unet: process.env.COMFYUI_INFINITETALK_UNET || 'wan2.1_i2v_480p_14B_fp8_scaled.safetensors',
+        lora: process.env.COMFYUI_INFINITETALK_LORA || 'lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors',
+        textEncoder: process.env.COMFYUI_INFINITETALK_TEXT_ENCODER || 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
+        vae: process.env.COMFYUI_INFINITETALK_VAE || 'wan_2.1_vae.safetensors',
+        patch: process.env.COMFYUI_INFINITETALK_PATCH || 'wan2.1_infiniteTalk_single_fp16.safetensors',
+        audioEncoder: process.env.COMFYUI_INFINITETALK_AUDIO_ENCODER || 'wav2vec2-chinese-base_fp16.safetensors',
+      },
+    } : null,
     assetDir = process.env.ASSET_DIR || './data/assets',
     fps = Number(process.env.COMFYUI_FPS || 24),
     width = Number(process.env.COMFYUI_WIDTH || 720),
@@ -34,6 +59,11 @@ export class LocalComfyUiAudiovisualProvider {
     this.workflowPath = workflowPath;
     this.firstFrameWorkflowPath = firstFrameWorkflowPath;
     this.initialImagePath = initialImagePath;
+    this.emptyReferenceImage = emptyReferenceImage;
+    this.maxSpeechOnsetSeconds = Math.max(0, Number(maxSpeechOnsetSeconds) || 0);
+    this.speechOnsetRetries = Math.max(0, Math.min(3, Math.floor(Number(speechOnsetRetries) || 0)));
+    this.infiniteTalk = infiniteTalk;
+    this.characterReferences = new Map();
     this.assetDir = assetDir;
     this.fps = positiveInteger(fps, 'COMFYUI_FPS');
     this.width = positiveInteger(width, 'COMFYUI_WIDTH');
@@ -66,28 +96,49 @@ export class LocalComfyUiAudiovisualProvider {
     const frames = Math.max(9, Math.round((seconds * this.fps - 1) / 8) * 8 + 1);
     let firstFrame = '';
     if (hasPlaceholder(template, 'FIRST_FRAME')) {
-      if (previousAsset?.localPath) {
-        firstFrame = await this.uploadLastFrame(previousAsset.localPath, projectId);
-      } else if (this.initialImagePath) {
+      const previousSegment = (productionScript?.segments || [])
+        .find((item) => item.index === Number(segment.index) - 1);
+      // Chaining the previous last frame would keep the old setting, so a new location
+      // gets a fresh opening still (anchored to the first act's people when possible).
+      const locationChanged = Boolean(previousAsset?.localPath && previousSegment
+        && segment.locationId && previousSegment.locationId
+        && segment.locationId !== previousSegment.locationId);
+      const reference = this.characterReferences.get(projectId) || '';
+      if (previousAsset?.localPath && !(locationChanged && this.firstFrameWorkflowPath)) {
+        firstFrame = await this.uploadLastFrame(previousAsset.sourceVideoPath || previousAsset.localPath, projectId);
+      } else if (this.initialImagePath && !previousAsset?.localPath) {
         firstFrame = await this.uploadImage(
           await readFile(this.initialImagePath), path.basename(this.initialImagePath),
         );
+        this.characterReferences.set(projectId, firstFrame);
       } else if (this.firstFrameWorkflowPath) {
-        firstFrame = await this.generateFirstFrame(prompt);
+        firstFrame = await this.generateFirstFrame(
+          buildLocalFirstFramePrompt({ segment, productionScript, storyBible }),
+          locationChanged ? reference : '');
+        if (!locationChanged) this.characterReferences.set(projectId, firstFrame);
       } else {
         throw new Error('Workflow uses {{FIRST_FRAME}} but no initial image is available. Set COMFYUI_FIRST_FRAME_WORKFLOW_PATH for automatic local image generation, COMFYUI_INITIAL_IMAGE_PATH for a prepared image, or use a text-to-video workflow.');
       }
     }
+    const speaking = hasVisibleSpeech({ segment, productionScript, storyBible });
+    const negativePrompt = [
+      'CGI, cartoon, plastic skin, warped faces, deformed fingers, text artifacts, flicker, jump cuts, video game, ugly, split screen, collage, multiple panels, picture-in-picture, borders',
+      speaking ? 'camera zoom out, camera pulling back, dolly out, wide shot, tiny distant face, talking without sound, lips moving in silence, exaggerated mouth, shouting, changing clothes' : '',
+    ].filter(Boolean).join(', ');
+    const checkOnset = speaking && this.maxSpeechOnsetSeconds > 0;
+    let best = null;
+    for (let attempt = 0; attempt <= (checkOnset ? this.speechOnsetRetries : 0); attempt += 1) {
     const replacements = {
       PROMPT: prompt,
-      NEGATIVE_PROMPT: 'CGI, cartoon, plastic skin, warped faces, deformed fingers, text artifacts, flicker, jump cuts',
-      SEED: seed,
+      NEGATIVE_PROMPT: negativePrompt,
+      SEED: attempt === 0 ? seed : crypto.randomInt(1, 2147483647),
       FRAMES: frames,
       FPS: this.fps,
       WIDTH: this.width,
       HEIGHT: this.height,
       DURATION_SECONDS: seconds,
       FIRST_FRAME: firstFrame,
+      CHARACTER_REFERENCE: this.characterReferences.get(projectId) || this.emptyReferenceImage,
       DIALOGUE: String(segment.dialogue || ''),
     };
     const workflow = bindWorkflow(template, replacements);
@@ -150,6 +201,39 @@ export class LocalComfyUiAudiovisualProvider {
       await unlink(localPath).catch(() => {});
       throw error;
     }
+    const gaps = checkOnset
+      ? await measureSilenceGaps(finalPath, this.runCommand, seconds).catch(() => ({ leading: 0, trailing: 0 }))
+      : { leading: 0, trailing: 0 };
+    const candidate = {
+      promptId, localPath, finalPath, dialogueTrack, audioMode, attempt,
+      speechOnsetSeconds: gaps.leading,
+      trailingSilenceSeconds: gaps.trailing,
+      // Dead air at either end shows up as silent lip movement or a sound drop-out.
+      deadAir: gaps.leading + Math.max(0, gaps.trailing - 1),
+    };
+    if (!best || candidate.deadAir < best.deadAir) {
+      if (best) await discardRender(best);
+      best = candidate;
+    } else {
+      await discardRender(candidate);
+    }
+    if (best.speechOnsetSeconds <= this.maxSpeechOnsetSeconds && best.trailingSilenceSeconds <= 1.5) break;
+    }
+    const { promptId, localPath, dialogueTrack, audioMode } = best;
+    let { finalPath } = best;
+    let lipSync = null;
+    if (this.infiniteTalk && speaking) {
+      try {
+        const synced = await this.applyInfiniteTalk({
+          videoPath: finalPath, seconds, segment, productionScript, storyBible, projectId, promptId,
+        });
+        lipSync = { provider: 'comfyui-infinitetalk', passed: true, sourceVideoPath: finalPath };
+        finalPath = synced;
+      } catch (error) {
+        // Keep the video model's own clip; QC still judges it.
+        lipSync = { provider: 'comfyui-infinitetalk', passed: false, error: error.message };
+      }
+    }
 
     return {
       provider: 'comfyui-local',
@@ -159,6 +243,8 @@ export class LocalComfyUiAudiovisualProvider {
       audioMode,
       localPath: finalPath,
       rawLocalPath: localPath,
+      sourceVideoPath: lipSync?.passed ? lipSync.sourceVideoPath : null,
+      lipSyncPass: lipSync,
       generationId: promptId,
       generatedDuration: seconds + 's',
       durationSeconds: seconds,
@@ -174,10 +260,60 @@ export class LocalComfyUiAudiovisualProvider {
       keyframeMode: firstFrame ? 'first' : 'off',
       motionControlMode: 'semantic-prompt',
       nativeMotionMask: false,
+      speechOnsetSeconds: checkOnset ? best.speechOnsetSeconds : null,
+      trailingSilenceSeconds: checkOnset ? best.trailingSilenceSeconds : null,
+      speechOnsetAttempts: best.attempt + 1,
       sourceUrl: null,
       providerUsage: { provider: 'comfyui-local', operation: 'video-generation',
         model: 'local-workflow', costUsd: 0 },
     };
+  }
+
+  async applyInfiniteTalk({ videoPath, seconds, segment, productionScript, storyBible, projectId, promptId }) {
+    const cfg = this.infiniteTalk;
+    const passes = infiniteTalkPassCount(seconds);
+    const coveredSeconds = infiniteTalkFrameCount(passes) / INFINITETALK_FPS;
+    const base = path.join(this.assetDir, safeName(projectId || 'project') + '-act-' +
+      String(segment.index ?? 0) + '-' + String(promptId).slice(0, 12) + '-it');
+    const still = base + '-start.png';
+    const voice = base + '-voice.wav';
+    const padded = base + '-voice-padded.wav';
+    const out = base + '.mp4';
+    const raw = base + '-raw.mp4';
+    try {
+      await this.runCommand('ffmpeg', ['-y', '-i', videoPath, '-frames:v', '1', still]);
+      await this.runCommand('ffmpeg', ['-y', '-i', videoPath, '-vn', '-ac', '1', '-ar', '16000', voice]);
+      // InfiniteTalk reads audio per generated frame, so cover every frame of the last chunk.
+      await this.runCommand('ffmpeg', ['-y', '-i', voice, '-af', 'apad', '-t', String(coveredSeconds + 0.5), padded]);
+      const [startImage, drivingAudio, outputAudio] = [
+        await this.uploadImage(await readFile(still), path.basename(still)),
+        await this.uploadImage(await readFile(padded), path.basename(padded)),
+        await this.uploadImage(await readFile(voice), path.basename(voice)),
+      ];
+      const workflow = buildInfiniteTalkWorkflow({
+        startImage, drivingAudio, outputAudio,
+        prompt: buildInfiniteTalkPrompt({ segment, productionScript, storyBible }),
+        seed: crypto.randomInt(1, 2147483647), passes,
+        width: cfg.width, height: cfg.height, steps: cfg.steps, models: cfg.models,
+      });
+      const queued = await this.requestJson('/prompt', { method: 'POST', body: { prompt: workflow, client_id: crypto.randomUUID() } });
+      if (!queued.prompt_id) throw new Error('ComfyUI did not return prompt_id for InfiniteTalk');
+      const history = await this.waitForHistory(queued.prompt_id);
+      const media = selectVideoOutput(history.outputs);
+      if (!media) throw new Error('InfiniteTalk workflow produced no video');
+      const res = await this.fetch(this.baseUrl + '/view?' + new URLSearchParams({
+        filename: media.filename, subfolder: media.subfolder || '', type: media.type || 'output',
+      }), { signal: AbortSignal.timeout(120000) });
+      if (!res.ok || !res.body) throw new Error('InfiniteTalk video download failed (' + res.status + ')');
+      await pipeline(res.body, createWriteStream(raw));
+      // Lip-synced picture + the video model's full original audio (voice, ambience, effects).
+      await this.runCommand('ffmpeg', ['-y', '-i', raw, '-i', videoPath, '-map', '0:v:0', '-map', '1:a:0?',
+        '-t', String(seconds), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '17', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '192k', out]);
+      return out;
+    } finally {
+      for (const file of [still, voice, padded, raw]) await unlink(file).catch(() => {});
+    }
   }
 
   async uploadLastFrame(videoPath, projectId) {
@@ -196,7 +332,7 @@ export class LocalComfyUiAudiovisualProvider {
   async uploadImage(bytes, filename) {
     const ext = path.extname(filename).toLowerCase();
     const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
-      : ext === '.webp' ? 'image/webp' : 'image/png';
+      : ext === '.webp' ? 'image/webp' : ext === '.wav' ? 'audio/wav' : 'image/png';
     const form = new FormData();
     form.append('image', new Blob([bytes], { type: mime }), filename);
     form.append('overwrite', 'false');
@@ -209,16 +345,21 @@ export class LocalComfyUiAudiovisualProvider {
     return result.subfolder ? result.subfolder + '/' + result.name : result.name;
   }
 
-  async generateFirstFrame(prompt) {
+  async generateFirstFrame(prompt, characterReference = '') {
     const raw = JSON.parse(await readFile(this.firstFrameWorkflowPath, 'utf8'));
     const template = raw.workflow || raw.prompt || raw;
     if (!hasPlaceholder(template, 'PROMPT')) {
       throw new Error('COMFYUI_FIRST_FRAME_WORKFLOW_PATH must include {{PROMPT}}');
     }
+    const reference = characterReference || this.emptyReferenceImage;
+    if (hasPlaceholder(template, 'CHARACTER_REFERENCE') && !reference) {
+      throw new Error('First-frame workflow uses {{CHARACTER_REFERENCE}}; set COMFYUI_EMPTY_REFERENCE_IMAGE to an image in the ComfyUI input folder for acts without a reference.');
+    }
     const workflow = bindWorkflow(template, {
       PROMPT: prompt, NEGATIVE_PROMPT: 'bad anatomy, deformed objects, fake skin, text artifacts',
       SEED: crypto.randomInt(1, 2147483647), WIDTH: this.width, HEIGHT: this.height,
       FPS: this.fps, FRAMES: 1, DURATION_SECONDS: 0, FIRST_FRAME: '', DIALOGUE: '',
+      CHARACTER_REFERENCE: reference,
     });
     const queued = await this.requestJson('/prompt', {
       method: 'POST', body: { prompt: workflow, client_id: crypto.randomUUID() },
@@ -306,6 +447,46 @@ export function selectImageOutput(outputs = {}) {
   return files.find(file => /\.(png|jpe?g|webp)$/i.test(file?.filename || '')) || null;
 }
 
+// Still-image prompt for the opening frame: no dialogue or audio (image models tend to
+// draw quoted words as text), just who is where, framed like the first shot.
+export function buildLocalFirstFramePrompt({ segment, productionScript, storyBible }) {
+  const characters = (segment.characterIds || []).map(id =>
+    (storyBible?.characters || productionScript?.characters || []).find(c => c.id === id))
+    .filter(Boolean).map(c => [c.name, c.description, c.physicalTraits, c.wardrobe].filter(Boolean).join(', '));
+  const location = (storyBible?.locations || productionScript?.locations || [])
+    .find(l => l.id === segment.locationId);
+  const speaking = hasVisibleSpeech({ segment, productionScript, storyBible });
+  return [
+    'One single full-frame photorealistic vertical photograph (not a collage, not split-screen, no stacked panels, borders or inset images), cinematic, natural skin texture, sharp focus on faces.',
+    speaking ? 'Framing: head-and-shoulders portrait, ' + SPEAKER_FRAMING : '',
+    speaking ? 'The speaker looks toward the camera with lips gently closed and a relaxed, neutral expression, about to speak.' : '',
+    // Full-body poses in startState override the framing in image models, so skip them for speakers.
+    speaking ? '' : (segment.startState ? 'Moment: ' + segment.startState : 'Moment: ' + (segment.action || '')),
+    speaking ? '' : 'Camera: ' + (segment.camera || ''),
+    characters.length ? 'People: ' + characters.join(' | ') : '',
+    'Location: ' + [location?.description, location?.lighting].filter(Boolean).join('. '),
+    'No text, captions, logos, watermarks or signage lettering.',
+  ].filter(Boolean).join('\n').slice(0, 1800);
+}
+
+// Video models only lip-sync well when the mouth is large in frame, so speaking acts are
+// forced to a medium close-up regardless of the screenplay's wide/overhead/detail camera.
+const SPEAKER_FRAMING = 'locked-off static camera on a tripod, medium close-up from chest up for the whole shot, no zoom, no pull-back, no dolly or tracking; the speaker stays in place with the face large in frame, mouth and lips clearly visible and in focus.';
+
+function hasVisibleSpeech({ segment, productionScript, storyBible }) {
+  const characters = storyBible?.characters || productionScript?.characters || [];
+  const turns = segment.dialogueTurns?.length
+    ? segment.dialogueTurns
+    : (segment.dialogue ? [{ speakerCharacterId: segment.speakerCharacterId, text: segment.dialogue }] : []);
+  return turns.some((turn) => {
+    if (!String(turn.text || '').trim()) return false;
+    const speaker = characters.find((c) => c.id === turn.speakerCharacterId);
+    if (speaker) return speaker.onScreen !== false;
+    // Unknown speaker: treat as visible when someone is on screen in this act.
+    return (segment.characterIds || []).length > 0;
+  });
+}
+
 export function buildLocalVideoPrompt({ segment, productionScript, storyBible, regeneration }) {
   const characters = (segment.characterIds || []).map(id =>
     (storyBible?.characters || productionScript?.characters || []).find(c => c.id === id))
@@ -315,19 +496,48 @@ export function buildLocalVideoPrompt({ segment, productionScript, storyBible, r
   const turns = segment.dialogueTurns?.length
     ? segment.dialogueTurns.map(t => t.text).filter(Boolean).join(' ')
     : segment.dialogue;
+  const speaking = hasVisibleSpeech({ segment, productionScript, storyBible });
   return [
-    'Generate one continuous photorealistic cinematic vertical video with synchronized natural audio.',
+    'Generate one continuous photorealistic cinematic vertical video with synchronized natural audio, as a single full-frame shot (no split-screen or panels).',
     'Scene: ' + (segment.action || ''),
-    'Camera: ' + (segment.camera || ''),
+    'Camera: ' + (speaking ? SPEAKER_FRAMING : (segment.camera || '')),
     'Location: ' + [location?.description, location?.lighting].filter(Boolean).join('. '),
     'Characters: ' + characters.join(' | '),
-    'Exact spoken dialogue: ' + (turns || 'None'),
+    turns
+      ? (speaking
+        ? 'Exact spoken dialogue, spoken by the on-screen speaker looking at the camera in a calm, natural conversational voice, starting right away: "' + turns + '"'
+        : 'Exact spoken dialogue, from an off-screen narrator: "' + turns + '"')
+      : 'Exact spoken dialogue: None',
+    speaking ? 'Lip sync: small, natural lip and jaw movements that follow every audible syllable, no exaggerated or wide-open mouth shapes; before and after the line the mouth stays closed and still. Never mouth words silently; no extra words.' : '',
     'Audio ambience: ' + (segment.ambience || ''),
     'Sound effects: ' + (segment.soundEffects || []).join(', '),
     'Continuity: match the supplied opening frame if present. Keep faces, clothing, environment and lighting consistent.',
     'No captions, logos, artificial looking skin or extra dialogue.',
     regeneration?.guidance ? 'Fix previous generation errors: ' + regeneration.guidance : '',
   ].filter(Boolean).join('\n').slice(0, 2800);
+}
+
+// Seconds of near-silence at the start and end of a clip (0 when sound fills that edge).
+export async function measureSilenceGaps(file, runCommand, clipSeconds) {
+  const out = await runCommand('ffmpeg', ['-hide_banner', '-nostats', '-i', file, '-vn',
+    '-af', 'silencedetect=n=-40dB:d=0.25,ametadata=mode=print:file=-', '-f', 'null', '-'], true);
+  const starts = [...String(out).matchAll(/lavfi\.silence_start=([\d.]+)/g)].map(m => Number(m[1]));
+  const ends = [...String(out).matchAll(/lavfi\.silence_end=([\d.]+)/g)].map(m => Number(m[1]));
+  const leading = !starts.length || starts[0] > 0.05 ? 0 : (ends.length ? ends[0] : Number(clipSeconds) || Infinity);
+  // More starts than ends means the last silence runs to the end of the clip.
+  const trailing = starts.length > ends.length && Number(clipSeconds) > 0
+    ? Math.max(0, Number(clipSeconds) - starts[starts.length - 1])
+    : 0;
+  return { leading, trailing };
+}
+
+export async function measureLeadingSilence(file, runCommand) {
+  return (await measureSilenceGaps(file, runCommand, 0)).leading;
+}
+
+async function discardRender(render) {
+  await unlink(render.localPath).catch(() => {});
+  if (render.finalPath !== render.localPath) await unlink(render.finalPath).catch(() => {});
 }
 
 async function probeAudio(file, runCommand) {

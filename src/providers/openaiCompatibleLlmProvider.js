@@ -1,4 +1,6 @@
 import { normalizeProviderUsage } from '../core/providerUsage.js';
+
+const NL = String.fromCharCode(10);
 export class OpenAICompatibleLlmProvider {
   constructor({
     apiKey = process.env.OPENAI_API_KEY,
@@ -217,7 +219,7 @@ export class OpenAICompatibleLlmProvider {
         ? `SOURCE-GROUNDED RESEARCH PACKET: ${JSON.stringify(researchPacket)}`
         : '',
       researchPacket?.evidence?.length
-        ? 'Use the research packet only for supported factual context. Never invent missing statistics, quotes, dates, or claims.'
+        ? 'Use the research packet only for supported factual context. Every factual statement you write must restate a packet fact; never invent missing statistics, quotes, dates, rules or claims.'
         : '',
       preflightFeedback
         ? `PREVIOUS SCREENPLAY PREFLIGHT FAILED. Correct every issue before returning JSON: ${preflightFeedback}`
@@ -305,7 +307,7 @@ export class OpenAICompatibleLlmProvider {
       '- For interpersonal premises, the first act must visibly establish the primary role and the people they are interacting with. Do not spend the opening on solitary preparation B-roll instead.',
       '- Default brandPolicy.mode to "unbranded". Unless the topic explicitly requires a named brand, wardrobe, shoes, balls, equipment, signs and environments must contain no recognizable logos, trademarks, sponsor marks, team marks, signature stripes/swooshes, or branded trade dress.',
       '- Only put a brand in allowedBrands when the user/topic explicitly requires that brand. Never invent a brand for visual realism.',
-      '- Character descriptions must be stable enough for visual continuity: apparent age, face, hair, body type and wardrobe.',
+      '- Character descriptions must be stable enough for visual continuity: always state apparent gender (man/woman), apparent age, face, hair, body type and wardrobe in the description itself.',
       '- Locations must include fixed physical anchors and exact lighting.',
       '- Camera/action descriptions must be physically plausible and filmable.',
       '- startState and endState must describe the SAME people, wardrobe, location, lighting and camera setup at two physically reachable moments.',
@@ -321,6 +323,8 @@ export class OpenAICompatibleLlmProvider {
       '- The hook must immediately communicate tension or curiosity.',
       '- The final segment must resolve the promise made by the hook.',
       '- Do not invent factual claims beyond the supplied topic/context.',
+      '- Write every spoken line and description in plain English only; never mix in words from other languages.',
+      '- Every spoken factual claim must be accurate by well-established knowledge. Never invent laws, bans, treaties or statistics; give the real main reasons, and leave out anything you are unsure of.',
     ].join('\n');
 
     const parsed = await this.generateJson({
@@ -391,6 +395,47 @@ export class OpenAICompatibleLlmProvider {
     });
   }
 
+  async generateFactSheet({ topic }) {
+    const prompt = [
+      `Topic for a short educational video: ${topic}`,
+      'List 6-8 short, well-established facts that explain this topic, most important reasons first.',
+      'Only include facts that are widely documented and that you are certain of. Prefer physical, operational and economic reasons.',
+      'Do not state that anything is banned, prohibited or illegal unless such a rule definitely exists. No invented numbers.',
+      'Return JSON only: {"facts":["one plain sentence per fact"]}',
+    ].join(NL);
+    return this.generateJson({
+      system: 'You are a careful science and aviation researcher. Return JSON only.',
+      prompt,
+      temperature: 0,
+      model: this.judgeModel,
+    });
+  }
+
+  async factCheckProductionScript({ topic, segments, researchPacket = null }) {
+    const prompt = [
+      'Fact-check the spoken lines of a short educational video before it is produced.',
+      `Topic: ${topic}`,
+      researchPacket?.evidence?.length ? `Research packet: ${JSON.stringify(researchPacket)}` : '',
+      `Spoken lines by act: ${JSON.stringify(segments)}`,
+      '',
+      'List every factual claim (laws, treaties, numbers, causes, history, science).',
+      'Judge each against well-established knowledge. Be strict about legal/regulatory claims:',
+      'a claim that something is "banned" or "prohibited" is false unless such a rule really exists.',
+      'Also mark a claim "misleading" when it states a minor or invented reason as the main reason.',
+      'Questions, opinions and hooks are not claims. Do not flag simplifications that stay true.',
+      '',
+      'Return JSON only:',
+      '{"claims":[{"text":"claim as spoken","verdict":"true|false|misleading|uncertain","confidence":0.0,"correction":"accurate one-sentence replacement, empty when true"}]}',
+    ].filter(Boolean).join('\n');
+
+    return this.generateJson({
+      system: 'You are a meticulous fact-checker for educational video scripts. Return JSON only.',
+      prompt,
+      temperature: 0,
+      model: this.judgeModel,
+    });
+  }
+
   async generateStoryBible({ script }) {
     const parts = [script.hook, ...(script.body || []), script.payoff, script.cta].filter(Boolean);
     const prompt = [
@@ -433,7 +478,27 @@ export class OpenAICompatibleLlmProvider {
     };
   }
 
-  async generateJson({ system, prompt, temperature = 0, model = this.model }) {
+  // Local models occasionally loop and get aborted (HTTP 5xx) or emit broken JSON; a retry
+  // at a slightly higher temperature usually breaks the loop. Hosted APIs keep one attempt.
+  async generateJson(args) {
+    const retries = Math.max(0, Number(process.env.LLM_TRANSIENT_RETRIES
+      ?? (this.providerName === 'local' ? 2 : 0)) || 0);
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await this.generateJsonOnce({
+          ...args,
+          temperature: Math.min(1, (args.temperature ?? 0) + attempt * 0.2),
+        });
+      } catch (error) {
+        lastError = error;
+        if (!/\((5\d\d)\)|invalid JSON|non-JSON response|did not contain message content/i.test(error.message)) throw error;
+      }
+    }
+    throw lastError;
+  }
+
+  async generateJsonOnce({ system, prompt, temperature = 0, model = this.model }) {
     let response = await this.requestCompletion({ system, prompt, temperature, model });
     let payload = await response.json().catch(() => null);
 

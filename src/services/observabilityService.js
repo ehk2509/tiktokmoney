@@ -23,6 +23,8 @@ export class ObservabilityService {
       webhookRetryAgeMinutes: number(thresholds.webhookRetryAgeMinutes, process.env.OBS_WEBHOOK_RETRY_AGE_MINUTES, 15),
       projectFailureRateWarn: number(thresholds.projectFailureRateWarn, process.env.OBS_PROJECT_FAILURE_RATE_WARN, 0.25),
       projectFailureRateCritical: number(thresholds.projectFailureRateCritical, process.env.OBS_PROJECT_FAILURE_RATE_CRITICAL, 0.5),
+      // A single aborted project must not block all generation; require a few finished projects first.
+      projectFailureMinSample: number(thresholds.projectFailureMinSample, process.env.OBS_PROJECT_FAILURE_MIN_SAMPLE, 3),
       incompleteCostRateWarn: number(thresholds.incompleteCostRateWarn, process.env.OBS_INCOMPLETE_COST_RATE_WARN, 0.35),
       dailyBudgetOverrunPctWarn: number(thresholds.dailyBudgetOverrunPctWarn, process.env.OBS_BUDGET_OVERRUN_PCT_WARN, 10),
       authExpiryWarnMinutes: number(thresholds.authExpiryWarnMinutes, process.env.OBS_AUTH_EXPIRY_WARN_MINUTES, 60),
@@ -67,7 +69,10 @@ export class ObservabilityService {
 
 function projectMetrics(projects) {
   const terminal = projects.filter((project) => isTerminalProject(project.status));
-  const failed = terminal.filter((project) => isFailedProject(project.status));
+  // Plans rejected before any video generation spent nothing, so they do not count as
+  // generation failures for the breaker (they still show up in qcFailed).
+  const failed = terminal.filter((project) => isFailedProject(project.status)
+    && project.status !== 'PRE_GENERATION_QC_FAILED');
   const qcFailed = terminal.filter((project) => /QC_FAILED|PRE_GENERATION_QC_FAILED|VISUAL_QC_FAILED/.test(project.status || ''));
   const interrupted = projects.filter((project) => /INTERRUPTED|FAILED/.test(project.status || ''));
   const incompleteCost = projects.filter((project) => project.costLedger && project.costLedger.costUsdComplete !== true);
@@ -196,10 +201,12 @@ function detectIncidents(metrics, thresholds) {
     'webhook_retry_backlog',
     `TikTok webhook retries are backlogged (count=${metrics.webhooks.retries}, oldest=${metrics.webhooks.oldestRetryMinutes}m).`,
   );
-  push(incidents, metrics.projects.failureRate >= thresholds.projectFailureRateCritical, 'critical', 'project_failure_rate_high', `Project failure rate is ${pct(metrics.projects.failureRate)}.`);
+  const failureSampleOk = metrics.projects.terminal >= thresholds.projectFailureMinSample;
+  push(incidents, failureSampleOk && metrics.projects.failureRate >= thresholds.projectFailureRateCritical, 'critical', 'project_failure_rate_high', `Project failure rate is ${pct(metrics.projects.failureRate)}.`);
   push(
     incidents,
-    metrics.projects.failureRate >= thresholds.projectFailureRateWarn
+    failureSampleOk
+      && metrics.projects.failureRate >= thresholds.projectFailureRateWarn
       && metrics.projects.failureRate < thresholds.projectFailureRateCritical,
     'warning',
     'project_failure_rate_elevated',

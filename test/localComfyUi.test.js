@@ -271,3 +271,120 @@ test('ComfyUI provider uses local speech and FFmpeg voiceover if video has no au
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('speaking acts force a close framing and silent-mouth rules; narration does not', async () => {
+  const { buildLocalFirstFramePrompt } = await import('../src/providers/localComfyUiAudiovisualProvider.js');
+  const productionScript = {
+    characters: [
+      { id: 'host', name: 'Host', description: 'presenter', onScreen: true },
+      { id: 'vo', name: 'Narrator', onScreen: false },
+    ],
+    locations: [{ id: 'l1', description: 'Stage' }],
+  };
+  const speaking = { action: 'Host walks on stage', camera: 'Wide shot of the whole stage',
+    characterIds: ['host'], locationId: 'l1',
+    dialogueTurns: [{ speakerCharacterId: 'host', text: 'Why do planes avoid Antarctica?' }] };
+  const video = buildLocalVideoPrompt({ segment: speaking, productionScript });
+  assert.match(video, /medium close-up/);
+  assert.doesNotMatch(video, /Wide shot of the whole stage/);
+  assert.match(video, /starting right away: "Why do planes avoid Antarctica\?"/);
+  assert.match(video, /Never mouth words silently/);
+  const still = buildLocalFirstFramePrompt({ segment: speaking, productionScript });
+  assert.match(still, /lips gently closed/);
+  assert.doesNotMatch(still, /Antarctica\?/);
+
+  const narrated = { ...speaking, dialogueTurns: [{ speakerCharacterId: 'vo', text: 'Ice everywhere.' }] };
+  const narratedPrompt = buildLocalVideoPrompt({ segment: narrated, productionScript });
+  assert.match(narratedPrompt, /Wide shot of the whole stage/);
+  assert.match(narratedPrompt, /off-screen narrator/);
+});
+
+test('a new location gets a fresh first frame anchored to the first act; same location chains', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-loc-test-'));
+  try {
+    const workflowPath = path.join(dir, 'video.json');
+    await writeFile(workflowPath, JSON.stringify({
+      '1': { class_type: 'LoadImage', inputs: { image: '{{FIRST_FRAME}}' } },
+      '2': { class_type: 'TextEncode', inputs: { text: '{{PROMPT}}' } },
+    }));
+    let jobs = 0;
+    const fetchImpl = async (input) => {
+      const url = new URL(input);
+      if (url.pathname === '/prompt') { jobs += 1; return Response.json({ prompt_id: 'v' + jobs }); }
+      if (url.pathname.startsWith('/history/')) {
+        const id = url.pathname.split('/').pop();
+        return Response.json({ [id]: { outputs: { '9': { videos: [{ filename: id + '.mp4', type: 'output' }] } } } });
+      }
+      if (url.pathname === '/view') return new Response('bytes');
+      throw new Error('Unexpected route ' + url.pathname);
+    };
+    const provider = new LocalComfyUiAudiovisualProvider({
+      workflowPath, firstFrameWorkflowPath: path.join(dir, 'unused.json'), assetDir: dir,
+      requireAudio: false, fetchImpl,
+    });
+    const events = [];
+    provider.generateFirstFrame = async (_prompt, reference) => {
+      events.push(['still', reference]);
+      return reference ? 'scene-2.png' : 'scene-1.png';
+    };
+    provider.uploadLastFrame = async () => { events.push(['chain']); return 'last.png'; };
+    const productionScript = { characters: [], segments: [
+      { index: 0, locationId: 'stage' }, { index: 1, locationId: 'stage' }, { index: 2, locationId: 'airstrip' },
+    ] };
+    const act = (index, previousAsset) => provider.generateSegment({
+      segment: { index, durationSeconds: 5, action: 'x', locationId: productionScript.segments[index].locationId },
+      productionScript, previousAsset, projectId: 'p1',
+    });
+    const a0 = await act(0, null);
+    const a1 = await act(1, a0);
+    await act(2, a1);
+    assert.deepEqual(events, [['still', ''], ['chain'], ['still', 'scene-1.png']]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a speaking clip whose voice starts late is re-rendered and the better take kept', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'tiktokmoney-onset-test-'));
+  try {
+    const workflowPath = path.join(dir, 'video.json');
+    await writeFile(workflowPath, JSON.stringify({
+      '2': { class_type: 'TextEncode', inputs: { text: '{{PROMPT}}' } },
+      '3': { class_type: 'TextEncode', inputs: { text: '{{NEGATIVE_PROMPT}}' } },
+    }));
+    const negatives = [];
+    let jobs = 0;
+    const fetchImpl = async (input, opts = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/prompt') {
+        jobs += 1;
+        negatives.push(JSON.parse(opts.body).prompt['3'].inputs.text);
+        return Response.json({ prompt_id: 'job' + jobs });
+      }
+      if (url.pathname.startsWith('/history/')) {
+        const id = url.pathname.split('/').pop();
+        return Response.json({ [id]: { outputs: { '9': { videos: [{ filename: id + '.mp4', type: 'output' }] } } } });
+      }
+      if (url.pathname === '/view') return new Response('bytes');
+      throw new Error('Unexpected route ' + url.pathname);
+    };
+    const onsets = ['lavfi.silence_start=0\nlavfi.silence_end=1.83\n', 'lavfi.silence_start=0\nlavfi.silence_end=0.2\n'];
+    const runCommand = async (command) => (command === 'ffprobe' ? 'audio' : onsets.shift());
+    const provider = new LocalComfyUiAudiovisualProvider({
+      workflowPath, assetDir: dir, fetchImpl, runCommand,
+    });
+    const asset = await provider.generateSegment({
+      segment: { index: 0, durationSeconds: 5, action: 'Talk', characterIds: ['host'],
+        dialogueTurns: [{ speakerCharacterId: 'host', text: 'Hello there' }] },
+      productionScript: { characters: [{ id: 'host', name: 'Host', onScreen: true }] },
+      projectId: 'onset',
+    });
+    assert.equal(jobs, 2);
+    assert.equal(asset.generationId, 'job2');
+    assert.equal(asset.speechOnsetSeconds, 0.2);
+    assert.equal(asset.speechOnsetAttempts, 2);
+    assert.match(negatives[0], /lips moving in silence/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

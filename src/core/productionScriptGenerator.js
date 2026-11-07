@@ -17,8 +17,12 @@ export class ProductionScriptGenerator {
   constructor({
     llm,
     preflightMaxRetries = Number(process.env.PRODUCTION_SCRIPT_PREFLIGHT_MAX_RETRIES || 1),
+    factCheckEnabled = process.env.SCRIPT_FACT_CHECK_ENABLED !== 'false',
+    strictSpeechTiming = process.env.SCRIPT_STRICT_SPEECH_TIMING === 'true',
   }) {
     this.llm = llm;
+    this.strictSpeechTiming = Boolean(strictSpeechTiming);
+    this.factCheckEnabled = Boolean(factCheckEnabled);
     this.preflightMaxRetries = Math.max(0, Math.min(3, Number(preflightMaxRetries) || 0));
   }
 
@@ -31,6 +35,11 @@ export class ProductionScriptGenerator {
     preflightFeedback: initialPreflightFeedback = '',
   }) {
     let preflightFeedback = String(initialPreflightFeedback || '').trim();
+    const factCorrections = [];
+    // Without live research, ground the writer in a fact sheet that has already been fact-checked.
+    if (!researchPacket?.evidence?.length) {
+      researchPacket = await this.verifiedFactSheet(topic) || researchPacket;
+    }
 
     for (let attempt = 0; attempt <= this.preflightMaxRetries; attempt += 1) {
       const raw = this.llm?.generateProductionScript
@@ -54,17 +63,101 @@ export class ProductionScriptGenerator {
         topic,
         creativeBrief,
         durationSeconds,
+        strictSpeechTiming: this.strictSpeechTiming,
       });
+      if (preflight.passed) {
+        const factCheck = await this.factCheck(script, { topic, researchPacket });
+        if (factCheck) {
+          script.factCheck = factCheck;
+          if (!factCheck.passed) {
+            preflight.passed = false;
+            preflight.violations = [...(preflight.violations || []), ...factCheck.violations];
+          }
+        }
+      }
       script.preflight = {
         ...preflight,
         attempt: attempt + 1,
       };
       if (preflight.passed) return script;
 
-      preflightFeedback = preflight.violations.join(' ');
+      // Keep every earlier fact correction so the writer cannot bring a debunked claim back.
+      for (const violation of script.factCheck?.violations || []) {
+        if (!factCorrections.includes(violation)) factCorrections.push(violation);
+      }
+      const structural = preflight.violations.filter((item) => !factCorrections.includes(item));
+      preflightFeedback = [
+        ...structural,
+        ...(factCorrections.length
+          ? ['FACT CORRECTIONS (binding; never repeat these claims in any form):', ...factCorrections]
+          : []),
+      ].join(' ');
     }
 
     throw new Error(`Production script failed preflight: ${preflightFeedback}`);
+  }
+
+  async verifiedFactSheet(topic) {
+    if (!this.factCheckEnabled || typeof this.llm?.generateFactSheet !== 'function'
+      || typeof this.llm?.factCheckProductionScript !== 'function') return null;
+    try {
+      const sheet = await this.llm.generateFactSheet({ topic });
+      const facts = (Array.isArray(sheet?.facts) ? sheet.facts : []).map((fact) => clean(fact, 300)).filter(Boolean);
+      if (!facts.length) return null;
+      const verdicts = await this.llm.factCheckProductionScript({
+        topic, segments: facts.map((fact, index) => ({ index, dialogue: fact })),
+      });
+      const rejected = (Array.isArray(verdicts?.claims) ? verdicts.claims : [])
+        .filter((claim) => ['false', 'misleading', 'uncertain'].includes(String(claim?.verdict || '').toLowerCase()))
+        .map((claim) => clean(claim?.text || claim?.claim).toLowerCase())
+        .filter(Boolean);
+      const kept = facts.filter((fact) => !rejected.some((bad) => (
+        fact.toLowerCase().includes(bad) || bad.includes(fact.toLowerCase())
+      )));
+      if (!kept.length) return null;
+      return {
+        source: 'local-llm-verified-fact-sheet',
+        evidence: kept.map((claim) => ({ claim, source: 'model knowledge, fact-checked' })),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Checks every spoken/on-screen claim against general knowledge with the judge model.
+  // Returns null when no checker is available; failures feed back into the next attempt.
+  async factCheck(script, { topic, researchPacket }) {
+    if (!this.factCheckEnabled || typeof this.llm?.factCheckProductionScript !== 'function') return null;
+    const spoken = (script.segments || []).map((segment) => ({
+      index: segment.index,
+      dialogue: segment.dialogueTurns?.length
+        ? segment.dialogueTurns.map((turn) => turn.text).filter(Boolean).join(' ')
+        : segment.dialogue || '',
+    }));
+    let raw;
+    try {
+      raw = await this.llm.factCheckProductionScript({ topic, segments: spoken, researchPacket });
+    } catch (error) {
+      return { passed: true, checked: false, error: error.message, claims: [], violations: [] };
+    }
+    const claims = (Array.isArray(raw?.claims) ? raw.claims : []).map((claim) => ({
+      text: clean(claim?.text || claim?.claim),
+      verdict: String(claim?.verdict || '').toLowerCase(),
+      confidence: Number(claim?.confidence) || 0,
+      correction: clean(claim?.correction),
+    })).filter((claim) => claim.text);
+    const wrong = claims.filter((claim) => (
+      ['false', 'misleading'].includes(claim.verdict) && claim.confidence >= 0.6
+    ));
+    return {
+      passed: wrong.length === 0,
+      checked: true,
+      claims,
+      violations: wrong.map((claim) => (
+        `Factually wrong claim: "${claim.text}".`
+        + (claim.correction ? ` Accurate version: ${claim.correction}` : ' Remove or correct it.')
+      )),
+    };
   }
 }
 
@@ -155,7 +248,11 @@ function normalizeProductionScript(value, context) {
       shotType,
       camera: stripTextDirections(clean(segment.camera || '', 700)),
       onScreenLabels: normalizeLabels(segment.onScreenLabels, { dialogue, duration }),
-      ambience: clean(segment.ambience || '', 500),
+      // Never plan a fully silent act: fall back to the location's natural sound.
+      ambience: clean(segment.ambience || '', 500)
+        || (dialogue || segment.music || (segment.soundEffects || []).length
+          ? ''
+          : 'Natural ambience of the location, soft and continuous.'),
       soundEffects: Array.isArray(segment.soundEffects)
         ? segment.soundEffects.map((item) => clean(item, 180)).filter(Boolean).slice(0, 8)
         : [],
@@ -272,10 +369,11 @@ function normalizeDirectorialContract(value, {
     primaryVisibleRole: clean(raw.primaryVisibleRole || roleHints[0] || '', 80),
     expectedRoleHints: roleHints,
     requiredVisibleCharacterIds,
-    requiredInteraction: clean(
-      raw.requiredInteraction || (requiresInteraction ? premise : ''),
-      500,
-    ),
+    // Only enforce an interaction the premise itself implies; LLMs often volunteer one for
+    // plain explainers and then fail their own rule on every retry.
+    requiredInteraction: requiresInteraction
+      ? clean(raw.requiredInteraction || premise, 500)
+      : '',
     interactionMustBeginBySeconds: round(clamp(
       Number(raw.interactionMustBeginBySeconds) || defaultDeadline,
       0,
@@ -295,12 +393,40 @@ export function validateProductionScriptPreflight(script, {
   topic = '',
   creativeBrief = null,
   durationSeconds = null,
+  // Speech must fill on-camera acts and acts must add up to the target length. Native
+  // audio video models (e.g. LTX) pad short lines with silence and silent lip movement.
+  strictSpeechTiming = false,
 } = {}) {
   const violations = [];
   const contract = script?.directorialContract || {};
   const characters = Array.isArray(script?.characters) ? script.characters : [];
   const segments = Array.isArray(script?.segments) ? script.segments : [];
   const duration = Number(durationSeconds) || Number(script?.generatedDurationSeconds) || 0;
+
+  // Same 30-word ceiling the pre-generation gate enforces, caught here where retries are cheap.
+  for (const segment of segments) {
+    const words = String(segment.dialogue || '').split(/\s+/).filter(Boolean).length;
+    const budget = Math.floor(Math.max(1, Number(segment.durationSeconds) || 1) * 2);
+    if (words > 30) {
+      violations.push(`Act ${segment.index} has ${words} spoken words; cut it to at most ${Math.min(budget, 30)} words for its ${segment.durationSeconds}s duration.`);
+    }
+    // Too few words leave seconds of dead air that video models fill with silent mouthing.
+    const speakerIds = (segment.dialogueTurns || []).map((turn) => turn.speakerCharacterId)
+      .concat(segment.speakerCharacterId || []);
+    const onScreenSpeaker = speakerIds.some((id) => characters.some((c) => c.id === id && c.onScreen !== false));
+    const minimum = Math.min(30, Math.floor((Number(segment.durationSeconds) || 0) * 1.2));
+    if (strictSpeechTiming && onScreenSpeaker && words > 0 && words < minimum) {
+      violations.push(`Act ${segment.index} has only ${words} spoken words for ${segment.durationSeconds}s on camera; write ${minimum}-${Math.min(budget, 30)} words or shorten the act so speech fills it.`);
+    }
+  }
+
+  // The finished video must match the requested length.
+  const plannedTotal = segments.reduce((sum, segment) => sum + (Number(segment.durationSeconds) || 0), 0);
+  if (strictSpeechTiming && Number(durationSeconds) > 0 && plannedTotal > 0
+    && Math.abs(plannedTotal - Number(durationSeconds)) > Math.max(3, Number(durationSeconds) * 0.1)) {
+    violations.push(`Acts add up to ${round(plannedTotal)}s but the video must be about ${durationSeconds}s; add or lengthen acts.`);
+  }
+
   const premise = [
     topic,
     creativeBrief?.angle,
