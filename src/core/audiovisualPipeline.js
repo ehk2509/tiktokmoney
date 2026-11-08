@@ -450,10 +450,12 @@ async function runQcAttempts({
       };
     }
 
+    // Providers may return a clip shorter than planned once the real speech length is known.
+    const clipSeconds = Number(asset.durationSeconds) || segment.durationSeconds;
     const sceneLike = {
       index: segment.index,
       narration: segment.dialogue || segment.action,
-      duration: segment.durationSeconds,
+      duration: clipSeconds,
       continuity: {
         characterIds: segment.characterIds,
         locationId: segment.locationId,
@@ -528,7 +530,7 @@ async function runQcAttempts({
       : null;
 
     const textArtifact = textArtifactQc && applicability.textArtifact.applicable
-      ? await textArtifactQc.evaluate(asset, { durationSeconds: segment.durationSeconds })
+      ? await textArtifactQc.evaluate(asset, { durationSeconds: clipSeconds })
       : null;
 
     const visualFactual = visualFactualQc && applicability.visualFactual.applicable
@@ -537,7 +539,7 @@ async function runQcAttempts({
         action: segment.action,
         purpose: segment.purpose,
         onScreenLabels: segment.onScreenLabels,
-        durationSeconds: segment.durationSeconds,
+        durationSeconds: clipSeconds,
       })
       : null;
 

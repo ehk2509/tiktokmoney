@@ -65,3 +65,33 @@ test('each character keeps one voice and one portrait for the whole video', asyn
   assert.equal(await provider.castPortrait('p', ada), first);
   assert.equal(portraits, 1);
 });
+
+test('a cast clip ends shortly after its last word', async () => {
+  const { LocalComfyUiAudiovisualProvider, speakingActSeconds } = await import('../src/providers/localComfyUiAudiovisualProvider.js');
+  assert.equal(speakingActSeconds(2.2, 6), 2.4);
+  assert.equal(speakingActSeconds(1, 6), 2); // never a blink-length clip
+  assert.equal(speakingActSeconds(5.9, 6), 6); // never longer than planned
+  assert.equal(speakingActSeconds(0, 6), 6); // unknown speech length keeps the plan
+
+  const provider = new LocalComfyUiAudiovisualProvider({
+    workflowPath: 'x.json', fetchImpl: async () => { throw new Error('no network'); },
+    voicePools: { female: ['f1'], male: ['m1'] },
+  });
+  const commands = [];
+  provider.runCommand = async (bin, args) => { commands.push([bin, args]); return bin === 'ffprobe' ? '2.2\n' : ''; };
+  provider.localTts = { synthesize: async () => ({ localPath: 'turn.wav' }) };
+  provider.generateFirstFrame = async () => 'still.png';
+  provider.infiniteTalk = { width: 576, height: 1024 };
+  let talkSeconds = null;
+  provider.applyInfiniteTalk = async ({ seconds }) => { talkSeconds = seconds; return 'out.mp4'; };
+  const speaker = { id: 'ada', name: 'Ada', description: 'a woman' };
+  const asset = await provider.generateCastSpeakingAct({
+    segment: { index: 0, dialogueTurns: [{ speakerCharacterId: 'ada', text: 'Hello there' }] },
+    productionScript: { characters: [speaker] }, projectId: 'p', speaker, seconds: 6,
+  });
+  assert.equal(asset.durationSeconds, 2.4);
+  assert.equal(asset.generatedDuration, '2.4s');
+  assert.equal(talkSeconds, 2.4);
+  const fitting = commands.find(([, args]) => args.some((arg) => String(arg).endsWith('-voice-fitted.wav')));
+  assert.equal(fitting[1][fitting[1].indexOf('-t') + 1], '2.4');
+});
