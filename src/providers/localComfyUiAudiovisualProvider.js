@@ -49,6 +49,11 @@ export class LocalComfyUiAudiovisualProvider {
     timeoutMs = Number(process.env.COMFYUI_TIMEOUT_MS || 900000),
     requireAudio = process.env.COMFYUI_REQUIRE_AUDIO !== 'false',
     localTts = null,
+    consistentCast = process.env.COMFYUI_CONSISTENT_CAST === 'true',
+    voicePools = {
+      female: (process.env.CAST_FEMALE_VOICES || 'af_heart,af_bella,af_nicole,af_sarah,bf_emma').split(','),
+      male: (process.env.CAST_MALE_VOICES || 'am_michael,am_adam,am_eric,am_liam,bm_george').split(','),
+    },
     dialogueComposer = null,
     fetchImpl = globalThis.fetch,
     runCommand = run,
@@ -63,6 +68,11 @@ export class LocalComfyUiAudiovisualProvider {
     this.maxSpeechOnsetSeconds = Math.max(0, Number(maxSpeechOnsetSeconds) || 0);
     this.speechOnsetRetries = Math.max(0, Math.min(3, Math.floor(Number(speechOnsetRetries) || 0)));
     this.infiniteTalk = infiniteTalk;
+    // One reference portrait and one fixed TTS voice per character for the whole video.
+    this.consistentCast = consistentCast;
+    this.castPortraits = new Map();
+    this.castVoices = new Map();
+    this.voicePools = voicePools;
     this.characterReferences = new Map();
     this.assetDir = assetDir;
     this.fps = positiveInteger(fps, 'COMFYUI_FPS');
@@ -91,6 +101,13 @@ export class LocalComfyUiAudiovisualProvider {
       throw new Error('ComfyUI API workflow must contain a {{PROMPT}} placeholder in an input');
     }
 
+    const castSpeaker = this.consistentCast && this.infiniteTalk && this.localTts
+      && this.firstFrameWorkflowPath && hasVisibleSpeech({ segment, productionScript, storyBible })
+      ? primarySpeaker({ segment, productionScript, storyBible }) : null;
+    if (castSpeaker) {
+      return this.generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker: castSpeaker, seconds, previousAsset });
+    }
+
     const prompt = buildLocalVideoPrompt({ segment, productionScript, storyBible, regeneration });
     const seed = crypto.randomInt(1, 2147483647);
     const frames = Math.max(9, Math.round((seconds * this.fps - 1) / 8) * 8 + 1);
@@ -103,8 +120,15 @@ export class LocalComfyUiAudiovisualProvider {
       const locationChanged = Boolean(previousAsset?.localPath && previousSegment
         && segment.locationId && previousSegment.locationId
         && segment.locationId !== previousSegment.locationId);
-      const reference = this.characterReferences.get(projectId) || '';
-      if (previousAsset?.localPath && !(locationChanged && this.firstFrameWorkflowPath)) {
+      const castMember = this.consistentCast && this.firstFrameWorkflowPath
+        ? visibleCharacters({ segment, productionScript, storyBible })[0] : null;
+      const reference = castMember
+        ? await this.castPortrait(projectId, castMember)
+        : this.characterReferences.get(projectId) || '';
+      if (castMember) {
+        firstFrame = await this.generateFirstFrame(
+          buildLocalFirstFramePrompt({ segment, productionScript, storyBible }), reference);
+      } else if (previousAsset?.localPath && !(locationChanged && this.firstFrameWorkflowPath)) {
         firstFrame = await this.uploadLastFrame(previousAsset.sourceVideoPath || previousAsset.localPath, projectId);
       } else if (this.initialImagePath && !previousAsset?.localPath) {
         firstFrame = await this.uploadImage(
@@ -269,7 +293,10 @@ export class LocalComfyUiAudiovisualProvider {
     };
   }
 
-  async applyInfiniteTalk({ videoPath, seconds, segment, productionScript, storyBible, projectId, promptId }) {
+  // videoPath: lip-sync an existing clip (its first frame + its audio).
+  // startImageName + audioPath: animate a still already in ComfyUI with a given voice track.
+  async applyInfiniteTalk({ videoPath = null, startImageName = null, audioPath = null, seconds, segment,
+    productionScript, storyBible, projectId, promptId }) {
     const cfg = this.infiniteTalk;
     const passes = infiniteTalkPassCount(seconds);
     const coveredSeconds = infiniteTalkFrameCount(passes) / INFINITETALK_FPS;
@@ -281,12 +308,12 @@ export class LocalComfyUiAudiovisualProvider {
     const out = base + '.mp4';
     const raw = base + '-raw.mp4';
     try {
-      await this.runCommand('ffmpeg', ['-y', '-i', videoPath, '-frames:v', '1', still]);
-      await this.runCommand('ffmpeg', ['-y', '-i', videoPath, '-vn', '-ac', '1', '-ar', '16000', voice]);
+      if (!startImageName) await this.runCommand('ffmpeg', ['-y', '-i', videoPath, '-frames:v', '1', still]);
+      await this.runCommand('ffmpeg', ['-y', '-i', audioPath || videoPath, '-vn', '-ac', '1', '-ar', '16000', voice]);
       // InfiniteTalk reads audio per generated frame, so cover every frame of the last chunk.
       await this.runCommand('ffmpeg', ['-y', '-i', voice, '-af', 'apad', '-t', String(coveredSeconds + 0.5), padded]);
       const [startImage, drivingAudio, outputAudio] = [
-        await this.uploadImage(await readFile(still), path.basename(still)),
+        startImageName || await this.uploadImage(await readFile(still), path.basename(still)),
         await this.uploadImage(await readFile(padded), path.basename(padded)),
         await this.uploadImage(await readFile(voice), path.basename(voice)),
       ];
@@ -307,12 +334,118 @@ export class LocalComfyUiAudiovisualProvider {
       if (!res.ok || !res.body) throw new Error('InfiniteTalk video download failed (' + res.status + ')');
       await pipeline(res.body, createWriteStream(raw));
       // Lip-synced picture + the video model's full original audio (voice, ambience, effects).
-      await this.runCommand('ffmpeg', ['-y', '-i', raw, '-i', videoPath, '-map', '0:v:0', '-map', '1:a:0?',
+      await this.runCommand('ffmpeg', ['-y', '-i', raw, '-i', audioPath || videoPath, '-map', '0:v:0', '-map', '1:a:0?',
+        // Sharp upscale + light grain: hides the smooth, waxy look of upscaled diffusion video.
+        '-vf', 'scale=1080:1920:flags=lanczos,unsharp=5:5:0.45:5:5:0,noise=alls=5:allf=t+u',
         '-t', String(seconds), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '17', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', out]);
       return out;
     } finally {
       for (const file of [still, voice, padded, raw]) await unlink(file).catch(() => {});
+    }
+  }
+
+  // One studio portrait per character per video; every still of that character is
+  // generated from it (image-edit reference), so the face stays the same across clips.
+  async castPortrait(projectId, character) {
+    const key = projectId + '::' + character.id;
+    if (!this.castPortraits.has(key)) {
+      this.castPortraits.set(key, this.generateFirstFrame(buildCastPortraitPrompt(character), ''));
+    }
+    return this.castPortraits.get(key);
+  }
+
+  // One fixed TTS voice per character per video, chosen from a pool by apparent gender.
+  castVoice(projectId, character) {
+    let voices = this.castVoices.get(projectId);
+    if (!voices) { voices = new Map(); this.castVoices.set(projectId, voices); }
+    if (!voices.has(character.id)) {
+      const pool = this.voicePools[apparentGender(character) === 'male' ? 'male' : 'female'];
+      const used = new Set(voices.values());
+      voices.set(character.id, pool.find((voice) => !used.has(voice)) || pool[voices.size % pool.length]);
+    }
+    return voices.get(character.id);
+  }
+
+  async generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker, seconds, previousAsset }) {
+    const characters = storyBible?.characters || productionScript?.characters || [];
+    // After a resume the in-memory cast is empty: reuse the portrait and voice saved on the
+    // previous clip so the face and voice do not change mid-video.
+    if (previousAsset?.castReference && previousAsset.castVoices?.[speaker.id]) {
+      const key = projectId + '::' + speaker.id;
+      if (!this.castPortraits.has(key)) this.castPortraits.set(key, Promise.resolve(previousAsset.castReference));
+      let voices = this.castVoices.get(projectId);
+      if (!voices) { voices = new Map(); this.castVoices.set(projectId, voices); }
+      for (const [id, voice] of Object.entries(previousAsset.castVoices)) if (!voices.has(id)) voices.set(id, voice);
+    }
+    const reference = await this.castPortrait(projectId, speaker);
+    const startImageName = await this.generateFirstFrame(
+      buildLocalFirstFramePrompt({ segment, productionScript, storyBible }), reference);
+    const turns = (segment.dialogueTurns?.length
+      ? segment.dialogueTurns
+      : [{ speakerCharacterId: speaker.id, text: segment.dialogue }])
+      .filter((turn) => String(turn.text || '').trim());
+    const id = crypto.randomUUID();
+    const base = path.join(this.assetDir, safeName(projectId || 'project') + '-act-' +
+      String(segment.index ?? 0) + '-cast-' + id.slice(0, 12));
+    const parts = [];
+    const voicesUsed = {};
+    try {
+      for (const turn of turns) {
+        const who = characters.find((c) => c.id === turn.speakerCharacterId) || speaker;
+        const voice = this.castVoice(projectId, who);
+        voicesUsed[who.id] = voice;
+        parts.push((await this.localTts.synthesize({ text: turn.text, projectId, segmentIndex: segment.index, voice })).localPath);
+      }
+      // Turns joined with short pauses and a small lead-in, sped up slightly if needed, padded to the act.
+      const joined = base + '-voice.wav';
+      const chain = parts.map((_, i) => `[${i}:a]aresample=24000,aformat=channel_layouts=mono,apad=pad_dur=0.25[a${i}]`).join(';');
+      await this.runCommand('ffmpeg', ['-y', ...parts.flatMap((file) => ['-i', file]), '-filter_complex',
+        chain + ';' + parts.map((_, i) => `[a${i}]`).join('') + `concat=n=${parts.length}:v=0:a=1,adelay=150[out]`,
+        '-map', '[out]', joined]);
+      const spoken = Number(String(await this.runCommand('ffprobe', ['-v', 'error', '-show_entries', 'format=duration',
+        '-of', 'csv=p=0', joined], true)).trim()) || 0;
+      const room = Math.max(1, seconds - 0.2);
+      const tempo = spoken > room ? Math.min(1.3, spoken / room) : 1;
+      const fitted = base + '-voice-fitted.wav';
+      await this.runCommand('ffmpeg', ['-y', '-i', joined, '-af', (tempo > 1 ? `atempo=${tempo.toFixed(3)},` : '') + 'apad',
+        '-t', String(seconds), fitted]);
+      const out = await this.applyInfiniteTalk({
+        startImageName, audioPath: fitted, seconds, segment, productionScript, storyBible, projectId, promptId: id,
+      });
+      return {
+        provider: 'comfyui-local',
+        providerModelId: 'comfyui-local-cast-infinitetalk',
+        type: 'ai-video',
+        model: 'comfyui-workflow',
+        audioMode: 'local-tts-cast-voice',
+        localPath: out,
+        rawLocalPath: out,
+        generationId: id,
+        generatedDuration: seconds + 's',
+        durationSeconds: seconds,
+        aspectRatio: this.infiniteTalk.width + ':' + this.infiniteTalk.height,
+        prompt: buildInfiniteTalkPrompt({ segment, productionScript, storyBible }),
+        dialogueTrack: { localPath: fitted, turns: segment.dialogueTurns || [], provider: 'local-tts', voices: voicesUsed },
+        dialogueTurns: segment.dialogueTurns || [],
+        speakerCharacterIds: Object.keys(voicesUsed),
+        castVoices: voicesUsed,
+        castReference: reference,
+        referenceImageCount: 1,
+        referenceVideoCount: 0,
+        referenceAudioCount: 1,
+        previousGenerationId: previousAsset?.generationId || null,
+        keyframeMode: 'first',
+        motionControlMode: 'audio-driven',
+        nativeMotionMask: false,
+        speechOnsetSeconds: 0.15,
+        trailingSilenceSeconds: null,
+        lipSyncPass: { provider: 'comfyui-infinitetalk', passed: true, drivenBy: 'local-tts' },
+        sourceUrl: null,
+        providerUsage: { provider: 'comfyui-local', operation: 'video-generation', model: 'local-workflow', costUsd: 0 },
+      };
+    } finally {
+      for (const file of parts) await unlink(file).catch(() => {});
     }
   }
 
@@ -457,7 +590,8 @@ export function buildLocalFirstFramePrompt({ segment, productionScript, storyBib
     .find(l => l.id === segment.locationId);
   const speaking = hasVisibleSpeech({ segment, productionScript, storyBible });
   return [
-    'One single full-frame photorealistic vertical photograph (not a collage, not split-screen, no stacked panels, borders or inset images), cinematic, natural skin texture, sharp focus on faces.',
+    'Candid vertical smartphone video frame of a real person filming themselves for social media, shot on a phone camera. Natural uneven daylight from a window, realistic unretouched skin with visible pores, fine lines and small imperfections, natural hair flyaways, ordinary everyday room with some real-life clutter, slight sensor noise.',
+    'Not cinematic, not glossy, no studio lighting, no golden glow, no beauty filter, not a stock photo, not CGI. One single full-frame image (no collage, split-screen, panels or borders).',
     speaking ? 'Framing: head-and-shoulders portrait, ' + SPEAKER_FRAMING : '',
     speaking ? 'The speaker looks toward the camera with lips gently closed and a relaxed, neutral expression, about to speak.' : '',
     // Full-body poses in startState override the framing in image models, so skip them for speakers.
@@ -498,7 +632,7 @@ export function buildLocalVideoPrompt({ segment, productionScript, storyBible, r
     : segment.dialogue;
   const speaking = hasVisibleSpeech({ segment, productionScript, storyBible });
   return [
-    'Generate one continuous photorealistic cinematic vertical video with synchronized natural audio, as a single full-frame shot (no split-screen or panels).',
+    'Generate one continuous photorealistic vertical video that looks like real handheld smartphone footage with synchronized natural audio: natural uneven light, unretouched skin texture, ordinary real-world setting, not cinematic or glossy, as a single full-frame shot (no split-screen or panels).',
     'Scene: ' + (segment.action || ''),
     'Camera: ' + (speaking ? SPEAKER_FRAMING : (segment.camera || '')),
     'Location: ' + [location?.description, location?.lighting].filter(Boolean).join('. '),
@@ -538,6 +672,41 @@ export async function measureLeadingSilence(file, runCommand) {
 async function discardRender(render) {
   await unlink(render.localPath).catch(() => {});
   if (render.finalPath !== render.localPath) await unlink(render.finalPath).catch(() => {});
+}
+
+function castCharacters({ productionScript, storyBible }) {
+  return storyBible?.characters || productionScript?.characters || [];
+}
+
+function visibleCharacters({ segment, productionScript, storyBible }) {
+  const characters = castCharacters({ productionScript, storyBible });
+  return (segment.characterIds || []).map((id) => characters.find((c) => c.id === id))
+    .filter((c) => c && c.onScreen !== false);
+}
+
+function primarySpeaker({ segment, productionScript, storyBible }) {
+  const characters = castCharacters({ productionScript, storyBible });
+  const ids = (segment.dialogueTurns || []).map((turn) => turn.speakerCharacterId)
+    .concat(segment.speakerCharacterId || []);
+  return ids.map((id) => characters.find((c) => c.id === id)).find((c) => c && c.onScreen !== false)
+    || visibleCharacters({ segment, productionScript, storyBible })[0] || null;
+}
+
+export function apparentGender(character) {
+  const text = [character?.name, character?.description, character?.physicalTraits, character?.wardrobe].filter(Boolean).join(' ');
+  if (/\b(woman|women|female|girl|lady|she|her|mother|mom|wife|sister|daughter|grandmother|actress|mrs|ms|miss)\b/i.test(text)) return 'female';
+  if (/\b(man|men|male|boy|guy|he|his|him|father|dad|husband|brother|son|grandfather|gentleman|mr)\b/i.test(text)) return 'male';
+  return 'unknown';
+}
+
+export function buildCastPortraitPrompt(character) {
+  return [
+    'Candid smartphone photo of a real, ordinary person, head and shoulders, looking at the camera with a relaxed natural expression, lips closed.',
+    'Natural window daylight, realistic unretouched skin with pores, fine lines and small imperfections, no makeup look, natural hair flyaways, plain painted wall behind, slight sensor noise.',
+    'Not a studio portrait, not glossy, no beauty filter, not CGI. One single full-frame vertical photo, no collage or panels.',
+    [character.name, character.description, character.physicalTraits, character.wardrobe].filter(Boolean).join(', ') + '.',
+    'No text, captions, logos or watermarks.',
+  ].join('\n');
 }
 
 async function probeAudio(file, runCommand) {

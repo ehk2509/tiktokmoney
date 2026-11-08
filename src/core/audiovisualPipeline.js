@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { ProductionScriptGenerator, productionScriptToStoryBible } from './productionScriptGenerator.js';
 import { buildSubtitles, punctuateWordsFromScript } from './subtitleBuilder.js';
+import { collectVoiceTrackWordTimings } from './speechAlignment.js';
 import { evaluateAudiovisualPublishability } from './publishabilityGate.js';
 import { CreativeTournament } from './creativeTournament.js';
 import { RealismDirector } from './realismDirector.js';
@@ -313,8 +314,11 @@ export class AudiovisualPipeline {
     }
 
     const verifiedWordTimings = collectVerifiedWordTimings(project.scenes);
+    const wordTimings = verifiedWordTimings.length
+      ? verifiedWordTimings
+      : await collectVoiceTrackWordTimings(project.scenes);
     project.subtitles = buildSubtitles({
-      voice: verifiedWordTimings.length ? { wordTimings: verifiedWordTimings } : null,
+      voice: wordTimings.length ? { wordTimings } : null,
       scenes: project.scenes,
       config: this.subtitleConfig,
     });

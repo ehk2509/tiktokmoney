@@ -29,7 +29,7 @@ export class LocalSpeechProvider {
     this.fetch = fetchImpl;
   }
 
-  async synthesize({ text, projectId = 'project', segmentIndex = 0 } = {}) {
+  async synthesize({ text, projectId = 'project', segmentIndex = 0, voice = null } = {}) {
     if (!String(text || '').trim()) {
       throw new Error('Local TTS needs non-empty dialogue text');
     }
@@ -37,7 +37,7 @@ export class LocalSpeechProvider {
       method: 'POST',
       headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: this.model, voice: this.voice,
+        model: this.model, voice: voice || this.voice,
         input: String(text).trim(), response_format: this.responseFormat,
       }),
       signal: AbortSignal.timeout(180000),
@@ -51,6 +51,6 @@ export class LocalSpeechProvider {
     const filePath = path.join(this.assetDir, 'local-tts-' + name + '-' +
       String(segmentIndex) + '-' + crypto.randomUUID() + '.' + this.responseFormat);
     await pipeline(response.body, createWriteStream(filePath));
-    return { provider: 'local-tts', model: this.model, localPath: filePath, text: String(text).trim() };
+    return { provider: 'local-tts', model: this.model, voice: voice || this.voice, localPath: filePath, text: String(text).trim() };
   }
 }
