@@ -27,6 +27,13 @@ test('a pause in the speech is not covered by any word', () => {
   assert.ok(words.every((word) => word.start < 1 || word.start >= 3));
 });
 
+test('a pause inside a phrase keeps the caption on screen, but a sentence break does not', () => {
+  const phrase = alignWordsToSpeech('Ever wondered why dogs', [{ start: 0, end: 0.6 }, { start: 1.05, end: 2.4 }]);
+  phrase.slice(0, -1).forEach((word, i) => assert.equal(word.end, phrase[i + 1].start));
+  const sentence = alignWordsToSpeech('Absolutely wonderful. Go', [{ start: 0, end: 1.4 }, { start: 1.85, end: 2.2 }]);
+  assert.ok(sentence[1].end < sentence[2].start);
+});
+
 test('only cast-voice clips are aligned; other scenes keep their estimate', async () => {
   const cast = { index: 0, start: 0, duration: 4, narration: 'Hello there', asset: { audioMode: 'local-tts-cast-voice', dialogueTrack: { localPath: 'v.wav' } } };
   const other = { index: 1, start: 4, duration: 2, narration: 'Other words', asset: { audioMode: 'native' } };

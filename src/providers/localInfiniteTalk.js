@@ -81,7 +81,9 @@ export function buildInfiniteTalkPrompt({ segment, productionScript, storyBible 
   const speaker = characters.find((c) => c.id === speakerId) || characters.find((c) => (segment.characterIds || []).includes(c.id));
   const location = (storyBible?.locations || productionScript?.locations || []).find((l) => l.id === segment.locationId);
   return [
-    'A person talks directly to the camera in a calm, natural conversational way, with small natural head movements and blinking.',
+    segment.conversationGaze
+      ? `A person talks to someone standing just to the ${segment.conversationGaze} of the camera in a calm, natural conversational way, with small natural head movements and blinking.`
+      : 'A person talks directly to the camera in a calm, natural conversational way, with small natural head movements and blinking.',
     speaker ? [speaker.name, speaker.description].filter(Boolean).join(', ') + '.' : '',
     location?.description ? 'Setting: ' + location.description + '.' : '',
     'Real smartphone selfie video on a phone held steady, natural daylight, realistic unretouched skin, everyday setting; not cinematic, not glossy, no beauty filter. Single continuous shot.',

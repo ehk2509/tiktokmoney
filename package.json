@@ -11,6 +11,7 @@
     "start": "node --env-file-if-exists=.env src/server.js",
     "generate": "node --env-file-if-exists=.env src/cli.js generate",
     "resume": "node --env-file-if-exists=.env src/cli.js resume",
+    "approve-location": "node --env-file-if-exists=.env src/cli.js approve-location",
     "opportunities": "node --env-file-if-exists=.env src/cli.js opportunities",
     "test": "node --test",
     "check": "node --check src/cli.js && node --check src/server.js && node --check scripts/setup-pose-sidecar.mjs && node --test",
