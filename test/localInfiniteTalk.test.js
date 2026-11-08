@@ -43,3 +43,25 @@ test('InfiniteTalk prompt names the speaker and setting without dialogue text', 
   assert.match(prompt, /snowy airstrip/);
   assert.doesNotMatch(prompt, /Secret line/);
 });
+
+test('each character keeps one voice and one portrait for the whole video', async () => {
+  const { LocalComfyUiAudiovisualProvider, apparentGender } = await import('../src/providers/localComfyUiAudiovisualProvider.js');
+  const provider = new LocalComfyUiAudiovisualProvider({
+    workflowPath: 'x.json', fetchImpl: async () => { throw new Error('no network'); },
+    voicePools: { female: ['f1', 'f2'], male: ['m1', 'm2'] },
+  });
+  const ada = { id: 'ada', name: 'Dr. Ada', description: 'A 40-year-old woman' };
+  const ben = { id: 'ben', name: 'Ben', description: 'young man in a hoodie' };
+  const cara = { id: 'cara', name: 'Cara', description: 'she is a pilot' };
+  assert.equal(apparentGender(ada), 'female');
+  assert.equal(apparentGender(ben), 'male');
+  assert.equal(provider.castVoice('p', ada), 'f1');
+  assert.equal(provider.castVoice('p', ben), 'm1');
+  assert.equal(provider.castVoice('p', cara), 'f2');
+  assert.equal(provider.castVoice('p', ada), 'f1');
+  let portraits = 0;
+  provider.generateFirstFrame = async () => { portraits += 1; return 'portrait-' + portraits + '.png'; };
+  const first = await provider.castPortrait('p', ada);
+  assert.equal(await provider.castPortrait('p', ada), first);
+  assert.equal(portraits, 1);
+});

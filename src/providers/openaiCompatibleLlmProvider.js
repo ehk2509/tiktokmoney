@@ -309,6 +309,7 @@ export class OpenAICompatibleLlmProvider {
       '- Only put a brand in allowedBrands when the user/topic explicitly requires that brand. Never invent a brand for visual realism.',
       '- Character descriptions must be stable enough for visual continuity: always state apparent gender (man/woman), apparent age, face, hair, body type and wardrobe in the description itself.',
       '- Locations must include fixed physical anchors and exact lighting.',
+      '- Style: everything should look like real footage a person filmed on a smartphone in an ordinary real place with natural light; avoid cinematic, glossy, studio or golden-hour styling words.',
       '- Camera/action descriptions must be physically plausible and filmable.',
       '- startState and endState must describe the SAME people, wardrobe, location, lighting and camera setup at two physically reachable moments.',
       '- endState must be a plausible consequence of the action, never a different composition/world invented only for visual variety.',

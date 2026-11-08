@@ -84,6 +84,6 @@ export function buildInfiniteTalkPrompt({ segment, productionScript, storyBible 
     'A person talks directly to the camera in a calm, natural conversational way, with small natural head movements and blinking.',
     speaker ? [speaker.name, speaker.description].filter(Boolean).join(', ') + '.' : '',
     location?.description ? 'Setting: ' + location.description + '.' : '',
-    'Static camera, single continuous shot, photorealistic.',
+    'Real smartphone selfie video on a phone held steady, natural daylight, realistic unretouched skin, everyday setting; not cinematic, not glossy, no beauty filter. Single continuous shot.',
   ].filter(Boolean).join(' ');
 }

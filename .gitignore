@@ -9,3 +9,6 @@ data/*
 
 .venv-pose/
 models/pose_landmarker_full.task
+
+.venv-tts/
+models/kokoro/
