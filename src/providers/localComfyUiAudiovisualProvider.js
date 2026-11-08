@@ -407,11 +407,12 @@ export class LocalComfyUiAudiovisualProvider {
         '-of', 'csv=p=0', joined], true)).trim()) || 0;
       const room = Math.max(1, seconds - 0.2);
       const tempo = spoken > room ? Math.min(1.3, spoken / room) : 1;
+      const actSeconds = speakingActSeconds(spoken / tempo, seconds);
       const fitted = base + '-voice-fitted.wav';
       await this.runCommand('ffmpeg', ['-y', '-i', joined, '-af', (tempo > 1 ? `atempo=${tempo.toFixed(3)},` : '') + 'apad',
-        '-t', String(seconds), fitted]);
+        '-t', String(actSeconds), fitted]);
       const out = await this.applyInfiniteTalk({
-        startImageName, audioPath: fitted, seconds, segment, productionScript, storyBible, projectId, promptId: id,
+        startImageName, audioPath: fitted, seconds: actSeconds, segment, productionScript, storyBible, projectId, promptId: id,
       });
       return {
         provider: 'comfyui-local',
@@ -422,8 +423,8 @@ export class LocalComfyUiAudiovisualProvider {
         localPath: out,
         rawLocalPath: out,
         generationId: id,
-        generatedDuration: seconds + 's',
-        durationSeconds: seconds,
+        generatedDuration: actSeconds + 's',
+        durationSeconds: actSeconds,
         aspectRatio: this.infiniteTalk.width + ':' + this.infiniteTalk.height,
         prompt: buildInfiniteTalkPrompt({ segment, productionScript, storyBible }),
         dialogueTrack: { localPath: fitted, turns: segment.dialogueTurns || [], provider: 'local-tts', voices: voicesUsed },
@@ -690,6 +691,15 @@ function primarySpeaker({ segment, productionScript, storyBible }) {
     .concat(segment.speakerCharacterId || []);
   return ids.map((id) => characters.find((c) => c.id === id)).find((c) => c && c.onScreen !== false)
     || visibleCharacters({ segment, productionScript, storyBible })[0] || null;
+}
+
+// A cast clip ends just after its last word instead of holding silently to the planned length.
+// `spokenSeconds` already includes the short pause after the final turn.
+export function speakingActSeconds(spokenSeconds, plannedSeconds) {
+  const planned = Number(plannedSeconds) || 0;
+  const spoken = Number(spokenSeconds) || 0;
+  if (spoken <= 0) return planned;
+  return Math.min(planned, Math.max(2, Math.ceil((spoken + 0.2) * 25 - 1e-6) / 25));
 }
 
 export function apparentGender(character) {
