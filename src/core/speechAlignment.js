@@ -7,6 +7,9 @@ const CAST_VOICE_AUDIO_MODE = 'local-tts-cast-voice';
 const SILENCE_FILTER = 'silencedetect=noise=-35dB:d=0.08';
 const MIN_SPEECH_SECONDS = 0.03;
 const BRIDGE_GAP_SECONDS = 0.35; // shorter pauses keep the caption on screen instead of blinking
+// Matches the subtitle builder's limit for keeping words in one cue, so a pause inside a phrase
+// never blanks the caption between two of its words.
+const PHRASE_GAP_SECONDS = 0.65;
 const TAIL_HOLD_SECONDS = 0.3;
 
 export function speechIntervalsFromSilenceLog(log, durationSeconds) {
@@ -78,7 +81,10 @@ export function alignWordsToSpeech(text, intervals, { offset = 0, clipEnd = Infi
 
   words.forEach((word, index) => {
     const next = words[index + 1];
-    if (next && next.start - word.end <= BRIDGE_GAP_SECONDS) word.end = next.start;
+    if (!next) return;
+    const gap = next.start - word.end;
+    const midPhrase = !/[.!?…,;:]["')\]]*$/.test(word.word);
+    if (gap <= BRIDGE_GAP_SECONDS || (midPhrase && gap <= PHRASE_GAP_SECONDS)) word.end = next.start;
   });
   const last = words.at(-1);
   last.end = Math.max(last.end, Math.min(clipEnd, last.end + TAIL_HOLD_SECONDS));

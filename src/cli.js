@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { createApp } from './app.js';
+import { approveLocationCandidate } from './providers/localLocationSet.js';
 import {
   runRealGenerationBenchmark,
   summarizeBenchmarkFiles,
@@ -34,6 +35,17 @@ try {
     }
     const project = await app.pipeline.resume(id, { render: options['no-render'] !== true });
     console.log(JSON.stringify(project, null, 2));
+  } else if (command === 'approve-location') {
+    if (!options.id || !options.location || !options.candidate) {
+      throw new Error('Usage: npm run approve-location -- --id vid_... --location location-id --candidate 1');
+    }
+    const chosen = await approveLocationCandidate({
+      dir: process.env.COMFYUI_LOCATION_DIR || './data/locations',
+      projectId: options.id,
+      locationId: options.location,
+      candidate: Number(options.candidate),
+    });
+    console.log(`Approved ${chosen.file}. Run resume to continue.`);
   } else if (command === 'tiktok-auth-url') {
     console.log(JSON.stringify(await app.beginTikTokAuthorization(), null, 2));
   } else if (command === 'tiktok-auth-status') {
@@ -227,6 +239,7 @@ try {
       'Commands:',
       '  generate --topic "..." [--duration 35]',
       '  resume --id "vid_..." [--no-render]   continue a saved video from its first missing act',
+      '  approve-location --id "vid_..." --location "id" --candidate 1   approve a saved location image',
       '  opportunities',
       '  tiktok-auth-url',
       '  tiktok-auth-status',

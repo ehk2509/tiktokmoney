@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import {
   buildInfiniteTalkWorkflow, buildInfiniteTalkPrompt, infiniteTalkPassCount,
   infiniteTalkFrameCount, INFINITETALK_FPS,
 } from './localInfiniteTalk.js';
+import { LocalLocationSet, conversationAngle, planLocationAngles } from './localLocationSet.js';
 
 // Accepts a ComfyUI workflow exported in API format. Add {{PROMPT}}, {{SEED}},
 // {{FRAMES}} etc. as input values in that workflow; no node IDs are assumed.
@@ -50,6 +51,8 @@ export class LocalComfyUiAudiovisualProvider {
     requireAudio = process.env.COMFYUI_REQUIRE_AUDIO !== 'false',
     localTts = null,
     consistentCast = process.env.COMFYUI_CONSISTENT_CAST === 'true',
+    // Saved room images per camera angle for scenes that revisit a location with different shots.
+    locationAngles = process.env.COMFYUI_LOCATION_ANGLES === 'true',
     voicePools = {
       female: (process.env.CAST_FEMALE_VOICES || 'af_heart,af_bella,af_nicole,af_sarah,bf_emma').split(','),
       male: (process.env.CAST_MALE_VOICES || 'am_michael,am_adam,am_eric,am_liam,bm_george').split(','),
@@ -84,6 +87,7 @@ export class LocalComfyUiAudiovisualProvider {
     this.timeoutMs = positiveInteger(timeoutMs, 'COMFYUI_TIMEOUT_MS');
     this.requireAudio = requireAudio;
     this.localTts = localTts;
+    this.locationSet = locationAngles && firstFrameWorkflowPath ? new LocalLocationSet({ comfy: this }) : null;
     this.dialogueComposer = dialogueComposer || new DialogueAudioComposer({ assetDir });
     this.fetch = fetchImpl;
     this.runCommand = runCommand;
@@ -106,6 +110,10 @@ export class LocalComfyUiAudiovisualProvider {
       && this.firstFrameWorkflowPath && hasVisibleSpeech({ segment, productionScript, storyBible })
       ? primarySpeaker({ segment, productionScript, storyBible }) : null;
     if (castSpeaker) {
+      const conversation = conversationTurns({ segment, productionScript, storyBible });
+      if (conversation) {
+        return this.generateCastConversationAct({ segment, productionScript, storyBible, projectId, conversation, seconds, previousAsset, regeneration });
+      }
       return this.generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker: castSpeaker, seconds, previousAsset, regeneration });
     }
 
@@ -126,7 +134,12 @@ export class LocalComfyUiAudiovisualProvider {
       const reference = castMember
         ? await this.castPortrait(projectId, castMember)
         : this.characterReferences.get(projectId) || '';
-      if (castMember) {
+      const shot = this.locationShot({ segment, productionScript, storyBible });
+      if (shot && castMember) {
+        firstFrame = (await this.locationSet.placeCharacter({ projectId, location: shot.location, angle: shot.angle, characterId: castMember.id, portrait: reference, regeneration })).image;
+      } else if (shot) {
+        firstFrame = await this.locationSet.ensureView(projectId, shot.location, shot.angle);
+      } else if (castMember) {
         firstFrame = await this.locationStill({ segment, productionScript, storyBible, projectId, character: castMember, reference, regeneration });
       } else if (previousAsset?.localPath && !(locationChanged && this.firstFrameWorkflowPath)) {
         firstFrame = await this.uploadLastFrame(previousAsset.sourceVideoPath || previousAsset.localPath, projectId);
@@ -367,6 +380,17 @@ export class LocalComfyUiAudiovisualProvider {
     return voices.get(character.id);
   }
 
+  // The saved view for this scene, when its location is filmed from different camera angles.
+  locationShot({ segment, productionScript, storyBible }) {
+    if (!this.locationSet) return null;
+    const planned = segment.conversationSpeakerIndex != null
+      ? { locationId: segment.locationId, angle: conversationAngle(segment.conversationSpeakerIndex) }
+      : planLocationAngles(productionScript).get(segment.index);
+    if (!planned) return null;
+    const location = (storyBible?.locations || productionScript?.locations || []).find((l) => l.id === planned.locationId);
+    return location ? { location, angle: planned.angle } : null;
+  }
+
   // One opening still per character per location, reused by every act there so the room,
   // furniture and light are identical. Regenerating the act that made it replaces it,
   // otherwise a bad still could never be retried away.
@@ -385,9 +409,13 @@ export class LocalComfyUiAudiovisualProvider {
     const characters = storyBible?.characters || productionScript?.characters || [];
     // After a resume the in-memory cast is empty: reuse the portrait and voice saved on the
     // previous clip so the face and voice do not change mid-video.
-    if (previousAsset?.castReference && previousAsset.castVoices?.[speaker.id]) {
-      const key = projectId + '::' + speaker.id;
-      if (!this.castPortraits.has(key)) this.castPortraits.set(key, Promise.resolve(previousAsset.castReference));
+    if (previousAsset?.castVoices) {
+      const known = previousAsset.castReferences
+        || (previousAsset.castReference && previousAsset.castVoices[speaker.id] ? { [speaker.id]: previousAsset.castReference } : {});
+      for (const [characterId, portrait] of Object.entries(known)) {
+        const key = projectId + '::' + characterId;
+        if (!this.castPortraits.has(key)) this.castPortraits.set(key, Promise.resolve(portrait));
+      }
       let voices = this.castVoices.get(projectId);
       if (!voices) { voices = new Map(); this.castVoices.set(projectId, voices); }
       for (const [id, voice] of Object.entries(previousAsset.castVoices)) if (!voices.has(id)) voices.set(id, voice);
@@ -396,7 +424,13 @@ export class LocalComfyUiAudiovisualProvider {
     if (previousAsset?.locationStill && !this.locationStills.has(locationStillKey(projectId, previousAsset.locationStill))) {
       this.locationStills.set(locationStillKey(projectId, previousAsset.locationStill), previousAsset.locationStill);
     }
-    const startImageName = await this.locationStill({ segment, productionScript, storyBible, projectId, character: speaker, reference, regeneration });
+    const shot = this.locationShot({ segment, productionScript, storyBible });
+    const placement = shot
+      ? await this.locationSet.placeCharacter({ projectId, location: shot.location, angle: shot.angle, characterId: speaker.id, portrait: reference, regeneration, gaze: segment.conversationGaze || null })
+      : null;
+    const startImageName = placement
+      ? placement.image
+      : await this.locationStill({ segment, productionScript, storyBible, projectId, character: speaker, reference, regeneration });
     const turns = (segment.dialogueTurns?.length
       ? segment.dialogueTurns
       : [{ speakerCharacterId: speaker.id, text: segment.dialogue }])
@@ -427,9 +461,21 @@ export class LocalComfyUiAudiovisualProvider {
       const fitted = base + '-voice-fitted.wav';
       await this.runCommand('ffmpeg', ['-y', '-i', joined, '-af', (tempo > 1 ? `atempo=${tempo.toFixed(3)},` : '') + 'apad',
         '-t', String(actSeconds), fitted]);
-      const out = await this.applyInfiniteTalk({
+      let out = await this.applyInfiniteTalk({
         startImageName, audioPath: fitted, seconds: actSeconds, segment, productionScript, storyBible, projectId, promptId: id,
       });
+      let roomLock = null;
+      if (placement) {
+        try {
+          const locked = await this.locationSet.lockRoom({ clipPath: out, placement, seconds: actSeconds });
+          await unlink(out).catch(() => {});
+          out = locked;
+          roomLock = { passed: true };
+        } catch (error) {
+          // The animated clip is still usable; QC judges it without the locked room.
+          roomLock = { passed: false, error: error.message };
+        }
+      }
       return {
         provider: 'comfyui-local',
         providerModelId: 'comfyui-local-cast-infinitetalk',
@@ -448,6 +494,9 @@ export class LocalComfyUiAudiovisualProvider {
         speakerCharacterIds: Object.keys(voicesUsed),
         castVoices: voicesUsed,
         castReference: reference,
+        castReferences: { ...previousAsset?.castReferences, [speaker.id]: reference },
+        cameraAngle: shot?.angle || null,
+        roomLock,
         locationStill: segment.locationId ? this.locationStills.get(locationStillKey(projectId, { locationId: segment.locationId, characterId: speaker.id })) : null,
         referenceImageCount: 1,
         referenceVideoCount: 0,
@@ -467,6 +516,62 @@ export class LocalComfyUiAudiovisualProvider {
     }
   }
 
+  // Two people talking: one clip per line showing whoever speaks, cut together like a filmed
+  // conversation. InfiniteTalk animates one face per clip, so each line needs its own shot.
+  async generateCastConversationAct({ segment, productionScript, storyBible, projectId, conversation, seconds, previousAsset, regeneration }) {
+    const { turns, speakers } = conversation;
+    const totalWords = turns.reduce((sum, turn) => sum + countWords(turn.text), 0) || 1;
+    const clips = [];
+    let previous = previousAsset;
+    for (const turn of turns) {
+      const speakerIndex = speakers.findIndex((c) => c.id === turn.speakerCharacterId);
+      const clip = await this.generateCastSpeakingAct({
+        segment: {
+          ...segment, dialogue: turn.text, dialogueTurns: [turn], speakerCharacterId: turn.speakerCharacterId,
+          characterIds: [turn.speakerCharacterId], conversationSpeakerIndex: speakerIndex,
+          conversationGaze: speakerIndex % 2 === 0 ? 'right' : 'left',
+        },
+        productionScript, storyBible, projectId, speaker: speakers[speakerIndex],
+        // A little slack; each clip is trimmed back to its real speech length.
+        seconds: Math.max(2, (seconds * countWords(turn.text)) / totalWords + 0.6),
+        previousAsset: previous, regeneration,
+      });
+      clips.push(clip);
+      previous = clip;
+    }
+    const id = crypto.randomUUID();
+    const base = path.join(this.assetDir, safeName(projectId || 'project') + '-act-' + String(segment.index ?? 0) + '-talk-' + id.slice(0, 12));
+    const video = base + '.mp4';
+    const voice = base + '-voice.wav';
+    const inputs = clips.flatMap((clip) => ['-i', clip.localPath]);
+    const parts = clips.map((_, i) => `[${i}:v]fps=25,setsar=1,format=yuv420p[v${i}];[${i}:a]aresample=48000,aformat=channel_layouts=stereo[a${i}]`).join(';');
+    const joins = clips.map((_, i) => `[v${i}][a${i}]`).join('');
+    await this.runCommand('ffmpeg', ['-y', ...inputs, '-filter_complex', `${parts};${joins}concat=n=${clips.length}:v=1:a=1[v][a]`,
+      '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'medium', '-crf', '16', '-c:a', 'aac', '-b:a', '192k', video]);
+    await this.runCommand('ffmpeg', ['-y', ...clips.flatMap((clip) => ['-i', clip.dialogueTrack.localPath]), '-filter_complex',
+      clips.map((_, i) => `[${i}:a]`).join('') + `concat=n=${clips.length}:v=0:a=1[out]`, '-map', '[out]', voice]);
+    for (const clip of clips) await unlink(clip.localPath).catch(() => {});
+    const durationSeconds = Math.round(clips.reduce((sum, clip) => sum + clip.durationSeconds, 0) * 100) / 100;
+    const last = clips[clips.length - 1];
+    return {
+      ...last,
+      localPath: video,
+      rawLocalPath: video,
+      generationId: id,
+      generatedDuration: durationSeconds + 's',
+      durationSeconds,
+      dialogueTrack: { localPath: voice, turns: segment.dialogueTurns, provider: 'local-tts', voices: Object.assign({}, ...clips.map((clip) => clip.castVoices)) },
+      dialogueTurns: segment.dialogueTurns,
+      speakerCharacterIds: speakers.map((c) => c.id),
+      castVoices: Object.assign({}, ...clips.map((clip) => clip.castVoices)),
+      cameraAngle: clips[0].cameraAngle,
+      cameraAngles: clips.map((clip) => clip.cameraAngle),
+      roomLock: clips.every((clip) => clip.roomLock) ? { passed: clips.every((clip) => clip.roomLock.passed) } : null,
+      conversationShots: clips.length,
+      previousGenerationId: previousAsset?.generationId || null,
+    };
+  }
+
   async uploadLastFrame(videoPath, projectId) {
     const png = path.join(this.assetDir, safeName(projectId || 'project') +
       '-last-frame-' + crypto.randomUUID() + '.png');
@@ -483,7 +588,8 @@ export class LocalComfyUiAudiovisualProvider {
   async uploadImage(bytes, filename) {
     const ext = path.extname(filename).toLowerCase();
     const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
-      : ext === '.webp' ? 'image/webp' : ext === '.wav' ? 'audio/wav' : 'image/png';
+      : ext === '.webp' ? 'image/webp' : ext === '.wav' ? 'audio/wav'
+        : ext === '.mp4' ? 'video/mp4' : 'image/png';
     const form = new FormData();
     form.append('image', new Blob([bytes], { type: mime }), filename);
     form.append('overwrite', 'false');
@@ -496,7 +602,7 @@ export class LocalComfyUiAudiovisualProvider {
     return result.subfolder ? result.subfolder + '/' + result.name : result.name;
   }
 
-  async generateFirstFrame(prompt, characterReference = '') {
+  async generateFirstFrame(prompt, characterReference = '', size = null) {
     const raw = JSON.parse(await readFile(this.firstFrameWorkflowPath, 'utf8'));
     const template = raw.workflow || raw.prompt || raw;
     if (!hasPlaceholder(template, 'PROMPT')) {
@@ -508,7 +614,7 @@ export class LocalComfyUiAudiovisualProvider {
     }
     const workflow = bindWorkflow(template, {
       PROMPT: prompt, NEGATIVE_PROMPT: 'bad anatomy, deformed objects, fake skin, text artifacts',
-      SEED: crypto.randomInt(1, 2147483647), WIDTH: this.width, HEIGHT: this.height,
+      SEED: crypto.randomInt(1, 2147483647), WIDTH: size?.width || this.width, HEIGHT: size?.height || this.height,
       FPS: this.fps, FRAMES: 1, DURATION_SECONDS: 0, FIRST_FRAME: '', DIALOGUE: '',
       CHARACTER_REFERENCE: reference,
     });
@@ -519,6 +625,10 @@ export class LocalComfyUiAudiovisualProvider {
     const history = await this.waitForHistory(queued.prompt_id);
     const media = selectImageOutput(history.outputs);
     if (!media) throw new Error('ComfyUI first-frame image workflow did not emit a PNG/JPEG/WebP image');
+    return this.importOutputImage(media);
+  }
+
+  async mediaBytes(media) {
     const params = new URLSearchParams({
       filename: media.filename, subfolder: media.subfolder || '',
       type: media.type || 'output',
@@ -526,8 +636,29 @@ export class LocalComfyUiAudiovisualProvider {
     const response = await this.fetch(this.baseUrl + '/view?' + params, {
       signal: AbortSignal.timeout(120000),
     });
-    if (!response.ok) throw new Error('Failed to download first-frame image (' + response.status + ')');
-    return this.uploadImage(new Uint8Array(await response.arrayBuffer()), path.basename(media.filename));
+    if (!response.ok) throw new Error('Failed to download ' + media.filename + ' (' + response.status + ')');
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  async importOutputImage(media) {
+    return this.uploadImage(await this.mediaBytes(media), path.basename(media.filename));
+  }
+
+  async downloadMedia(media, file) {
+    await writeFile(file, await this.mediaBytes(media));
+  }
+
+  async downloadInputFile(name, file) {
+    const slash = name.lastIndexOf('/');
+    await this.downloadMedia({ filename: name.slice(slash + 1), subfolder: slash < 0 ? '' : name.slice(0, slash), type: 'input' }, file);
+  }
+
+  async runWorkflow(workflow) {
+    const queued = await this.requestJson('/prompt', {
+      method: 'POST', body: { prompt: workflow, client_id: crypto.randomUUID() },
+    });
+    if (!queued.prompt_id) throw new Error('ComfyUI workflow did not return prompt_id');
+    return (await this.waitForHistory(queued.prompt_id)).outputs;
   }
 
   async waitForHistory(promptId) {
@@ -624,6 +755,26 @@ export function buildLocalFirstFramePrompt({ segment, productionScript, storyBib
 // Video models only lip-sync well when the mouth is large in frame, so speaking acts are
 // forced to a medium close-up regardless of the screenplay's wide/overhead/detail camera.
 const SPEAKER_FRAMING = 'locked-off static camera on a tripod, medium close-up from chest up for the whole shot, no zoom, no pull-back, no dolly or tracking; the speaker stays in place with the face large in frame, mouth and lips clearly visible and in focus.';
+
+function countWords(text) {
+  return String(text || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+// Lines of a scene where two or more on-screen people talk, with back-to-back lines by the same
+// person merged into one shot. Null for anything else.
+export function conversationTurns({ segment, productionScript, storyBible }) {
+  const characters = castCharacters({ productionScript, storyBible });
+  const turns = [];
+  for (const turn of segment.dialogueTurns || []) {
+    if (!String(turn.text || '').trim()) continue;
+    const previous = turns[turns.length - 1];
+    if (previous?.speakerCharacterId === turn.speakerCharacterId) previous.text += ' ' + turn.text;
+    else turns.push({ ...turn });
+  }
+  const speakers = [...new Set(turns.map((turn) => turn.speakerCharacterId))].map((id) => characters.find((c) => c.id === id));
+  if (speakers.length < 2 || speakers.some((c) => !c || c.onScreen === false)) return null;
+  return { turns, speakers };
+}
 
 function hasVisibleSpeech({ segment, productionScript, storyBible }) {
   const characters = storyBible?.characters || productionScript?.characters || [];
