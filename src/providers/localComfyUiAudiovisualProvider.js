@@ -71,6 +71,7 @@ export class LocalComfyUiAudiovisualProvider {
     // One reference portrait and one fixed TTS voice per character for the whole video.
     this.consistentCast = consistentCast;
     this.castPortraits = new Map();
+    this.locationStills = new Map();
     this.castVoices = new Map();
     this.voicePools = voicePools;
     this.characterReferences = new Map();
@@ -105,7 +106,7 @@ export class LocalComfyUiAudiovisualProvider {
       && this.firstFrameWorkflowPath && hasVisibleSpeech({ segment, productionScript, storyBible })
       ? primarySpeaker({ segment, productionScript, storyBible }) : null;
     if (castSpeaker) {
-      return this.generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker: castSpeaker, seconds, previousAsset });
+      return this.generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker: castSpeaker, seconds, previousAsset, regeneration });
     }
 
     const prompt = buildLocalVideoPrompt({ segment, productionScript, storyBible, regeneration });
@@ -126,8 +127,7 @@ export class LocalComfyUiAudiovisualProvider {
         ? await this.castPortrait(projectId, castMember)
         : this.characterReferences.get(projectId) || '';
       if (castMember) {
-        firstFrame = await this.generateFirstFrame(
-          buildLocalFirstFramePrompt({ segment, productionScript, storyBible }), reference);
+        firstFrame = await this.locationStill({ segment, productionScript, storyBible, projectId, character: castMember, reference, regeneration });
       } else if (previousAsset?.localPath && !(locationChanged && this.firstFrameWorkflowPath)) {
         firstFrame = await this.uploadLastFrame(previousAsset.sourceVideoPath || previousAsset.localPath, projectId);
       } else if (this.initialImagePath && !previousAsset?.localPath) {
@@ -367,7 +367,21 @@ export class LocalComfyUiAudiovisualProvider {
     return voices.get(character.id);
   }
 
-  async generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker, seconds, previousAsset }) {
+  // One opening still per character per location, reused by every act there so the room,
+  // furniture and light are identical. Regenerating the act that made it replaces it,
+  // otherwise a bad still could never be retried away.
+  async locationStill({ segment, productionScript, storyBible, projectId, character, reference, regeneration = null }) {
+    const record = { locationId: segment.locationId, characterId: character.id };
+    const known = segment.locationId ? this.locationStills.get(locationStillKey(projectId, record)) : null;
+    if (known && !(regeneration && known.actIndex === segment.index)) return known.image;
+    const image = await this.generateFirstFrame(buildLocalFirstFramePrompt({ segment, productionScript, storyBible }), reference);
+    if (segment.locationId) {
+      this.locationStills.set(locationStillKey(projectId, record), { ...record, image, actIndex: segment.index });
+    }
+    return image;
+  }
+
+  async generateCastSpeakingAct({ segment, productionScript, storyBible, projectId, speaker, seconds, previousAsset, regeneration = null }) {
     const characters = storyBible?.characters || productionScript?.characters || [];
     // After a resume the in-memory cast is empty: reuse the portrait and voice saved on the
     // previous clip so the face and voice do not change mid-video.
@@ -379,8 +393,10 @@ export class LocalComfyUiAudiovisualProvider {
       for (const [id, voice] of Object.entries(previousAsset.castVoices)) if (!voices.has(id)) voices.set(id, voice);
     }
     const reference = await this.castPortrait(projectId, speaker);
-    const startImageName = await this.generateFirstFrame(
-      buildLocalFirstFramePrompt({ segment, productionScript, storyBible }), reference);
+    if (previousAsset?.locationStill && !this.locationStills.has(locationStillKey(projectId, previousAsset.locationStill))) {
+      this.locationStills.set(locationStillKey(projectId, previousAsset.locationStill), previousAsset.locationStill);
+    }
+    const startImageName = await this.locationStill({ segment, productionScript, storyBible, projectId, character: speaker, reference, regeneration });
     const turns = (segment.dialogueTurns?.length
       ? segment.dialogueTurns
       : [{ speakerCharacterId: speaker.id, text: segment.dialogue }])
@@ -432,6 +448,7 @@ export class LocalComfyUiAudiovisualProvider {
         speakerCharacterIds: Object.keys(voicesUsed),
         castVoices: voicesUsed,
         castReference: reference,
+        locationStill: segment.locationId ? this.locationStills.get(locationStillKey(projectId, { locationId: segment.locationId, characterId: speaker.id })) : null,
         referenceImageCount: 1,
         referenceVideoCount: 0,
         referenceAudioCount: 1,
@@ -691,6 +708,10 @@ function primarySpeaker({ segment, productionScript, storyBible }) {
     .concat(segment.speakerCharacterId || []);
   return ids.map((id) => characters.find((c) => c.id === id)).find((c) => c && c.onScreen !== false)
     || visibleCharacters({ segment, productionScript, storyBible })[0] || null;
+}
+
+function locationStillKey(projectId, { locationId, characterId }) {
+  return [projectId, locationId, characterId].join('::');
 }
 
 // A cast clip ends just after its last word instead of holding silently to the planned length.

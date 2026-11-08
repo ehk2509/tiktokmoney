@@ -66,6 +66,46 @@ test('each character keeps one voice and one portrait for the whole video', asyn
   assert.equal(portraits, 1);
 });
 
+test('acts in one location share one still, and it survives a resume', async () => {
+  const { LocalComfyUiAudiovisualProvider } = await import('../src/providers/localComfyUiAudiovisualProvider.js');
+  const build = () => {
+    const provider = new LocalComfyUiAudiovisualProvider({
+      workflowPath: 'x.json', fetchImpl: async () => { throw new Error('no network'); },
+      voicePools: { female: ['f1'], male: ['m1'] },
+    });
+    provider.runCommand = async (bin) => (bin === 'ffprobe' ? '3\n' : '');
+    provider.localTts = { synthesize: async () => ({ localPath: 'turn.wav' }) };
+    provider.infiniteTalk = { width: 576, height: 1024 };
+    provider.stills = [];
+    provider.generateFirstFrame = async () => { const name = 'still-' + provider.stills.length + '.png'; provider.stills.push(name); return name; };
+    provider.applyInfiniteTalk = async ({ startImageName }) => { provider.animated = startImageName; return 'out.mp4'; };
+    return provider;
+  };
+  const speaker = { id: 'ada', name: 'Ada', description: 'a woman' };
+  const act = (provider, index, locationId, extra = {}) => provider.generateCastSpeakingAct({
+    segment: { index, locationId, dialogueTurns: [{ speakerCharacterId: 'ada', text: 'Hello there' }] },
+    productionScript: { characters: [speaker] }, projectId: 'p', speaker, seconds: 6, ...extra,
+  });
+
+  const provider = build();
+  const first = await act(provider, 0, 'room');
+  assert.equal(provider.animated, 'still-1.png'); // still-0 is the portrait
+  const second = await act(provider, 1, 'room', { regeneration: { reason: 'lip sync' } });
+  assert.equal(provider.animated, 'still-1.png'); // a later act's retry keeps the room
+  assert.equal(second.locationStill.image, 'still-1.png');
+  await act(provider, 2, 'beach');
+  assert.equal(provider.animated, 'still-2.png');
+  await act(provider, 3, 'room');
+  assert.equal(provider.animated, 'still-1.png');
+  await act(provider, 0, 'room', { regeneration: { reason: 'bad still' } });
+  assert.equal(provider.animated, 'still-3.png'); // the act that made the still may replace it
+
+  const resumed = build();
+  await act(resumed, 1, 'room', { previousAsset: first });
+  assert.equal(resumed.animated, 'still-1.png');
+  assert.deepEqual(resumed.stills, []); // the portrait and still both came from the saved clip
+});
+
 test('a cast clip ends shortly after its last word', async () => {
   const { LocalComfyUiAudiovisualProvider, speakingActSeconds } = await import('../src/providers/localComfyUiAudiovisualProvider.js');
   assert.equal(speakingActSeconds(2.2, 6), 2.4);
